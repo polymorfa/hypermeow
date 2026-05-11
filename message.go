@@ -62,6 +62,8 @@ func (cli *Client) handleEncryptedMessage(ctx context.Context, node *waBinary.No
 		var cancelled bool
 		defer cli.maybeDeferredAck(ctx, node)(&cancelled)
 		cancelled = cli.handlePlaintextMessage(ctx, info, node)
+	} else if cli.DisabledFeatures.Signal {
+		// The downstream decrypting client is responsible for acknowledging the message.
 	} else {
 		cli.decryptMessages(ctx, info, node)
 	}
