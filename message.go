@@ -64,6 +64,7 @@ func (cli *Client) handleEncryptedMessage(ctx context.Context, node *waBinary.No
 		cancelled = cli.handlePlaintextMessage(ctx, info, node)
 	} else if cli.DisabledFeatures.Signal {
 		// The downstream decrypting client is responsible for acknowledging the message.
+		cli.dispatchEvent(&events.UndecryptedMessage{Info: *info, Raw: node})
 	} else {
 		cli.decryptMessages(ctx, info, node)
 	}
