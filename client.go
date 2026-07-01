@@ -216,6 +216,11 @@ type Client struct {
 	// after decoding but before standard dispatch. See [RawNodeHandler].
 	RawNodeHandler RawNodeHandler
 
+	// shadowRelay, if non-nil, marks this client as a headless "shadow"
+	// client (see [NewShadowClient]): it has no socket, Connect is guarded,
+	// and outbound nodes plus Signal/keying oracle ops are delegated here.
+	shadowRelay ShadowRelay
+
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
 	DisabledFeatures DisabledFeatures
@@ -566,6 +571,12 @@ func (cli *Client) connect(ctx context.Context) error {
 }
 
 func (cli *Client) unlockedConnect(ctx context.Context) error {
+	if cli.shadowRelay != nil {
+		// Guard: a shadow client must never open a socket. All Connect
+		// paths (Connect, ConnectContext, autoReconnect) funnel through
+		// here, so failing closed here blocks every one of them.
+		return ErrShadowClientNoConnect
+	}
 	if cli.Store.Deleted {
 		return store.ErrDeviceDeleted
 	}
@@ -968,6 +979,18 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 	sock := cli.socket
 	cli.socketLock.RUnlock()
 	if sock == nil {
+		// A headless (shadow) client has no socket by design; route the
+		// outbound node to its relay instead. Fail closed if there is
+		// neither a socket nor a relay so a write can never silently
+		// escape or nil-panic on the absent socket.
+		if cli.shadowRelay != nil {
+			payload, err := waBinary.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal node: %w", err)
+			}
+			cli.sendLog.Debugf("%s", node.XMLString())
+			return payload, cli.shadowRelay.SendNode(ctx, payload)
+		}
 		return nil, ErrNotConnected
 	}
 

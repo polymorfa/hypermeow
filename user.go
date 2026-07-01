@@ -201,6 +201,11 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 
 // GetUserInfo gets basic user info (avatar, status, verified business name, device list).
 func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types.JID]types.UserInfo, error) {
+	if cli.isShadow() {
+		// Headless clients have no socket to run the usync IQ; delegate to
+		// the relay oracle.
+		return cli.shadowRelay.GetUserInfo(ctx, jids)
+	}
 	list, err := cli.usync(ctx, jids, "full", "background", []waBinary.Node{
 		{Tag: "business", Content: []waBinary.Node{{Tag: "verified_name"}}},
 		{Tag: "status"},
@@ -448,6 +453,11 @@ func (cli *Client) GetUserDevicesContext(ctx context.Context, jids []types.JID) 
 func (cli *Client) GetUserDevices(ctx context.Context, jids []types.JID) ([]types.JID, error) {
 	if cli == nil {
 		return nil, ErrClientIsNil
+	}
+	if cli.isShadow() {
+		// Headless clients have no socket to run the usync IQ; delegate to
+		// the relay oracle.
+		return cli.shadowRelay.GetUserDevices(ctx, jids)
 	}
 	cli.userDevicesCacheLock.Lock()
 	defer cli.userDevicesCacheLock.Unlock()
