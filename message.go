@@ -574,6 +574,11 @@ func (cli *Client) bufferedDecrypt(
 }
 
 func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from types.JID, isPreKey bool, serverTS time.Time) ([]byte, *[32]byte, error) {
+	if cli.isShadow() {
+		// A headless client holds no live Signal session; delegate
+		// decryption to the relay oracle.
+		return cli.shadowRelay.DecryptDM(ctx, child, from, isPreKey)
+	}
 	content, ok := child.Content.([]byte)
 	if !ok {
 		return nil, nil, fmt.Errorf("message content is not a byte slice")

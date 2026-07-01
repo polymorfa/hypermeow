@@ -1392,6 +1392,11 @@ func (cli *Client) encryptMessageForDevice(
 	extraAttrs waBinary.Attrs,
 	existingSessions map[string]bool,
 ) (*waBinary.Node, bool, error) {
+	if cli.isShadow() {
+		// A headless client holds no live Signal session; delegate
+		// per-device encryption to the relay oracle.
+		return cli.shadowRelay.EncryptForDevice(ctx, plaintext, to, bundle, extraAttrs)
+	}
 	builder := session.NewBuilderFromSignal(cli.Store, to.SignalAddress(), pbSerializer)
 	if bundle != nil {
 		cli.Log.Debugf("Processing prekey bundle for %s", to)
