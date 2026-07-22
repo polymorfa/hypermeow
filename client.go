@@ -117,6 +117,9 @@ type Client struct {
 	eventHandlers     []wrappedEventHandler
 	eventHandlersLock sync.RWMutex
 
+	calls     map[string]*callState
+	callsLock sync.Mutex
+
 	messageRetries      map[string]int
 	messageRetriesLock  sync.Mutex
 	messageRetriesReset time.Time
@@ -839,6 +842,8 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		// TODO should we do something else?
 	} else if cli.receiveResponse(ctx, node) {
 		// handled
+	} else if node.Tag == "ack" && !ackShouldEnqueue(node) {
+		// drop non-call acks silently
 	} else if cli.hasNodeHandler(node.Tag) {
 		cli.enqueueNode(ctx, node)
 	} else if node.Tag != "ack" {
@@ -856,6 +861,10 @@ func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
 			go cli.ResetConnection()
 		}
 	}
+}
+
+func ackShouldEnqueue(node *waBinary.Node) bool {
+	return node.AttrGetter().String("class") == "call"
 }
 
 func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context) {
@@ -897,7 +906,7 @@ Loop:
 
 func (cli *Client) hasNodeHandler(tag string) bool {
 	switch tag {
-	case "message", "status", "appdata", "receipt", "call", "chatstate", "presence", "notification", "success", "failure", "stream:error", "iq", "ib":
+	case "message", "status", "appdata", "receipt", "call", "ack", "chatstate", "presence", "notification", "success", "failure", "stream:error", "iq", "ib":
 		return true
 	default:
 		return false
@@ -914,6 +923,8 @@ func (cli *Client) handleNode(ctx context.Context, node *waBinary.Node) {
 		cli.handleReceipt(ctx, node)
 	case "call":
 		cli.handleCallEvent(ctx, node)
+	case "ack":
+		cli.handleCallAck(ctx, node)
 	case "chatstate":
 		cli.handleChatState(ctx, node)
 	case "presence":
