@@ -27,4 +27,6 @@ docker compose down --volumes --remove-orphans
 
 Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's three-second benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, failures, and history-sync counts.
 
+Set `MEM_PROFILE_PATH=/results/run.heap.pb.gz` to capture a full-rate Go allocation profile. Profiling changes runtime cost, so compare profiles with each other rather than with ordinary benchmark timings. Inspect cumulative allocations with `go tool pprof -top -alloc_space results/run.heap.pb.gz` and retained heap with `go tool pprof -top -inuse_space results/run.heap.pb.gz`.
+
 Change only one workload dimension at a time. Recommended group sizes are 32, 128, 512, and 1024. Keep the Barback revision, rate, total, history size, container limits, host power state, and Docker version fixed across a baseline/candidate pair.

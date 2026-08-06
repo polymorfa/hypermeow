@@ -109,6 +109,7 @@ services:
       BENCH_TOTAL: ${BENCH_TOTAL:-200}
       BENCH_VARIANT: ${BENCH_VARIANT:-candidate}
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable
+      MEM_PROFILE_PATH: ${MEM_PROFILE_PATH:-}
       RESULT_PATH: /results/${RESULT_FILE:-result.json}
     init: true
     volumes:

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,15 +37,16 @@ import (
 var revision = "working-tree"
 
 type config struct {
-	DatabaseURL   string
-	BarbackURL    string
-	BarbackWS     string
-	TLSCAPath     string
-	TLSServerName string
-	OutputPath    string
-	Variant       string
-	Total         int64
-	Timeout       time.Duration
+	DatabaseURL    string
+	BarbackURL     string
+	BarbackWS      string
+	TLSCAPath      string
+	TLSServerName  string
+	OutputPath     string
+	MemProfilePath string
+	Variant        string
+	Total          int64
+	Timeout        time.Duration
 }
 
 type queryStat struct {
@@ -132,6 +134,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	if cfg.MemProfilePath != "" {
+		runtime.MemProfileRate = 1
+	}
 	r := &runner{
 		cfg:       cfg,
 		done:      make(chan struct{}),
@@ -139,6 +144,12 @@ func main() {
 		latencies: make([]float64, 0, cfg.Total),
 	}
 	res, runErr := r.run()
+	if cfg.MemProfilePath != "" {
+		if err = writeMemoryProfile(cfg.MemProfilePath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	if runErr != nil {
 		res.Error = runErr.Error()
 	}
@@ -162,16 +173,33 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("invalid BENCH_TIMEOUT: %w", err)
 	}
 	return config{
-		DatabaseURL:   env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
-		BarbackURL:    env("BARBACK_URL", "http://barback:8080"),
-		BarbackWS:     env("BARBACK_WS", "ws://barback:8080/ws/chat"),
-		TLSCAPath:     os.Getenv("BARBACK_TLS_CA"),
-		TLSServerName: env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
-		OutputPath:    env("RESULT_PATH", "/results/result.json"),
-		Variant:       env("BENCH_VARIANT", "candidate"),
-		Total:         total,
-		Timeout:       timeout,
+		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
+		BarbackURL:     env("BARBACK_URL", "http://barback:8080"),
+		BarbackWS:      env("BARBACK_WS", "ws://barback:8080/ws/chat"),
+		TLSCAPath:      os.Getenv("BARBACK_TLS_CA"),
+		TLSServerName:  env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
+		OutputPath:     env("RESULT_PATH", "/results/result.json"),
+		MemProfilePath: os.Getenv("MEM_PROFILE_PATH"),
+		Variant:        env("BENCH_VARIANT", "candidate"),
+		Total:          total,
+		Timeout:        timeout,
 	}, nil
+}
+
+func writeMemoryProfile(path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create memory profile: %w", err)
+	}
+	runtime.GC()
+	if err = pprof.WriteHeapProfile(file); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write memory profile: %w", err)
+	}
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("close memory profile: %w", err)
+	}
+	return nil
 }
 
 func env(name, fallback string) string {
