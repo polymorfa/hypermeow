@@ -116,6 +116,7 @@ type result struct {
 	Database             databaseStats        `json:"database"`
 	Runtime              runtimeStats         `json:"runtime"`
 	WorkloadRuntime      workloadRuntimeStats `json:"workload_runtime"`
+	SessionRuntime       workloadRuntimeStats `json:"session_runtime"`
 	Resources            resourceStats        `json:"resources"`
 	MessageTypes         map[string]int64     `json:"message_types"`
 	MediaUploads         int64                `json:"media_uploads"`
@@ -154,8 +155,10 @@ type runner struct {
 
 	metricsMu      sync.Mutex
 	runtimeStart   runtimeStats
+	sessionStart   runtimeStats
 	resourceStart  resourceStats
 	metricsStarted bool
+	sessionStarted bool
 	tempStop       chan struct{}
 	tempPeakBytes  atomic.Int64
 	tempPeakFiles  atomic.Int64
@@ -395,6 +398,7 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			if _, err := r.db.ExecContext(context.Background(), "SELECT pg_stat_statements_reset()"); err != nil {
 				fmt.Fprintf(os.Stderr, "reset statement stats: %v\n", err)
 			}
+			r.startSessionMetrics()
 		case *events.HistorySync:
 			r.historySyncs.Add(1)
 			conversations := event.Data.GetConversations()
@@ -417,6 +421,15 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			}
 		}
 	}
+}
+
+func (r *runner) startSessionMetrics() {
+	r.metricsMu.Lock()
+	if !r.sessionStarted {
+		r.sessionStart = runtimeSnapshot()
+		r.sessionStarted = true
+	}
+	r.metricsMu.Unlock()
 }
 
 func (r *runner) startMetrics() {
@@ -559,6 +572,9 @@ func (r *runner) snapshot(completed bool) result {
 		MediaUploadLatency:   r.uploadLatencySnapshot(),
 	}
 	r.metricsMu.Lock()
+	if r.sessionStarted {
+		res.SessionRuntime = runtimeDelta(runtimeNow, r.sessionStart)
+	}
 	if r.metricsStarted {
 		res.WorkloadRuntime = runtimeDelta(runtimeNow, r.runtimeStart)
 		res.Resources = resourceDelta(resourceSnapshot(), r.resourceStart)

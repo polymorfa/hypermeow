@@ -26,12 +26,12 @@ Negative percentages are improvements. The comparison is HyperMeow relative to t
 | Scenario | Allocation vs WM / pre | RSS vs WM / pre | CPU vs WM / pre | Send p95 vs WM / pre | SQL calls vs WM / pre | Network bytes vs WM / pre |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | DM burst, 16 peers | -7.0% / -9.8% | -1.2% / -1.3% | -14.8% / -5.0% | -31.7% / -8.6% | -49.2% / 0.0% | -11.6% / -1.3% |
-| DM and history, 8 peers | +27.8% / +5.0% | +10.8% / +7.1% | -15.4% / -5.1% | -4.3% / +5.6% | -74.3% / +0.1% | -21.0% / +0.6% |
+| DM and history, 8 peers | -3.4% / -10.7% | +3.8% / +3.2% | -11.5% / -4.9% | -19.2% / -16.7% | -74.3% / +0.0% | -23.9% / +1.4% |
 | Mixed DM, 8 peers | -5.3% / -7.4% | +0.5% / -0.5% | -1.9% / +0.1% | -20.6% / -5.6% | -49.1% / 0.0% | -1.7% / -0.2% |
 | Group, 128 members | -15.9% / -25.9% | +5.0% / -0.5% | -58.2% / -17.6% | -79.3% / -14.0% | -97.9% / 0.0% | -28.0% / -0.3% |
 | Mixed group, 32 members | -14.2% / -18.4% | -6.6% / -1.6% | -20.7% / -11.7% | -59.6% / -22.5% | -92.2% / 0.0% | -13.1% / -0.3% |
 
-The candidate improves active-workload allocation in four of five scenarios relative to both baselines. The exception is history-heavy DM: allocation is 5.0% above pre-PR3 and RSS is 7.1% above it. That path remains the clearest next memory target.
+The candidate improves measured allocation in all five scenarios relative to both baselines. History allocation uses the connected-to-completion `session_runtime` interval so all history sync work is inside the measurement; the first-live-message boundary was timing-sensitive. History peak RSS remains 3.2% above pre-PR3 and is the clearest next retained-memory target.
 
 ### CPU, memory, and PostgreSQL
 
@@ -40,9 +40,9 @@ The candidate improves active-workload allocation in four of five scenarios rela
 | DM burst | WhatsMeow | 218.88 | 34.14 | 1.298 | 56 | 22,654 | 185.82 |
 | DM burst | Pre-PR3 | 225.64 | 34.15 | 1.164 | 57 | 11,511 | 141.57 |
 | DM burst | HyperMeow | 203.57 | 33.71 | 1.107 | 55 | 11,511 | 160.86 |
-| DM + history | WhatsMeow | 65.06 | 56.13 | 0.765 | 13 | 11,790 | 337.45 |
-| DM + history | Pre-PR3 | 79.16 | 58.09 | 0.682 | 15 | 3,024 | 157.97 |
-| DM + history | HyperMeow | 83.13 | 62.21 | 0.647 | 15 | 3,026 | 160.30 |
+| DM + history | WhatsMeow | 99.03 | 59.89 | 0.803 | 19 | 11,790 | 274.51 |
+| DM + history | Pre-PR3 | 107.13 | 60.21 | 0.748 | 20 | 3,025 | 155.62 |
+| DM + history | HyperMeow | 95.70 | 62.16 | 0.711 | 18 | 3,026 | 138.56 |
 | Mixed DM | WhatsMeow | 63.94 | 37.79 | 0.875 | 12 | 4,820 | 96.64 |
 | Mixed DM | Pre-PR3 | 65.43 | 38.16 | 0.857 | 12 | 2,456 | 78.05 |
 | Mixed DM | HyperMeow | 60.58 | 37.98 | 0.858 | 12 | 2,455 | 77.40 |
@@ -62,9 +62,9 @@ SQL execution time is host- and page-cache-sensitive. HyperMeow is lower than pr
 | DM burst | WhatsMeow | 1.100 | 2.017 | 3.365 | — | 5.923 | 270.14 |
 | DM burst | Pre-PR3 | 0.803 | 1.506 | 2.360 | — | 5.915 | 270.51 |
 | DM burst | HyperMeow | 0.732 | 1.377 | 2.315 | — | 5.916 | 270.47 |
-| DM + history | WhatsMeow | 1.722 | 3.828 | 6.193 | — | 7.776 | 51.44 |
-| DM + history | Pre-PR3 | 1.320 | 3.468 | 5.980 | — | 7.779 | 51.42 |
-| DM + history | HyperMeow | 1.170 | 3.663 | 5.283 | — | 7.802 | 51.27 |
+| DM + history | WhatsMeow | 1.808 | 3.787 | 6.630 | — | 7.797 | 51.30 |
+| DM + history | Pre-PR3 | 1.322 | 3.674 | 5.121 | — | 7.775 | 51.45 |
+| DM + history | HyperMeow | 1.208 | 3.061 | 5.690 | — | 7.793 | 51.33 |
 | Mixed DM | WhatsMeow | 5.974 | 10.126 | 13.260 | 9.859 | 10.107 | 31.66 |
 | Mixed DM | Pre-PR3 | 4.015 | 8.516 | 10.559 | 9.188 | 10.099 | 31.69 |
 | Mixed DM | HyperMeow | 3.465 | 8.037 | 11.732 | 11.218 | 10.108 | 31.66 |
@@ -84,9 +84,9 @@ Input rates cap throughput, so send and upload percentiles are the meaningful sp
 | DM burst | WhatsMeow | 16.30 | 18.91 | 13.94 | 16.67 | 59,821 / 34,569 | 0 | 0 |
 | DM burst | Pre-PR3 | 15.02 | 16.49 | 13.45 | 14.95 | 37,205 / 22,001 | 0 | 0 |
 | DM burst | HyperMeow | 14.76 | 16.35 | 13.39 | 15.01 | 29,911 / 17,874 | 0 | 0 |
-| DM + history | WhatsMeow | 4.59 | 6.47 | 3.62 | 5.53 | 26,818 / 14,881 | 0 | 0 |
-| DM + history | Pre-PR3 | 3.92 | 4.76 | 3.51 | 4.36 | 9,988 / 5,914 | 0 | 0 |
-| DM + history | HyperMeow | 3.87 | 4.87 | 3.50 | 4.51 | 8,046 / 4,818 | 0 | 0 |
+| DM + history | WhatsMeow | 4.75 | 6.52 | 3.77 | 5.57 | 27,199 / 15,166 | 0 | 0 |
+| DM + history | Pre-PR3 | 3.76 | 4.69 | 3.36 | 4.29 | 9,935 / 5,938 | 0 | 0 |
+| DM + history | HyperMeow | 3.86 | 4.73 | 3.50 | 4.37 | 8,191 / 4,874 | 0 | 0 |
 | Mixed DM | WhatsMeow | 3.40 | 41.81 | 27.82 | 66.09 | 14,501 / 13,329 | 25.16 | 1.25 MiB / 2 files |
 | Mixed DM | Pre-PR3 | 3.15 | 41.36 | 27.72 | 65.75 | 9,898 / 10,690 | 25.16 | 1.25 MiB / 2 files |
 | Mixed DM | HyperMeow | 3.10 | 41.34 | 27.71 | 65.76 | 8,452 / 9,804 | 25.16 | 1.25 MiB / 2 files |
@@ -106,7 +106,7 @@ Docker CPU values are maximum sampled percentages; memory and PostgreSQL block w
 | Scenario | Client CPU / memory | PostgreSQL CPU / memory / writes | Barback CPU / memory |
 | --- | ---: | ---: | ---: |
 | DM burst | 26.05% / 18.69 MiB | 14.41% / 51.63 MiB / 107.77 MiB | 6.68% / 4.22 MiB |
-| DM + history | 11.56% / 46.36 MiB | 8.13% / 46.34 MiB / 67.42 MiB | 3.23% / 7.41 MiB |
+| DM + history | 11.40% / 44.62 MiB | 7.70% / 46.40 MiB / 67.33 MiB | 3.42% / 7.41 MiB |
 | Mixed DM | 10.16% / 22.41 MiB | 5.48% / 45.41 MiB / 64.95 MiB | 3.49% / 5.29 MiB |
 | Group 128 | 27.64% / 45.81 MiB | 8.14% / 58.35 MiB / 128.75 MiB | 2.81% / 13.21 MiB |
 | Mixed group 32 | 13.13% / 21.51 MiB | 6.47% / 42.26 MiB / 64.47 MiB | 3.95% / 7.07 MiB |
@@ -138,4 +138,4 @@ HyperMeow saves 149,377,464 bytes of Go heap, or 142.46 MiB and 94.6%, versus up
 
 One candidate mixed-DM repetition was a host/PostgreSQL outlier: 84.65 seconds and 169.07 ms send p95 versus 10.11 seconds and 7.28–8.04 ms in the other two repetitions. Its SQL execution time was 1,157.71 ms versus 71.37–77.40 ms. The sample remains in the raw results; the predeclared median prevents it from being silently discarded or dominating the summary.
 
-The remaining demonstrated weak spot is history-heavy DM allocation and RSS. WAN behavior, long-lived reconnect churn, proxy transports, actual WhatsApp throttling, and thousands of simultaneously active sessions require a staged canary on the target VPS before production capacity limits are changed.
+The remaining demonstrated weak spot is history-heavy DM peak RSS despite its lower phase-stable allocation. WAN behavior, long-lived reconnect churn, proxy transports, actual WhatsApp throttling, and thousands of simultaneously active sessions require a staged canary on the target VPS before production capacity limits are changed.

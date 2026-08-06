@@ -53,6 +53,8 @@ BENCH_REPEATS=3 ./run-comparison-matrix.sh
 
 Resume an interrupted repeated matrix with `BENCH_REPEAT_START`, keeping `BENCH_REPEATS` set to the final repeat number.
 
+Set `CANDIDATE_REF` to benchmark a frozen candidate while using newer harness code. All three libraries are exported to temporary immutable contexts before the matrix starts.
+
 The archived upstream baseline receives only `patches/barback-socket-config.patch`, the same URL, Origin, and Noise certificate-authority injection already present before PR #3. The patch is required to connect upstream WhatsMeow to Barback and contains no runtime optimization.
 
 The constructor benchmark measures fixed disconnected client state separately from live-session traffic:
@@ -65,7 +67,7 @@ BENCH_VARIANT=hypermeow BENCH_SESSIONS=2000 ./run-client-memory.sh
 
 `LIBRARY_CONTEXT` can point to another HyperMeow worktree to compare two revisions without changing the benchmark code or branches. Barback generates a persisted TLS certificate for each clean stack. The client trusts that certificate and keeps both TLS and Noise certificate verification enabled.
 
-Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send and upload latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, process and block I/O, temporary-file peaks and cleanup, network traffic, failures, message-shape counts, and history-sync counts. Docker stats include the whole container lifetime; the JSON workload counters begin at the first benchmark message. Network timings are local-container transport measurements, not internet latency.
+Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send and upload latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, process and block I/O, temporary-file peaks and cleanup, network traffic, failures, message-shape counts, and history-sync counts. `session_runtime` begins at the connected event and includes history sync; `workload_runtime` begins at the first live benchmark message. Docker stats include the whole container lifetime. Network timings are local-container transport measurements, not internet latency.
 
 The frozen three-repeat comparison is summarized in `results/system-comparison.md`; its 45 JSON reports and 45 Docker-stat streams remain alongside it.
 
