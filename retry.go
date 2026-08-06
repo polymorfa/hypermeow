@@ -16,10 +16,10 @@ import (
 	"runtime/debug"
 	"time"
 
-	"go.mau.fi/libsignal/ecc"
-	"go.mau.fi/libsignal/groups"
-	"go.mau.fi/libsignal/keys/prekey"
-	"go.mau.fi/libsignal/protocol"
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
+	"github.com/polymorfa/libsignal-protocol-go/groups"
+	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
+	"github.com/polymorfa/libsignal-protocol-go/protocol"
 	"google.golang.org/protobuf/proto"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
@@ -45,57 +45,71 @@ type RecentMessage struct {
 	fb *waMsgApplication.MessageApplication
 }
 
+type cachedRecentMessage struct {
+	format  string
+	payload []byte
+}
+
 func (rm RecentMessage) IsEmpty() bool {
 	return rm.wa == nil && rm.fb == nil
 }
 
 func (cli *Client) addRecentMessage(ctx context.Context, to types.JID, id types.MessageID, wa *waE2E.Message, fb *waMsgApplication.MessageApplication) error {
-	if cli.UseRetryMessageStore {
-		var buf []byte
-		var format string
-		var err error
-		if wa != nil {
-			buf, err = proto.Marshal(wa)
-			format = "wa"
-		} else if fb != nil {
-			buf, err = proto.Marshal(fb)
-			format = "fb"
-		}
+	var payload []byte
+	var format string
+	var err error
+	if wa != nil {
+		payload, err = proto.Marshal(wa)
+		format = "wa"
+	} else if fb != nil {
+		payload, err = proto.Marshal(fb)
+		format = "fb"
+	}
+	if err != nil {
+		return fmt.Errorf("failed to marshal message for retry cache: %w", err)
+	}
+	if cli.UseRetryMessageStore && payload != nil {
+		err = cli.Store.EventBuffer.AddOutgoingEvent(ctx, to, id, format, payload)
 		if err != nil {
-			return fmt.Errorf("failed to marshal message for retry store: %w", err)
+			return fmt.Errorf("failed to add message to retry store: %w", err)
 		}
-		if buf != nil {
-			err = cli.Store.EventBuffer.AddOutgoingEvent(ctx, to, id, format, buf)
+		if time.Since(cli.lastRetryStoreClear) > 12*time.Hour {
+			err = cli.Store.EventBuffer.DeleteOldOutgoingEvents(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to add message to retry store: %w", err)
-			}
-			if time.Since(cli.lastRetryStoreClear) > 12*time.Hour {
-				err = cli.Store.EventBuffer.DeleteOldOutgoingEvents(ctx)
-				if err != nil {
-					return fmt.Errorf("failed to clear old messages from retry store: %w", err)
-				}
+				return fmt.Errorf("failed to clear old messages from retry store: %w", err)
 			}
 		}
 	}
 	cli.recentMessagesLock.Lock()
 	key := recentMessageKey{to, id}
+	if cli.recentMessagesMap == nil {
+		cli.recentMessagesMap = make(map[recentMessageKey]cachedRecentMessage, recentMessagesSize)
+	}
+	if len(cli.recentMessagesList) == 0 {
+		cli.recentMessagesList = make([]recentMessageKey, recentMessagesSize)
+	}
 	if cli.recentMessagesList[cli.recentMessagesPtr].ID != "" {
 		delete(cli.recentMessagesMap, cli.recentMessagesList[cli.recentMessagesPtr])
 	}
-	cli.recentMessagesMap[key] = RecentMessage{wa: wa, fb: fb}
+	cli.recentMessagesMap[key] = cachedRecentMessage{format: format, payload: payload}
 	cli.recentMessagesList[cli.recentMessagesPtr] = key
-	cli.recentMessagesPtr++
-	if cli.recentMessagesPtr >= len(cli.recentMessagesList) {
-		cli.recentMessagesPtr = 0
-	}
+	cli.recentMessagesPtr = (cli.recentMessagesPtr + 1) % recentMessagesSize
 	cli.recentMessagesLock.Unlock()
 	return nil
 }
 
 func (cli *Client) getRecentMessage(to types.JID, id types.MessageID) RecentMessage {
 	cli.recentMessagesLock.RLock()
-	defer cli.recentMessagesLock.RUnlock()
-	return cli.recentMessagesMap[recentMessageKey{to, id}]
+	cached, ok := cli.recentMessagesMap[recentMessageKey{to, id}]
+	cli.recentMessagesLock.RUnlock()
+	if !ok {
+		return RecentMessage{}
+	}
+	message, err := parseRecentMessage(cached.format, cached.payload)
+	if err != nil {
+		return RecentMessage{}
+	}
+	return *message
 }
 
 func (cli *Client) getMessageForRetry(ctx context.Context, receipt *events.Receipt, messageID types.MessageID) (*RecentMessage, error) {
@@ -160,17 +174,21 @@ const recreateSessionTimeout = 1 * time.Hour
 func (cli *Client) shouldRecreateSession(ctx context.Context, retryCount int, jid types.JID) (reason string, recreate bool) {
 	cli.sessionRecreateHistoryLock.Lock()
 	defer cli.sessionRecreateHistoryLock.Unlock()
+	now := time.Now()
+	if len(cli.sessionRecreateHistory) >= maxSessionRecreateHistoryItems {
+		pruneExpiredCache(cli.sessionRecreateHistory, now.Add(-recreateSessionTimeout))
+	}
 	if contains, err := cli.Store.ContainsSession(ctx, jid.SignalAddress()); err != nil {
 		return "", false
 	} else if !contains {
-		cli.sessionRecreateHistory[jid] = time.Now()
+		putBoundedCache(cli.sessionRecreateHistory, jid, now, maxSessionRecreateHistoryItems)
 		return "we don't have a Signal session with them", true
 	} else if retryCount < 2 {
 		return "", false
 	}
 	prevTime, ok := cli.sessionRecreateHistory[jid]
-	if !ok || prevTime.Add(recreateSessionTimeout).Before(time.Now()) {
-		cli.sessionRecreateHistory[jid] = time.Now()
+	if !ok || prevTime.Add(recreateSessionTimeout).Before(now) {
+		putBoundedCache(cli.sessionRecreateHistory, jid, now, maxSessionRecreateHistoryItems)
 		return "retry count > 1 and over an hour since last recreation", true
 	}
 	return "", false
@@ -236,9 +254,18 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 
 	retryKey := incomingRetryKey{receipt.Sender, messageID}
 	cli.incomingRetryRequestCounterLock.Lock()
-	cli.incomingRetryRequestCounter[retryKey]++
-	internalCounter := cli.incomingRetryRequestCounter[retryKey]
+	internalCounter, accepted := incrementBoundedCounter(
+		cli.incomingRetryRequestCounter,
+		retryKey,
+		maxIncomingRetryEntries,
+		&cli.incomingRetryRequestCounterReset,
+		time.Now(),
+	)
 	cli.incomingRetryRequestCounterLock.Unlock()
+	if !accepted {
+		cli.Log.Warnf("Dropping retry request from %s for %s: retry counter capacity reached", messageID, receipt.Sender)
+		return nil
+	}
 	if internalCounter >= 10 {
 		cli.Log.Warnf("Dropping retry request from %s for %s: internal retry counter is %d", messageID, receipt.Sender, internalCounter)
 		return nil
@@ -475,8 +502,18 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 	}
 
 	cli.messageRetriesLock.Lock()
-	cli.messageRetries[id]++
-	retryCount := cli.messageRetries[id]
+	retryCount, accepted := incrementBoundedCounter(
+		cli.messageRetries,
+		id,
+		maxMessageRetryEntries,
+		&cli.messageRetriesReset,
+		time.Now(),
+	)
+	if !accepted {
+		cli.messageRetriesLock.Unlock()
+		cli.Log.Warnf("Not sending retry receipt for %s: retry counter capacity reached", id)
+		return
+	}
 	// In case the message is a retry response, and we restarted in between, find the count from the message
 	if retryCount == 1 && retryCountInMsg > 0 {
 		retryCount = retryCountInMsg + 1

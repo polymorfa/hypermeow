@@ -8,8 +8,8 @@ require (
 	github.com/beeper/argo-go v1.1.2
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
+	github.com/polymorfa/libsignal-protocol-go v0.2.3-0.20260806162910-a2adef2e8a11
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/util v0.9.12-0.20260717235539-f9ffa7eca58d
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0

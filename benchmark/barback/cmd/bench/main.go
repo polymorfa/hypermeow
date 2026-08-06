@@ -25,7 +25,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"go.mau.fi/libsignal/ecc"
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"

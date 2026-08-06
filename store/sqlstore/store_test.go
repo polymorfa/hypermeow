@@ -3,6 +3,8 @@ package sqlstore
 import (
 	"fmt"
 	"testing"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 func TestBuildSharedMassInsertQuery(t *testing.T) {
@@ -25,5 +27,22 @@ func TestIdentityCacheIsBounded(t *testing.T) {
 	}
 	if _, ok := store.identityCache["new:1"]; !ok {
 		t.Fatal("new identity was not cached")
+	}
+}
+
+func TestContactCacheIsBounded(t *testing.T) {
+	store := &SQLStore{contactCache: make(map[types.JID]*types.ContactInfo, maxContactCacheEntries)}
+	for i := 0; i < maxContactCacheEntries; i++ {
+		jid := types.NewJID(fmt.Sprintf("%d", i), types.DefaultUserServer)
+		store.setCachedContactLocked(jid, &types.ContactInfo{Found: true})
+	}
+	newJID := types.NewJID("new", types.DefaultUserServer)
+	store.setCachedContactLocked(newJID, &types.ContactInfo{Found: true})
+
+	if len(store.contactCache) != maxContactCacheEntries {
+		t.Fatalf("cache grew to %d entries", len(store.contactCache))
+	}
+	if _, ok := store.contactCache[newJID]; !ok {
+		t.Fatal("new contact was not cached")
 	}
 }

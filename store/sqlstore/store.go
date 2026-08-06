@@ -20,7 +20,6 @@ import (
 
 	"go.mau.fi/util/dbutil"
 	"go.mau.fi/util/exslices"
-	"go.mau.fi/util/exsync"
 
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
@@ -52,7 +51,9 @@ type SQLStore struct {
 	identityCache     map[string]identityCacheEntry
 	identityCacheLock sync.RWMutex
 
-	migratedPNSessionsCache *exsync.Set[string]
+	migratedPNSessionsCache     map[string]struct{}
+	migratingPNSessions         map[string]struct{}
+	migratedPNSessionsCacheLock sync.Mutex
 }
 
 type identityCacheEntry struct {
@@ -60,16 +61,28 @@ type identityCacheEntry struct {
 	Present bool
 }
 
-const maxIdentityCacheEntries = 8192
+const (
+	maxContactCacheEntries  = 256
+	maxIdentityCacheEntries = 2048
+	maxMigratedPNEntries    = 1024
+)
 
-func (s *SQLStore) setCachedIdentityLocked(address string, entry identityCacheEntry) {
-	if _, exists := s.identityCache[address]; !exists && len(s.identityCache) >= maxIdentityCacheEntries {
-		for oldAddress := range s.identityCache {
-			delete(s.identityCache, oldAddress)
+func setBoundedCacheEntry[K comparable, V any](cache map[K]V, key K, value V, limit int) {
+	if _, exists := cache[key]; !exists && len(cache) >= limit {
+		for oldKey := range cache {
+			delete(cache, oldKey)
 			break
 		}
 	}
-	s.identityCache[address] = entry
+	cache[key] = value
+}
+
+func (s *SQLStore) setCachedIdentityLocked(address string, entry identityCacheEntry) {
+	setBoundedCacheEntry(s.identityCache, address, entry, maxIdentityCacheEntries)
+}
+
+func (s *SQLStore) setCachedContactLocked(user types.JID, info *types.ContactInfo) {
+	setBoundedCacheEntry(s.contactCache, user, info, maxContactCacheEntries)
 }
 
 // NewSQLStore creates a new SQLStore with the given database container and user JID.
@@ -83,7 +96,8 @@ func NewSQLStore(c *Container, jid types.JID) *SQLStore {
 		contactCache:  make(map[types.JID]*types.ContactInfo),
 		identityCache: make(map[string]identityCacheEntry),
 
-		migratedPNSessionsCache: exsync.NewSet[string](),
+		migratedPNSessionsCache: make(map[string]struct{}),
+		migratingPNSessions:     make(map[string]struct{}),
 	}
 }
 
@@ -217,6 +231,25 @@ func (s *SQLStore) GetSession(ctx context.Context, address string) (session []by
 	return
 }
 
+func (s *SQLStore) IterateSession(ctx context.Context, address string, callback func([]byte) error) (bool, error) {
+	rows, err := s.db.Query(ctx, getSessionQuery, s.JID, address)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	var session sql.RawBytes
+	if err = rows.Scan(&session); err != nil {
+		return false, err
+	}
+	if err = callback(session); err != nil {
+		return false, err
+	}
+	return true, rows.Err()
+}
+
 func (s *SQLStore) HasSession(ctx context.Context, address string) (has bool, err error) {
 	err = s.db.QueryRow(ctx, hasSessionQuery, s.JID, address).Scan(&has)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -235,25 +268,26 @@ var sessionScanner = dbutil.ConvertRowFn[addressSessionTuple](func(row dbutil.Sc
 	return
 })
 
+func (s *SQLStore) queryManySessions(ctx context.Context, addresses []string) (dbutil.Rows, error) {
+	if s.db.Dialect == dbutil.Postgres && PostgresArrayWrapper != nil {
+		return s.db.Query(ctx, getManySessionQueryPostgres, s.JID, PostgresArrayWrapper(addresses))
+	}
+	args := make([]any, len(addresses)+1)
+	placeholders := make([]string, len(addresses))
+	args[0] = s.JID
+	for i, addr := range addresses {
+		args[i+1] = addr
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+	}
+	return s.db.Query(ctx, fmt.Sprintf(getManySessionQueryGeneric, strings.Join(placeholders, ",")), args...)
+}
+
 func (s *SQLStore) GetManySessions(ctx context.Context, addresses []string) (map[string][]byte, error) {
 	if len(addresses) == 0 {
 		return nil, nil
 	}
 
-	var rows dbutil.Rows
-	var err error
-	if s.db.Dialect == dbutil.Postgres && PostgresArrayWrapper != nil {
-		rows, err = s.db.Query(ctx, getManySessionQueryPostgres, s.JID, PostgresArrayWrapper(addresses))
-	} else {
-		args := make([]any, len(addresses)+1)
-		placeholders := make([]string, len(addresses))
-		args[0] = s.JID
-		for i, addr := range addresses {
-			args[i+1] = addr
-			placeholders[i] = fmt.Sprintf("$%d", i+2)
-		}
-		rows, err = s.db.Query(ctx, fmt.Sprintf(getManySessionQueryGeneric, strings.Join(placeholders, ",")), args...)
-	}
+	rows, err := s.queryManySessions(ctx, addresses)
 	result := make(map[string][]byte, len(addresses))
 	for _, addr := range addresses {
 		result[addr] = nil
@@ -266,6 +300,26 @@ func (s *SQLStore) GetManySessions(ctx context.Context, addresses []string) (map
 		return nil, err
 	}
 	return result, nil
+}
+
+type rawAddressSessionTuple struct {
+	Address string
+	Session sql.RawBytes
+}
+
+var rawSessionScanner = dbutil.ConvertRowFn[rawAddressSessionTuple](func(row dbutil.Scannable) (out rawAddressSessionTuple, err error) {
+	err = row.Scan(&out.Address, &out.Session)
+	return
+})
+
+func (s *SQLStore) IterateSessions(ctx context.Context, addresses []string, callback func(string, []byte) error) error {
+	if len(addresses) == 0 {
+		return nil
+	}
+	rows, err := s.queryManySessions(ctx, addresses)
+	return rawSessionScanner.NewRowIter(rows, err).Iter(func(tuple rawAddressSessionTuple) (bool, error) {
+		return true, callback(tuple.Address, tuple.Session)
+	})
 }
 
 func (s *SQLStore) PutManySessions(ctx context.Context, sessions map[string][]byte) error {
@@ -353,7 +407,14 @@ func (s *SQLStore) DeleteSession(ctx context.Context, address string) error {
 
 func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error {
 	pnSignal := pn.SignalAddressUser()
-	if !s.migratedPNSessionsCache.Add(pnSignal) {
+	s.migratedPNSessionsCacheLock.Lock()
+	_, migrated := s.migratedPNSessionsCache[pnSignal]
+	_, migrating := s.migratingPNSessions[pnSignal]
+	if !migrated && !migrating {
+		s.migratingPNSessions[pnSignal] = struct{}{}
+	}
+	s.migratedPNSessionsCacheLock.Unlock()
+	if migrated || migrating {
 		return nil
 	}
 	var sessionsUpdated, identityKeysUpdated, senderKeysUpdated int64
@@ -399,8 +460,13 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 		}
 		return nil
 	})
+	s.migratedPNSessionsCacheLock.Lock()
+	delete(s.migratingPNSessions, pnSignal)
+	if err == nil {
+		setBoundedCacheEntry(s.migratedPNSessionsCache, pnSignal, struct{}{}, maxMigratedPNEntries)
+	}
+	s.migratedPNSessionsCacheLock.Unlock()
 	if err != nil {
-		s.migratedPNSessionsCache.Remove(pnSignal)
 		return err
 	}
 	s.identityCacheLock.Lock()
@@ -873,7 +939,7 @@ func (s *SQLStore) getContact(ctx context.Context, user types.JID) (*types.Conta
 		BusinessName:  business.String,
 		RedactedPhone: redactedPhone.String,
 	}
-	s.contactCache[user] = info
+	s.setCachedContactLocked(user, info)
 	return info, nil
 }
 
@@ -918,7 +984,7 @@ func (s *SQLStore) GetAllContacts(ctx context.Context) (map[types.JID]types.Cont
 	output := make(map[types.JID]types.ContactInfo, len(s.contactCache))
 	err := convertContactRow.NewRowIter(s.db.Query(ctx, getAllContactsQuery, s.JID)).Iter(func(tuple *contactTuple) (bool, error) {
 		output[tuple.JID] = *tuple.Info
-		s.contactCache[tuple.JID] = tuple.Info
+		s.setCachedContactLocked(tuple.JID, tuple.Info)
 		return true, nil
 	})
 	return output, err

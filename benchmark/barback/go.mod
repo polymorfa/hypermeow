@@ -6,7 +6,7 @@ toolchain go1.26.5
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	go.mau.fi/libsignal v0.2.2
+	github.com/polymorfa/libsignal-protocol-go v0.2.3-0.20260806162910-a2adef2e8a11
 	go.mau.fi/whatsmeow v0.0.0
 	google.golang.org/protobuf v1.36.11
 )

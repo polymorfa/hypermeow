@@ -35,6 +35,8 @@ type CachedLIDMap struct {
 
 var _ store.LIDStore = (*CachedLIDMap)(nil)
 
+const maxLIDCacheEntries = 65536
+
 func NewCachedLIDMap(db *dbutil.Database) *CachedLIDMap {
 	return &CachedLIDMap{
 		db: db,
@@ -71,21 +73,62 @@ var convertLIDRow = dbutil.ConvertRowFn[store.LIDMapping](func(rows dbutil.Scann
 func (s *CachedLIDMap) FillCache(ctx context.Context) error {
 	s.lidCacheLock.Lock()
 	defer s.lidCacheLock.Unlock()
+	clear(s.pnToLIDCache)
+	clear(s.lidToPNCache)
 	res := convertLIDRow.NewRowIter(s.db.Query(ctx, getAllLIDMappingsQuery))
-	err := s.scanManyLids(res, nil)
-	s.cacheFilled = err == nil
+	count, err := s.scanManyLids(res, nil)
+	s.cacheFilled = err == nil && count <= maxLIDCacheEntries
 	return err
 }
 
-func (s *CachedLIDMap) scanManyLids(res dbutil.RowIter[store.LIDMapping], fn func(lid, pn string)) error {
-	return res.Iter(func(mapping store.LIDMapping) (bool, error) {
-		s.pnToLIDCache[mapping.PN.User] = mapping.LID.User
-		s.lidToPNCache[mapping.LID.User] = mapping.PN.User
+func (s *CachedLIDMap) scanManyLids(res dbutil.RowIter[store.LIDMapping], fn func(lid, pn string)) (int, error) {
+	count := 0
+	err := res.Iter(func(mapping store.LIDMapping) (bool, error) {
+		count++
+		s.cacheMappingLocked(mapping.LID.User, mapping.PN.User)
 		if fn != nil {
 			fn(mapping.LID.User, mapping.PN.User)
 		}
 		return true, nil
 	})
+	return count, err
+}
+
+func evictLIDCacheEntry(cache, reverse map[string]string) {
+	for source, target := range cache {
+		delete(cache, source)
+		if target != "" && reverse[target] == source {
+			delete(reverse, target)
+		}
+		return
+	}
+}
+
+func (s *CachedLIDMap) cacheMissLocked(cache, reverse map[string]string, source string) {
+	if _, exists := cache[source]; exists {
+		return
+	}
+	if len(cache) >= maxLIDCacheEntries {
+		evictLIDCacheEntry(cache, reverse)
+	}
+	cache[source] = ""
+}
+
+func (s *CachedLIDMap) cacheMappingLocked(lid, pn string) {
+	if oldLID := s.pnToLIDCache[pn]; oldLID != "" && oldLID != lid && s.lidToPNCache[oldLID] == pn {
+		delete(s.lidToPNCache, oldLID)
+	}
+	if oldPN := s.lidToPNCache[lid]; oldPN != "" && oldPN != pn && s.pnToLIDCache[oldPN] == lid {
+		delete(s.pnToLIDCache, oldPN)
+	}
+	if _, exists := s.pnToLIDCache[pn]; !exists && len(s.pnToLIDCache) >= maxLIDCacheEntries {
+		evictLIDCacheEntry(s.pnToLIDCache, s.lidToPNCache)
+	}
+	if _, exists := s.lidToPNCache[lid]; !exists && len(s.lidToPNCache) >= maxLIDCacheEntries {
+		evictLIDCacheEntry(s.lidToPNCache, s.pnToLIDCache)
+	}
+	s.pnToLIDCache[pn] = lid
+	s.lidToPNCache[lid] = pn
 }
 
 func (s *CachedLIDMap) getLIDMapping(ctx context.Context, source types.JID, targetServer, query string, sourceToTarget, targetToSource map[string]string) (types.JID, error) {
@@ -107,9 +150,15 @@ func (s *CachedLIDMap) getLIDMapping(ctx context.Context, source types.JID, targ
 	} else if err != nil {
 		return types.JID{}, err
 	}
-	sourceToTarget[source.User] = targetUser
+	if targetUser == "" {
+		s.cacheMissLocked(sourceToTarget, targetToSource, source.User)
+	}
 	if targetUser != "" {
-		targetToSource[targetUser] = source.User
+		if targetServer == types.HiddenUserServer {
+			s.cacheMappingLocked(targetUser, source.User)
+		} else {
+			s.cacheMappingLocked(source.User, targetUser)
+		}
 		return types.JID{User: targetUser, Device: source.Device, Server: targetServer}, nil
 	}
 	return types.JID{}, nil
@@ -183,7 +232,7 @@ func (s *CachedLIDMap) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (
 			exslices.CastToAny(missingPNs)...,
 		))
 	}
-	err := s.scanManyLids(res, func(lid, pn string) {
+	_, err := s.scanManyLids(res, func(lid, pn string) {
 		for _, dev := range missingPNDevices[pn] {
 			lidDev := dev
 			lidDev.Server = types.HiddenUserServer
@@ -253,15 +302,6 @@ func (s *CachedLIDMap) unlockedPutLIDMapping(ctx context.Context, lid, pn types.
 	if err != nil {
 		return err
 	}
-	oldLID := s.pnToLIDCache[pn.User]
-	oldPN := s.lidToPNCache[lid.User]
-	s.pnToLIDCache[pn.User] = lid.User
-	s.lidToPNCache[lid.User] = pn.User
-	if oldPN != "" && oldPN != pn.User && s.pnToLIDCache[oldPN] == lid.User {
-		delete(s.pnToLIDCache, oldPN)
-	}
-	if oldLID != "" && oldLID != lid.User && s.lidToPNCache[oldLID] == pn.User {
-		delete(s.lidToPNCache, oldLID)
-	}
+	s.cacheMappingLocked(lid.User, pn.User)
 	return nil
 }

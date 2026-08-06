@@ -10,8 +10,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/polymorfa/libsignal-protocol-go/state/record"
 	"github.com/rs/zerolog"
-	"go.mau.fi/libsignal/state/record"
 
 	"go.mau.fi/util/exsync"
 )
@@ -29,6 +29,14 @@ type sessionCacheEntry struct {
 }
 
 type sessionCache = exsync.Map[string, sessionCacheEntry]
+
+type sessionIterator interface {
+	IterateSessions(context.Context, []string, func(string, []byte) error) error
+}
+
+type sessionLoader interface {
+	IterateSession(context.Context, string, func([]byte) error) (bool, error)
+}
 
 func getSessionCache(ctx context.Context) *sessionCache {
 	if ctx == nil {
@@ -83,29 +91,40 @@ func (device *Device) WithCachedSessions(ctx context.Context, addresses []string
 		return nil, ctx, nil
 	}
 
-	sessions, err := device.Sessions.GetManySessions(ctx, addresses)
-	if err != nil {
-		return nil, ctx, fmt.Errorf("failed to prefetch sessions: %w", err)
+	wrapped := make(map[string]sessionCacheEntry, len(addresses))
+	existingSessions := make(map[string]bool, len(addresses))
+	for _, addr := range addresses {
+		wrapped[addr] = sessionCacheEntry{Record: record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State)}
+		existingSessions[addr] = false
 	}
-	wrapped := make(map[string]sessionCacheEntry, len(sessions))
-	existingSessions := make(map[string]bool, len(sessions))
-	for addr, rawSess := range sessions {
-		var sessionRecord *record.Session
-		var found bool
-		if rawSess == nil {
-			sessionRecord = record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State)
-		} else {
-			found = true
-			sessionRecord, err = record.NewSessionFromBytes(rawSess, SignalProtobufSerializer.Session, SignalProtobufSerializer.State)
-			if err != nil {
-				zerolog.Ctx(ctx).Err(err).
-					Str("address", addr).
-					Msg("Failed to deserialize session")
-				continue
+	loadSession := func(addr string, rawSess []byte) error {
+		sessionRecord, err := record.NewSessionFromBytes(rawSess, SignalProtobufSerializer.Session, SignalProtobufSerializer.State)
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).
+				Str("address", addr).
+				Msg("Failed to deserialize session")
+			delete(wrapped, addr)
+			delete(existingSessions, addr)
+			return nil
+		}
+		existingSessions[addr] = true
+		wrapped[addr] = sessionCacheEntry{Record: sessionRecord, Found: true}
+		return nil
+	}
+	if iterator, ok := device.Sessions.(sessionIterator); ok {
+		if err := iterator.IterateSessions(ctx, addresses, loadSession); err != nil {
+			return nil, ctx, fmt.Errorf("failed to prefetch sessions: %w", err)
+		}
+	} else {
+		sessions, err := device.Sessions.GetManySessions(ctx, addresses)
+		if err != nil {
+			return nil, ctx, fmt.Errorf("failed to prefetch sessions: %w", err)
+		}
+		for addr, rawSess := range sessions {
+			if rawSess != nil {
+				_ = loadSession(addr, rawSess)
 			}
 		}
-		existingSessions[addr] = found
-		wrapped[addr] = sessionCacheEntry{Record: sessionRecord, Found: found}
 	}
 
 	ctx = context.WithValue(ctx, contextKeySessionCache, (*sessionCache)(exsync.NewMapWithData(wrapped)))

@@ -19,11 +19,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/polymorfa/libsignal-protocol-go/groups"
+	"github.com/polymorfa/libsignal-protocol-go/protocol"
+	"github.com/polymorfa/libsignal-protocol-go/session"
+	"github.com/polymorfa/libsignal-protocol-go/signalerror"
 	"github.com/rs/zerolog"
-	"go.mau.fi/libsignal/groups"
-	"go.mau.fi/libsignal/protocol"
-	"go.mau.fi/libsignal/session"
-	"go.mau.fi/libsignal/signalerror"
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 

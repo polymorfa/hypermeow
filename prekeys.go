@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"time"
 
-	"go.mau.fi/libsignal/ecc"
-	"go.mau.fi/libsignal/keys/identity"
-	"go.mau.fi/libsignal/keys/prekey"
-	"go.mau.fi/libsignal/util/optional"
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
+	"github.com/polymorfa/libsignal-protocol-go/keys/identity"
+	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
+	"github.com/polymorfa/libsignal-protocol-go/util/optional"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"

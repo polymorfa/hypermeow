@@ -514,7 +514,7 @@ func (cli *Client) GetUserDevices(ctx context.Context, jids []types.JID) ([]type
 				continue
 			}
 			userDevices := parseDeviceList(jid, user.GetChildByTag("devices"))
-			cli.userDevicesCache[jid] = deviceCache{devices: userDevices, dhash: participantListHashV2(userDevices)}
+			putBoundedCache(cli.userDevicesCache, jid, deviceCache{devices: userDevices, dhash: participantListHashV2(userDevices)}, maxUserDeviceCacheEntries)
 			devices = append(devices, userDevices...)
 		}
 	}
@@ -863,7 +863,7 @@ func (cli *Client) getFBIDDevices(ctx context.Context, jids []types.JID) ([]type
 				continue
 			}
 			userDevices := parseFBDeviceList(jid, user.GetChildByTag("devices"))
-			cli.userDevicesCache[jid] = userDevices
+			putBoundedCache(cli.userDevicesCache, jid, userDevices, maxUserDeviceCacheEntries)
 			devices = append(devices, userDevices.devices...)
 		}
 	}

@@ -120,12 +120,14 @@ type Client struct {
 	eventHandlers     []wrappedEventHandler
 	eventHandlersLock sync.RWMutex
 
-	messageRetries     map[string]int
-	messageRetriesLock sync.Mutex
-	retrySema          *semaphore.Weighted
+	messageRetries      map[string]int
+	messageRetriesLock  sync.Mutex
+	messageRetriesReset time.Time
+	retrySema           *semaphore.Weighted
 
-	incomingRetryRequestCounter     map[incomingRetryKey]int
-	incomingRetryRequestCounterLock sync.Mutex
+	incomingRetryRequestCounter      map[incomingRetryKey]int
+	incomingRetryRequestCounterLock  sync.Mutex
+	incomingRetryRequestCounterReset time.Time
 
 	appStateKeyRequests     map[string]time.Time
 	appStateKeyRequestsLock sync.RWMutex
@@ -145,8 +147,8 @@ type Client struct {
 	userDevicesCache     map[types.JID]deviceCache
 	userDevicesCacheLock sync.Mutex
 
-	recentMessagesMap  map[recentMessageKey]RecentMessage
-	recentMessagesList [recentMessagesSize]recentMessageKey
+	recentMessagesMap  map[recentMessageKey]cachedRecentMessage
+	recentMessagesList []recentMessageKey
 	recentMessagesPtr  int
 	recentMessagesLock sync.RWMutex
 
@@ -282,7 +284,6 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		groupCache:       make(map[types.JID]*groupMetaCache),
 		userDevicesCache: make(map[types.JID]deviceCache),
 
-		recentMessagesMap:      make(map[recentMessageKey]RecentMessage, recentMessagesSize),
 		sessionRecreateHistory: make(map[types.JID]time.Time),
 		GetMessageForRetry:     func(requester, to types.JID, id types.MessageID) *waE2E.Message { return nil },
 		appStateKeyRequests:    make(map[string]time.Time),

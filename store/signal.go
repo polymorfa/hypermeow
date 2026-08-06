@@ -10,13 +10,13 @@ import (
 	"context"
 	"fmt"
 
-	"go.mau.fi/libsignal/ecc"
-	groupRecord "go.mau.fi/libsignal/groups/state/record"
-	"go.mau.fi/libsignal/keys/identity"
-	"go.mau.fi/libsignal/protocol"
-	"go.mau.fi/libsignal/serialize"
-	"go.mau.fi/libsignal/state/record"
-	"go.mau.fi/libsignal/state/store"
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
+	groupRecord "github.com/polymorfa/libsignal-protocol-go/groups/state/record"
+	"github.com/polymorfa/libsignal-protocol-go/keys/identity"
+	"github.com/polymorfa/libsignal-protocol-go/protocol"
+	"github.com/polymorfa/libsignal-protocol-go/serialize"
+	"github.com/polymorfa/libsignal-protocol-go/state/record"
+	"github.com/polymorfa/libsignal-protocol-go/state/store"
 )
 
 var SignalProtobufSerializer = serialize.NewProtoBufSerializer()
@@ -88,16 +88,31 @@ func (device *Device) LoadSession(ctx context.Context, address *protocol.SignalA
 		return sess, nil
 	}
 
-	rawSess, err := device.Sessions.GetSession(ctx, addrString)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load session with %s: %w", addrString, err)
+	var sess *record.Session
+	load := func(rawSess []byte) error {
+		var err error
+		sess, err = record.NewSessionFromBytes(rawSess, SignalProtobufSerializer.Session, SignalProtobufSerializer.State)
+		return err
 	}
-	if rawSess == nil {
-		return record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State), nil
-	}
-	sess, err := record.NewSessionFromBytes(rawSess, SignalProtobufSerializer.Session, SignalProtobufSerializer.State)
-	if err != nil {
-		return nil, fmt.Errorf("failed to deserialize session with %s: %w", addrString, err)
+	if loader, ok := device.Sessions.(sessionLoader); ok {
+		found, err := loader.IterateSession(ctx, addrString, load)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load session with %s: %w", addrString, err)
+		}
+		if !found {
+			return record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State), nil
+		}
+	} else {
+		rawSess, err := device.Sessions.GetSession(ctx, addrString)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load session with %s: %w", addrString, err)
+		}
+		if rawSess == nil {
+			return record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State), nil
+		}
+		if err = load(rawSess); err != nil {
+			return nil, fmt.Errorf("failed to deserialize session with %s: %w", addrString, err)
+		}
 	}
 	return sess, nil
 }

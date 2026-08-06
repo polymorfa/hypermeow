@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"go.mau.fi/libsignal/keys/prekey"
+	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
 
 	"go.mau.fi/whatsmeow/appstate"
 	waBinary "go.mau.fi/whatsmeow/binary"

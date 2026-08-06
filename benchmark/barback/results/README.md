@@ -29,3 +29,5 @@ Raw reports:
 The full-rate allocation comparison and portable pprof captures are documented in `memory-g128.md`.
 
 The direct-message matrix, refinement, and burst memory profile are documented in `dm-matrix.md`.
+
+The follow-up retained-memory bounds, zero-copy PostgreSQL reads, compact retry cache, and final DM/group profiles are documented in `ram-hardening.md`.

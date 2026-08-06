@@ -463,10 +463,16 @@ func (cli *Client) requestMissingAppStateKeys(ctx context.Context, patches *apps
 	rawKeyIDs := cli.appStateProc.GetMissingKeyIDs(ctx, patches)
 	filteredKeyIDs := make([][]byte, 0, len(rawKeyIDs))
 	now := time.Now()
+	if len(cli.appStateKeyRequests) >= maxAppStateKeyRequestEntries {
+		pruneExpiredCache(cli.appStateKeyRequests, now.Add(-24*time.Hour))
+	}
 	for _, keyID := range rawKeyIDs {
 		stringKeyID := hex.EncodeToString(keyID)
 		lastRequestTime := cli.appStateKeyRequests[stringKeyID]
 		if lastRequestTime.IsZero() || lastRequestTime.Add(24*time.Hour).Before(now) {
+			if _, exists := cli.appStateKeyRequests[stringKeyID]; !exists && len(cli.appStateKeyRequests) >= maxAppStateKeyRequestEntries {
+				continue
+			}
 			cli.appStateKeyRequests[stringKeyID] = now
 			filteredKeyIDs = append(filteredKeyIDs, keyID)
 		}

@@ -4,25 +4,46 @@ import (
 	"context"
 	"testing"
 
-	"go.mau.fi/libsignal/protocol"
+	"github.com/polymorfa/libsignal-protocol-go/protocol"
 	"go.mau.fi/whatsmeow/types"
 )
 
 type countingSessionStore struct {
-	hasCalls int
+	hasCalls     int
+	getCalls     int
+	getManyCalls int
 }
 
-func (*countingSessionStore) GetSession(context.Context, string) ([]byte, error) { return nil, nil }
+func (s *countingSessionStore) GetSession(context.Context, string) ([]byte, error) {
+	s.getCalls++
+	return nil, nil
+}
 func (s *countingSessionStore) HasSession(context.Context, string) (bool, error) {
 	s.hasCalls++
 	return false, nil
 }
-func (*countingSessionStore) GetManySessions(_ context.Context, addresses []string) (map[string][]byte, error) {
+func (s *countingSessionStore) GetManySessions(_ context.Context, addresses []string) (map[string][]byte, error) {
+	s.getManyCalls++
 	result := make(map[string][]byte, len(addresses))
 	for _, address := range addresses {
 		result[address] = nil
 	}
 	return result, nil
+}
+
+type iteratingSessionStore struct {
+	countingSessionStore
+	iterateCalls int
+}
+
+func (s *iteratingSessionStore) IterateSession(_ context.Context, _ string, _ func([]byte) error) (bool, error) {
+	s.iterateCalls++
+	return false, nil
+}
+
+func (s *iteratingSessionStore) IterateSessions(_ context.Context, _ []string, _ func(string, []byte) error) error {
+	s.iterateCalls++
+	return nil
 }
 func (*countingSessionStore) PutSession(context.Context, string, []byte) error           { return nil }
 func (*countingSessionStore) PutManySessions(context.Context, map[string][]byte) error   { return nil }
@@ -47,5 +68,40 @@ func TestContainsSessionUsesPrefetchedState(t *testing.T) {
 	}
 	if sessions.hasCalls != 0 {
 		t.Fatalf("expected no HasSession query, got %d", sessions.hasCalls)
+	}
+}
+
+func TestCachedSessionsPreferEphemeralIterator(t *testing.T) {
+	sessions := &iteratingSessionStore{}
+	device := &Device{Sessions: sessions}
+	address := protocol.NewSignalAddress("123", 1)
+	_, _, err := device.WithCachedSessions(context.Background(), []string{address.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions.iterateCalls != 1 {
+		t.Fatalf("expected one iterator call, got %d", sessions.iterateCalls)
+	}
+	if sessions.getManyCalls != 0 {
+		t.Fatalf("expected no copying GetManySessions call, got %d", sessions.getManyCalls)
+	}
+}
+
+func TestLoadSessionPrefersEphemeralIterator(t *testing.T) {
+	sessions := &iteratingSessionStore{}
+	device := &Device{Sessions: sessions}
+	address := protocol.NewSignalAddress("123", 1)
+	loaded, err := device.LoadSession(context.Background(), address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil {
+		t.Fatal("missing empty session")
+	}
+	if sessions.iterateCalls != 1 {
+		t.Fatalf("expected one iterator call, got %d", sessions.iterateCalls)
+	}
+	if sessions.getCalls != 0 {
+		t.Fatalf("expected no copying GetSession call, got %d", sessions.getCalls)
 	}
 }
