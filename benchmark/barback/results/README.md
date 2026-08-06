@@ -23,3 +23,5 @@ Raw reports:
 - `baseline-secure-2-g128.json`
 - `candidate-secure-1-g128.json`
 - `candidate-secure-2-g128.json`
+
+The full-rate allocation comparison and portable pprof captures are documented in `memory-g128.md`.
