@@ -41,7 +41,8 @@ services:
       - 0.0.0.0
       - --port
       - "8080"
-      - --no-tls
+      - --cert-dir
+      - /certs
       - --pairing-delay
       - "0"
       - --bench
@@ -60,6 +61,8 @@ services:
       - ${HISTORY_CONVERSATIONS:-100}
       - --history-sync-messages
       - ${HISTORY_MESSAGES:-20}
+    environment:
+      MEDIA_CONN_HOST: barback:8080
     healthcheck:
       test: ["CMD", "/usr/local/bin/barback", "--healthcheck", "--port", "8080"]
       interval: 1s
@@ -69,11 +72,15 @@ services:
     mem_limit: 768m
     mem_reservation: 384m
     pids_limit: 256
+    volumes:
+      - barback-certs:/certs
 
   client:
     build:
       context: ../..
       dockerfile: benchmark/barback/Dockerfile
+      additional_contexts:
+        library: ${LIBRARY_CONTEXT:-../..}
       args:
         BUILD_REV: ${BUILD_REV:-working-tree}
     depends_on:
@@ -82,8 +89,10 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      BARBACK_URL: http://barback:8080
-      BARBACK_WS: ws://barback:8080/ws/chat
+      BARBACK_TLS_CA: /certs/cert.pem
+      BARBACK_TLS_SERVER_NAME: 0.0.0.0
+      BARBACK_URL: https://barback:8080
+      BARBACK_WS: wss://barback:8080/ws/chat
       BENCH_TIMEOUT: ${BENCH_TIMEOUT:-5m}
       BENCH_TOTAL: ${BENCH_TOTAL:-200}
       BENCH_VARIANT: ${BENCH_VARIANT:-candidate}
@@ -91,6 +100,7 @@ services:
       RESULT_PATH: /results/${RESULT_FILE:-result.json}
     init: true
     volumes:
+      - barback-certs:/certs:ro
       - ./results:/results
     cpus: 1.00
     mem_limit: 2g
@@ -98,4 +108,5 @@ services:
     pids_limit: 256
 
 volumes:
+  barback-certs:
   pgdata:

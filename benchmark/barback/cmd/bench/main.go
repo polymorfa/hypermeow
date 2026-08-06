@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -34,13 +36,15 @@ import (
 var revision = "working-tree"
 
 type config struct {
-	DatabaseURL string
-	BarbackURL  string
-	BarbackWS   string
-	OutputPath  string
-	Variant     string
-	Total       int64
-	Timeout     time.Duration
+	DatabaseURL   string
+	BarbackURL    string
+	BarbackWS     string
+	TLSCAPath     string
+	TLSServerName string
+	OutputPath    string
+	Variant       string
+	Total         int64
+	Timeout       time.Duration
 }
 
 type queryStat struct {
@@ -100,8 +104,9 @@ type result struct {
 }
 
 type runner struct {
-	cfg config
-	db  *sql.DB
+	cfg        config
+	db         *sql.DB
+	httpClient *http.Client
 
 	received        atomic.Int64
 	sent            atomic.Int64
@@ -157,13 +162,15 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("invalid BENCH_TIMEOUT: %w", err)
 	}
 	return config{
-		DatabaseURL: env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
-		BarbackURL:  env("BARBACK_URL", "http://barback:8080"),
-		BarbackWS:   env("BARBACK_WS", "ws://barback:8080/ws/chat"),
-		OutputPath:  env("RESULT_PATH", "/results/result.json"),
-		Variant:     env("BENCH_VARIANT", "candidate"),
-		Total:       total,
-		Timeout:     timeout,
+		DatabaseURL:   env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
+		BarbackURL:    env("BARBACK_URL", "http://barback:8080"),
+		BarbackWS:     env("BARBACK_WS", "ws://barback:8080/ws/chat"),
+		TLSCAPath:     os.Getenv("BARBACK_TLS_CA"),
+		TLSServerName: env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
+		OutputPath:    env("RESULT_PATH", "/results/result.json"),
+		Variant:       env("BENCH_VARIANT", "candidate"),
+		Total:         total,
+		Timeout:       timeout,
 	}, nil
 }
 
@@ -198,6 +205,17 @@ func (r *runner) run() (result, error) {
 	}
 
 	client := whatsmeow.NewClient(device, waLog.Stdout("HyperMeow", "INFO", true))
+	if r.cfg.TLSCAPath != "" {
+		r.httpClient, err = trustedHTTPClient(r.cfg.TLSCAPath, r.cfg.TLSServerName)
+		if err != nil {
+			return r.snapshot(false), err
+		}
+		client.SetMediaHTTPClient(r.httpClient)
+		client.SetWebsocketHTTPClient(r.httpClient)
+		client.SetPreLoginHTTPClient(r.httpClient)
+	} else {
+		r.httpClient = http.DefaultClient
+	}
 	root := barbackRootKey()
 	client.SocketConfig = &whatsmeow.SocketConfig{
 		URL:                       r.cfg.BarbackWS,
@@ -271,7 +289,7 @@ func (r *runner) scanQR(code string) {
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "submit QR scan: %v\n", err)
 		return
@@ -442,6 +460,20 @@ func timevalSeconds(value syscall.Timeval) float64 {
 func barbackRootKey() [32]byte {
 	seed := sha256.Sum256([]byte("mock_root_key"))
 	return ecc.CreateKeyPair(seed[:]).PublicKey().PublicKey()
+}
+
+func trustedHTTPClient(caPath, serverName string) (*http.Client, error) {
+	pem, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read Barback TLS CA: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("parse Barback TLS CA")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}
+	return &http.Client{Transport: transport}, nil
 }
 
 func writeResult(path string, value result) error {

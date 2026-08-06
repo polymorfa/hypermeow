@@ -4,7 +4,9 @@ FROM golang:1.26-bookworm AS build
 ARG BUILD_REV=working-tree
 WORKDIR /src
 COPY . .
+COPY --from=library . /library
 WORKDIR /src/benchmark/barback
+RUN go mod edit -replace=go.mau.fi/whatsmeow=/library
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.revision=${BUILD_REV}" -o /out/hypermeow-bench ./cmd/bench

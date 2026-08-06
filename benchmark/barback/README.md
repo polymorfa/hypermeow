@@ -22,6 +22,8 @@ docker compose down --volumes --remove-orphans
 
 `BARBACK_CONTEXT` must point to a checkout of `titan-api/devcenter` at commit `c79b2d3fe864977837377d59228c6779546b0deb`. The default resolves to the standard local Polymorfa checkout layout. Verify the commit before a comparison with `git -C "$BARBACK_CONTEXT" rev-parse HEAD`.
 
+`LIBRARY_CONTEXT` can point to another HyperMeow worktree to compare two revisions without changing the benchmark code or branches. Barback generates a persisted TLS certificate for each clean stack. The client trusts that certificate and keeps both TLS and Noise certificate verification enabled.
+
 Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's three-second benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, failures, and history-sync counts.
 
 Change only one workload dimension at a time. Recommended group sizes are 32, 128, 512, and 1024. Keep the Barback revision, rate, total, history size, container limits, host power state, and Docker version fixed across a baseline/candidate pair.
