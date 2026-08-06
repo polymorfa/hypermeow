@@ -49,14 +49,14 @@ func (cli *Client) clearResponseWaiters(node *waBinary.Node) {
 			close(waiter)
 		}
 	}
-	cli.responseWaiters = make(map[string]chan<- *waBinary.Node)
+	cli.responseWaiters = nil
 	cli.responseWaitersLock.Unlock()
 }
 
 func (cli *Client) waitResponse(reqID string) chan *waBinary.Node {
 	ch := make(chan *waBinary.Node, 1)
 	cli.responseWaitersLock.Lock()
-	cli.responseWaiters[reqID] = ch
+	ensureMap(&cli.responseWaiters)[reqID] = ch
 	cli.responseWaitersLock.Unlock()
 	return ch
 }

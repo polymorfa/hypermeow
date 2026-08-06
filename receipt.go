@@ -191,7 +191,7 @@ func (cli *Client) sendAck(ctx context.Context, node *waBinary.Node, error int) 
 // To mark messages by different users as read, you must call MarkRead multiple times (once for each user).
 //
 // To mark a voice message as played, specify types.ReceiptTypePlayed as the last parameter.
-// Providing more than one receipt type will panic: the parameter is only a vararg for backwards compatibility.
+// Providing more than one receipt type returns an error: the parameter is only a vararg for backwards compatibility.
 func (cli *Client) MarkRead(ctx context.Context, ids []types.MessageID, timestamp time.Time, chat, sender types.JID, receiptTypeExtra ...types.ReceiptType) error {
 	if len(ids) == 0 {
 		return fmt.Errorf("no message IDs specified")
@@ -200,7 +200,7 @@ func (cli *Client) MarkRead(ctx context.Context, ids []types.MessageID, timestam
 	if len(receiptTypeExtra) == 1 {
 		receiptType = receiptTypeExtra[0]
 	} else if len(receiptTypeExtra) > 1 {
-		panic(fmt.Errorf("too many receipt types specified"))
+		return fmt.Errorf("too many receipt types specified")
 	}
 	node := waBinary.Node{
 		Tag: "receipt",

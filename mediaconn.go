@@ -45,9 +45,20 @@ func (cli *Client) refreshMediaConn(ctx context.Context, force bool) (*MediaConn
 	if cli == nil {
 		return nil, ErrClientIsNil
 	}
+	now := time.Now()
+	if !force {
+		cli.mediaConnLock.RLock()
+		cached := cli.mediaConnCache
+		if cached != nil && now.Before(cached.Expiry()) {
+			cli.mediaConnLock.RUnlock()
+			return cached, nil
+		}
+		cli.mediaConnLock.RUnlock()
+	}
 	cli.mediaConnLock.Lock()
 	defer cli.mediaConnLock.Unlock()
-	if cli.mediaConnCache == nil || force || time.Now().After(cli.mediaConnCache.Expiry()) {
+	now = time.Now()
+	if cli.mediaConnCache == nil || force || !now.Before(cli.mediaConnCache.Expiry()) {
 		var err error
 		cli.mediaConnCache, err = cli.queryMediaConn(ctx)
 		if err != nil {

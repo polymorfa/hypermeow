@@ -188,7 +188,7 @@ func (cli *Client) downloadMediaToFile(ctx context.Context, url string, file io.
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	osFile, ok := file.(*os.File)
 	if ok && resp.ContentLength > 0 {
 		err = fallocate.Fallocate(osFile, int(resp.ContentLength))

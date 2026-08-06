@@ -21,8 +21,9 @@ const (
 	tcTokenBucketDuration = 604800
 	// tcTokenNumBuckets is the number of rolling buckets (4 = ~28-day window).
 	// Matches AB prop tctoken_num_buckets.
-	tcTokenNumBuckets      = 4
-	tcTokenDBPruneInterval = 24 * time.Hour
+	tcTokenNumBuckets       = 4
+	tcTokenDBPruneInterval  = 24 * time.Hour
+	maxTCTokenSenderEntries = 2048
 )
 
 func currentTCTokenCutoffTimestamp() time.Time {
@@ -89,8 +90,8 @@ func (cli *Client) validateAndSetTCTokenSenderTS(jid types.JID, storedSenderTime
 	if storedSenderTimestamp.IsZero() || storedSenderTimestamp.Before(currentTCTokenCutoffTimestamp()) {
 		return false
 	}
-	cli.tcTokenSenderTS[key] = storedSenderTimestamp
 	cli.unlockedCleanupTCTokenSenderTSMap()
+	putBoundedCache(ensureMap(&cli.tcTokenSenderTS), key, storedSenderTimestamp, maxTCTokenSenderEntries)
 	return true
 }
 
@@ -99,8 +100,8 @@ func (cli *Client) setTCTokenSenderTS(jid types.JID, ts time.Time) {
 	cli.tcTokenSenderTSLock.Lock()
 	defer cli.tcTokenSenderTSLock.Unlock()
 
-	cli.tcTokenSenderTS[jid.ToNonAD()] = ts
 	cli.unlockedCleanupTCTokenSenderTSMap()
+	putBoundedCache(ensureMap(&cli.tcTokenSenderTS), jid.ToNonAD(), ts, maxTCTokenSenderEntries)
 }
 
 func (cli *Client) unlockedCleanupTCTokenSenderTSMap() {

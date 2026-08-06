@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.mau.fi/libsignal/ecc"
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
 	"google.golang.org/protobuf/proto"
 
 	waBinary "go.mau.fi/whatsmeow/binary"

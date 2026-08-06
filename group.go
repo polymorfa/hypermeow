@@ -643,11 +643,11 @@ func (cli *Client) cacheGroupInfo(groupInfo *types.GroupInfo, lock bool) ([]stor
 		cli.groupCacheLock.Lock()
 		defer cli.groupCacheLock.Unlock()
 	}
-	cli.groupCache[groupInfo.JID] = &groupMetaCache{
+	putBoundedCache(ensureMap(&cli.groupCache), groupInfo.JID, &groupMetaCache{
 		AddressingMode:             groupInfo.AddressingMode,
 		CommunityAnnouncementGroup: groupInfo.IsAnnounce && groupInfo.IsDefaultSubGroup,
 		Members:                    participants,
-	}
+	}, maxGroupCacheEntries)
 	return lidPairs, redactedPhones
 }
 

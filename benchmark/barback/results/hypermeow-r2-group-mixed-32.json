@@ -1,0 +1,274 @@
+{
+  "variant": "hypermeow-r2",
+  "revision": "be55f11511f0da723aeb5ec301613572bbbac386",
+  "started_at": "2026-08-06T20:16:59.671475637Z",
+  "completed": true,
+  "target_messages": 160,
+  "workload": {
+    "scenario": "group-mixed-32",
+    "mode": "group",
+    "rate": 25,
+    "senders": 1,
+    "workers": 2,
+    "warmup_ms": 2500,
+    "group_size": 32,
+    "history_conversations": 10,
+    "history_messages_per_conversation": 5,
+    "message_profile": "mixed"
+  },
+  "messages_received": 160,
+  "messages_sent": 160,
+  "send_failures": 0,
+  "queue_overflows": 0,
+  "history_syncs": 4,
+  "history_conversations": 40,
+  "history_messages": 200,
+  "duration_ms": 8806.85199,
+  "throughput_per_sec": 18.16767219225175,
+  "send_latency": {
+    "min_ms": 1.622375,
+    "p50_ms": 3.769417,
+    "p95_ms": 6.583875,
+    "p99_ms": 10.816208,
+    "max_ms": 29.529917
+  },
+  "database": {
+    "calls": 1377,
+    "total_exec_ms": 108.70985200000004,
+    "rows": 11869,
+    "size_bytes": 9989267,
+    "queries": [
+      {
+        "query": "SELECT sender_key FROM whatsmeow_sender_keys WHERE our_jid=$1 AND chat_id=$2 AND sender_id=$3",
+        "calls": 481,
+        "total_exec_ms": 10.273317000000002,
+        "rows": 479
+      },
+      {
+        "query": "INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) VALUES ($1, $2, $3, $4) ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key",
+        "calls": 322,
+        "total_exec_ms": 12.227446000000004,
+        "rows": 322
+      },
+      {
+        "query": "INSERT INTO whatsmeow_sessions (our_jid, their_id, session) SELECT $1, batch.their_id, batch.session FROM UNNEST($2::text[], $3::bytea[]) AS batch(their_id, session) ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session",
+        "calls": 160,
+        "total_exec_ms": 49.15241500000001,
+        "rows": 5440
+      },
+      {
+        "query": "SELECT their_id, session FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id = ANY($2)",
+        "calls": 160,
+        "total_exec_ms": 30.72537300000002,
+        "rows": 5408
+      },
+      {
+        "query": "INSERT INTO whatsmeow_app_state_sync_keys (jid, key_id, key_data, timestamp, fingerprint) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (jid, key_id) DO UPDATE SET key_data=excluded.key_data, timestamp=excluded.timestamp, fingerprint=excluded.fingerprint WHERE excluded.timestamp \u003e whatsmeow_app_state_sync_keys.timestamp",
+        "calls": 70,
+        "total_exec_ms": 1.8932540000000002,
+        "rows": 70
+      },
+      {
+        "query": "SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2",
+        "calls": 34,
+        "total_exec_ms": 0.06425200000000003,
+        "rows": 1
+      },
+      {
+        "query": "INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) VALUES ($1, $2, $3) ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity",
+        "calls": 33,
+        "total_exec_ms": 1.065743,
+        "rows": 33
+      },
+      {
+        "query": "INSERT INTO whatsmeow_lid_map (lid, pn) VALUES ($1, $2) ON CONFLICT (lid) DO UPDATE SET pn=excluded.pn WHERE whatsmeow_lid_map.pn\u003c\u003eexcluded.pn",
+        "calls": 33,
+        "total_exec_ms": 0.21221299999999996,
+        "rows": 33
+      },
+      {
+        "query": "DELETE FROM whatsmeow_lid_map WHERE (lid\u003c\u003e$1 AND pn=$2)",
+        "calls": 33,
+        "total_exec_ms": 0.05416800000000003,
+        "rows": 0
+      },
+      {
+        "query": "SELECT version, hash FROM whatsmeow_app_state_version WHERE jid=$1 AND name=$2",
+        "calls": 10,
+        "total_exec_ms": 0.049624999999999996,
+        "rows": 3
+      },
+      {
+        "query": "INSERT INTO whatsmeow_sessions (our_jid, their_id, session) VALUES ($1, $2, $3) ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session",
+        "calls": 6,
+        "total_exec_ms": 0.424292,
+        "rows": 6
+      },
+      {
+        "query": "SELECT session FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id=$2",
+        "calls": 6,
+        "total_exec_ms": 0.032127,
+        "rows": 4
+      },
+      {
+        "query": "SELECT key_id, key FROM whatsmeow_pre_keys WHERE jid=$1 AND key_id=$2",
+        "calls": 5,
+        "total_exec_ms": 0.055834,
+        "rows": 5
+      },
+      {
+        "query": "DELETE FROM whatsmeow_pre_keys WHERE jid=$1 AND key_id=$2",
+        "calls": 5,
+        "total_exec_ms": 0.043252,
+        "rows": 5
+      },
+      {
+        "query": "INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, key) VALUES ($1,$2,$3,$4,$5),($1,$6,$7,$8,$9),($1,$10,$11,$12,$13),($1,$14,$15,$16,$17),($1,$18,$19,$20,$21),($1,$22,$23,$24,$25),($1,$26,$27,$28,$29),($1,$30,$31,$32,$33),($1,$34,$35,$36,$37),($1,$38,$39,$40,$41),($1,$42,$43,$44,$45),($1,$46,$47,$48,$49),($1,$50,$51,$52,$53),($1,$54,$55,$56,$57),($1,$58,$59,$60,$61),($1,$62,$63,$64,$65),($1,$66,$67,$68,$69),($1,$70,$71,$72,$73),($1,$74,$75,$76,$77),($1,$78,$79,$80,$81),($1,$8",
+        "calls": 3,
+        "total_exec_ms": 1.5362080000000002,
+        "rows": 50
+      },
+      {
+        "query": "INSERT INTO whatsmeow_app_state_mutation_macs (jid, name, version, index_mac, value_mac) VALUES ($1, $2, $3, $4, $5)",
+        "calls": 3,
+        "total_exec_ms": 0.24733399999999997,
+        "rows": 3
+      },
+      {
+        "query": "INSERT INTO whatsmeow_app_state_version (jid, name, version, hash) VALUES ($1, $2, $3, $4) ON CONFLICT (jid, name) DO UPDATE SET version=excluded.version, hash=excluded.hash",
+        "calls": 3,
+        "total_exec_ms": 0.20616600000000002,
+        "rows": 3
+      },
+      {
+        "query": "INSERT INTO whatsmeow_nct_salt (our_jid, salt) VALUES ($1, $2) ON CONFLICT (our_jid) DO UPDATE SET salt=excluded.salt",
+        "calls": 2,
+        "total_exec_ms": 0.32420899999999997,
+        "rows": 2
+      },
+      {
+        "query": "INSERT INTO whatsmeow_device (jid, lid, registration_id, noise_key, identity_key, signed_pre_key, signed_pre_key_id, signed_pre_key_sig, adv_key, adv_details, adv_account_sig, adv_account_sig_key, adv_device_sig, platform, business_name, push_name, facebook_uuid, lid_migration_ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) ON CONFLICT (jid) DO UPDATE SET lid=excluded.lid, platform=excluded.platform, business_name=e",
+        "calls": 1,
+        "total_exec_ms": 0.08724900000000001,
+        "rows": 1
+      },
+      {
+        "query": "INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) SELECT our_jid, chat_id, replace(sender_id, $2, $3), sender_key FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2 || $4 ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key",
+        "calls": 1,
+        "total_exec_ms": 0.011083,
+        "rows": 0
+      },
+      {
+        "query": "INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) SELECT our_jid, replace(their_id, $2, $3), identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2 || $4 ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity",
+        "calls": 1,
+        "total_exec_ms": 0.009209,
+        "rows": 0
+      },
+      {
+        "query": "SELECT key_data, timestamp, fingerprint FROM whatsmeow_app_state_sync_keys WHERE jid=$1 AND key_id=$2",
+        "calls": 1,
+        "total_exec_ms": 0.006959,
+        "rows": 1
+      },
+      {
+        "query": "INSERT INTO whatsmeow_sessions (our_jid, their_id, session) SELECT our_jid, replace(their_id, $2, $3), session FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2 || $4 ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session",
+        "calls": 1,
+        "total_exec_ms": 0.004083,
+        "rows": 0
+      },
+      {
+        "query": "DELETE FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2",
+        "calls": 1,
+        "total_exec_ms": 0.001583,
+        "rows": 0
+      },
+      {
+        "query": "DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2",
+        "calls": 1,
+        "total_exec_ms": 0.0015,
+        "rows": 0
+      },
+      {
+        "query": "DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2",
+        "calls": 1,
+        "total_exec_ms": 0.000958,
+        "rows": 0
+      }
+    ]
+  },
+  "runtime": {
+    "alloc_bytes": 10145512,
+    "heap_inuse_bytes": 12099584,
+    "sys_bytes": 27367688,
+    "total_alloc_bytes": 166536040,
+    "num_gc": 40,
+    "goroutines": 12,
+    "peak_rss_bytes": 37654528,
+    "user_cpu_seconds": 0.685186,
+    "sys_cpu_seconds": 0.23866
+  },
+  "workload_runtime": {
+    "heap_alloc_bytes": 10145512,
+    "heap_inuse_bytes": 12099584,
+    "total_alloc_bytes": 157657048,
+    "garbage_collections": 36,
+    "user_cpu_seconds": 0.6360319999999999,
+    "sys_cpu_seconds": 0.218597,
+    "peak_rss_bytes": 37654528
+  },
+  "resources": {
+    "network": {
+      "rx_bytes": 6979242,
+      "rx_packets": 4077,
+      "tx_bytes": 28601763,
+      "tx_packets": 4920
+    },
+    "process_io": {
+      "read_chars": 19824116,
+      "write_chars": 41388322,
+      "read_calls": 5942,
+      "write_calls": 5560,
+      "read_bytes": 0,
+      "write_bytes": 13189120
+    },
+    "block_io": {
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "read_ops": 0,
+      "write_ops": 0
+    },
+    "temporary_files": {
+      "peak_bytes": 786458,
+      "peak_files": 1,
+      "final_bytes": 0,
+      "final_files": 0
+    }
+  },
+  "message_types": {
+    "audio": 10,
+    "contact": 10,
+    "document": 10,
+    "ephemeral-spoiler": 10,
+    "image": 10,
+    "image-view-once": 10,
+    "link-preview": 10,
+    "location": 10,
+    "poll": 10,
+    "reaction": 10,
+    "text-forwarded-ephemeral": 10,
+    "text-medium": 10,
+    "text-quoted-mention": 10,
+    "text-rich": 10,
+    "text-short": 10,
+    "video": 10
+  },
+  "media_uploads": 50,
+  "media_upload_bytes": 19660800,
+  "media_upload_latency": {
+    "min_ms": 0.701292,
+    "p50_ms": 2.647583,
+    "p95_ms": 5.644791,
+    "p99_ms": 6.421916,
+    "max_ms": 6.641
+  }
+}
