@@ -1,9 +1,18 @@
-# whatsmeow
+# HyperMeow
 [![Go Reference](https://pkg.go.dev/badge/go.mau.fi/whatsmeow.svg)](https://pkg.go.dev/go.mau.fi/whatsmeow)
 
-whatsmeow is a Go library for the WhatsApp web multidevice API.
+HyperMeow is Polymorfa's reliability- and performance-focused fork of whatsmeow, a Go library for the WhatsApp web multidevice API.
+
+The module path and package names remain `go.mau.fi/whatsmeow` for compatibility. Consumers can test HyperMeow with a Go module `replace` directive while the fork is validated against upstream behavior.
+
+```go
+replace go.mau.fi/whatsmeow => github.com/polymorfa/hypermeow <version>
+```
+
+The reproducible Barback and PostgreSQL benchmark is documented in [`benchmark/barback`](benchmark/barback/README.md).
 
 ## Discussion
+
 Matrix room: [#whatsmeow:maunium.net](https://matrix.to/#/#whatsmeow:maunium.net)
 
 For questions about the WhatsApp protocol (like how to send a specific type of
@@ -13,10 +22,12 @@ discussions.
 [WhatsApp protocol Q&A]: https://github.com/tulir/whatsmeow/discussions/categories/whatsapp-protocol-q-a
 
 ## Usage
+
 The [godoc](https://pkg.go.dev/go.mau.fi/whatsmeow) includes docs for all methods and event types.
 There's also a [simple example](https://pkg.go.dev/go.mau.fi/whatsmeow#example-package) at the top.
 
 ## Features
+
 Most core features are already present:
 
 * Sending messages to private chats and groups (both text and media)

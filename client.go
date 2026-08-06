@@ -206,6 +206,7 @@ type Client struct {
 	// separate library for all the non-e2ee-related stuff like logging in.
 	// The library is currently embedded in mautrix-meta (https://github.com/mautrix/meta), but may be separated later.
 	MessengerConfig *MessengerConfig
+	SocketConfig    *SocketConfig
 	RefreshCAT      func(context.Context) error
 }
 
@@ -219,6 +220,13 @@ type MessengerConfig struct {
 	UserAgent    string
 	BaseURL      string
 	WebsocketURL string
+}
+
+// SocketConfig overrides the WebSocket endpoint or Noise certificate authority.
+type SocketConfig struct {
+	URL                       string
+	Origin                    string
+	NoiseCertificateAuthority *[32]byte
 }
 
 // Size of buffer for the channel that all incoming XML nodes go through.
@@ -556,6 +564,14 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		//fs.HTTPHeaders.Set("Sec-Fetch-Dest", "empty")
 		//fs.HTTPHeaders.Set("Sec-Fetch-Mode", "websocket")
 		//fs.HTTPHeaders.Set("Sec-Fetch-Site", "cross-site")
+	}
+	if cli.SocketConfig != nil {
+		if cli.SocketConfig.URL != "" {
+			fs.URL = cli.SocketConfig.URL
+		}
+		if cli.SocketConfig.Origin != "" {
+			fs.HTTPHeaders.Set("Origin", cli.SocketConfig.Origin)
+		}
 	}
 	if err := fs.Connect(ctx); err != nil {
 		fs.Close(0)

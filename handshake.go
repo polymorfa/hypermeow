@@ -82,7 +82,12 @@ func (cli *Client) doHandshake(ctx context.Context, fs *socket.FrameSocket, ephe
 	certDecrypted, err := nh.Decrypt(certificateCiphertext)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt noise certificate ciphertext: %w", err)
-	} else if err = verifyServerCert(certDecrypted, staticDecrypted); err != nil {
+	}
+	certAuthority := WACertPubKey
+	if cli.SocketConfig != nil && cli.SocketConfig.NoiseCertificateAuthority != nil {
+		certAuthority = *cli.SocketConfig.NoiseCertificateAuthority
+	}
+	if err = verifyServerCert(certDecrypted, staticDecrypted, certAuthority); err != nil {
 		return fmt.Errorf("failed to verify server cert: %w", err)
 	}
 
@@ -140,7 +145,7 @@ func checkCertValidity(cert *waCert.CertChain_NoiseCertificate_Details) error {
 	return nil
 }
 
-func verifyServerCert(certDecrypted, staticDecrypted []byte) error {
+func verifyServerCert(certDecrypted, staticDecrypted []byte, certAuthority [32]byte) error {
 	var certChain waCert.CertChain
 	err := proto.Unmarshal(certDecrypted, &certChain)
 	if err != nil {
@@ -157,7 +162,7 @@ func verifyServerCert(certDecrypted, staticDecrypted []byte) error {
 		return fmt.Errorf("unexpected length of intermediate cert signature %d (expected 64)", len(intermediateCertSignature))
 	} else if len(leafCertSignature) != 64 {
 		return fmt.Errorf("unexpected length of leaf cert signature %d (expected 64)", len(leafCertSignature))
-	} else if !ecc.VerifySignature(ecc.NewDjbECPublicKey(WACertPubKey), intermediateCertDetailsRaw, [64]byte(intermediateCertSignature)) {
+	} else if !ecc.VerifySignature(ecc.NewDjbECPublicKey(certAuthority), intermediateCertDetailsRaw, [64]byte(intermediateCertSignature)) {
 		return fmt.Errorf("failed to verify intermediate cert signature")
 	} else if err = proto.Unmarshal(intermediateCertDetailsRaw, &intermediateCertDetails); err != nil {
 		return fmt.Errorf("failed to unmarshal noise certificate details: %w", err)
