@@ -12,6 +12,13 @@ const (
 	retryCounterWindow             = time.Hour
 )
 
+func ensureMap[K comparable, V any](cache *map[K]V) map[K]V {
+	if *cache == nil {
+		*cache = make(map[K]V)
+	}
+	return *cache
+}
+
 func putBoundedCache[K comparable, V any](cache map[K]V, key K, value V, limit int) {
 	if _, exists := cache[key]; !exists && len(cache) >= limit {
 		for oldKey := range cache {

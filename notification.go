@@ -168,7 +168,7 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 		newParticipantHash := participantListHashV2(cached.devices)
 		if newParticipantHash == deviceHash {
 			cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", from, cachedParticipantHash, deviceHash, child.Tag)
-			putBoundedCache(cli.userDevicesCache, from, cached, maxUserDeviceCacheEntries)
+			putBoundedCache(ensureMap(&cli.userDevicesCache), from, cached, maxUserDeviceCacheEntries)
 		} else {
 			cli.Log.Warnf("%s's device list hash changed from %s to %s (%s). New hash doesn't match (%s)", from, cachedParticipantHash, deviceHash, child.Tag, newParticipantHash)
 			delete(cli.userDevicesCache, from)
@@ -177,7 +177,7 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 			newLIDParticipantHash := participantListHashV2(cachedLID.devices)
 			if newLIDParticipantHash == deviceLIDHash {
 				cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", fromLID, cachedLIDHash, deviceLIDHash, child.Tag)
-				putBoundedCache(cli.userDevicesCache, *fromLID, cachedLID, maxUserDeviceCacheEntries)
+				putBoundedCache(ensureMap(&cli.userDevicesCache), *fromLID, cachedLID, maxUserDeviceCacheEntries)
 			} else {
 				cli.Log.Warnf("%s's device list hash changed from %s to %s (%s). New hash doesn't match (%s)", fromLID, cachedLIDHash, deviceLIDHash, child.Tag, newLIDParticipantHash)
 				delete(cli.userDevicesCache, *fromLID)
@@ -191,7 +191,7 @@ func (cli *Client) handleFBDeviceNotification(ctx context.Context, node *waBinar
 	defer cli.userDevicesCacheLock.Unlock()
 	jid := node.AttrGetter().JID("from")
 	userDevices := parseFBDeviceList(jid, node.GetChildByTag("devices"))
-	putBoundedCache(cli.userDevicesCache, jid, userDevices, maxUserDeviceCacheEntries)
+	putBoundedCache(ensureMap(&cli.userDevicesCache), jid, userDevices, maxUserDeviceCacheEntries)
 }
 
 func (cli *Client) handleOwnDevicesNotification(ctx context.Context, node *waBinary.Node, fromJID types.JID) {
@@ -236,8 +236,8 @@ func (cli *Client) handleOwnDevicesNotification(ctx context.Context, node *waBin
 		delete(cli.userDevicesCache, ownLID)
 	} else {
 		cli.Log.Debugf("Received own device list change notification %s -> %s from %s", oldHash, newHash, fromJID)
-		putBoundedCache(cli.userDevicesCache, fromJIDPlain, deviceCache{devices: newDeviceList, dhash: expectedNewHash}, maxUserDeviceCacheEntries)
-		putBoundedCache(cli.userDevicesCache, altJID, deviceCache{devices: altDeviceList, dhash: participantListHashV2(altDeviceList)}, maxUserDeviceCacheEntries)
+		putBoundedCache(ensureMap(&cli.userDevicesCache), fromJIDPlain, deviceCache{devices: newDeviceList, dhash: expectedNewHash}, maxUserDeviceCacheEntries)
+		putBoundedCache(ensureMap(&cli.userDevicesCache), altJID, deviceCache{devices: altDeviceList, dhash: participantListHashV2(altDeviceList)}, maxUserDeviceCacheEntries)
 	}
 }
 

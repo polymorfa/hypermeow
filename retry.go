@@ -83,17 +83,21 @@ func (cli *Client) addRecentMessage(ctx context.Context, to types.JID, id types.
 	cli.recentMessagesLock.Lock()
 	key := recentMessageKey{to, id}
 	if cli.recentMessagesMap == nil {
-		cli.recentMessagesMap = make(map[recentMessageKey]cachedRecentMessage, recentMessagesSize)
+		cli.recentMessagesMap = make(map[recentMessageKey]cachedRecentMessage)
 	}
-	if len(cli.recentMessagesList) == 0 {
-		cli.recentMessagesList = make([]recentMessageKey, recentMessagesSize)
+	if _, exists := cli.recentMessagesMap[key]; exists {
+		cli.recentMessagesMap[key] = cachedRecentMessage{format: format, payload: payload}
+		cli.recentMessagesLock.Unlock()
+		return nil
 	}
-	if cli.recentMessagesList[cli.recentMessagesPtr].ID != "" {
+	if len(cli.recentMessagesList) < recentMessagesSize {
+		cli.recentMessagesList = append(cli.recentMessagesList, key)
+	} else {
 		delete(cli.recentMessagesMap, cli.recentMessagesList[cli.recentMessagesPtr])
+		cli.recentMessagesList[cli.recentMessagesPtr] = key
+		cli.recentMessagesPtr = (cli.recentMessagesPtr + 1) % recentMessagesSize
 	}
 	cli.recentMessagesMap[key] = cachedRecentMessage{format: format, payload: payload}
-	cli.recentMessagesList[cli.recentMessagesPtr] = key
-	cli.recentMessagesPtr = (cli.recentMessagesPtr + 1) % recentMessagesSize
 	cli.recentMessagesLock.Unlock()
 	return nil
 }
@@ -174,6 +178,7 @@ const recreateSessionTimeout = 1 * time.Hour
 func (cli *Client) shouldRecreateSession(ctx context.Context, retryCount int, jid types.JID) (reason string, recreate bool) {
 	cli.sessionRecreateHistoryLock.Lock()
 	defer cli.sessionRecreateHistoryLock.Unlock()
+	ensureMap(&cli.sessionRecreateHistory)
 	now := time.Now()
 	if len(cli.sessionRecreateHistory) >= maxSessionRecreateHistoryItems {
 		pruneExpiredCache(cli.sessionRecreateHistory, now.Add(-recreateSessionTimeout))
@@ -255,7 +260,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 	retryKey := incomingRetryKey{receipt.Sender, messageID}
 	cli.incomingRetryRequestCounterLock.Lock()
 	internalCounter, accepted := incrementBoundedCounter(
-		cli.incomingRetryRequestCounter,
+		ensureMap(&cli.incomingRetryRequestCounter),
 		retryKey,
 		maxIncomingRetryEntries,
 		&cli.incomingRetryRequestCounterReset,
@@ -457,7 +462,7 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 	}
 	ctx, cancel := context.WithCancel(cli.BackgroundEventCtx)
 	defer cancel()
-	cli.pendingPhoneRerequests[info.ID] = cancel
+	ensureMap(&cli.pendingPhoneRerequests)[info.ID] = cancel
 	cli.pendingPhoneRerequestsLock.Unlock()
 
 	defer func() {
@@ -481,7 +486,6 @@ func (cli *Client) immediateRequestMessageFromPhone(ctx context.Context, info *t
 	} else {
 		cli.Log.Debugf("Requested message %s from phone", info.ID)
 	}
-	return
 }
 
 func (cli *Client) clearDelayedMessageRequests() {
@@ -503,7 +507,7 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 
 	cli.messageRetriesLock.Lock()
 	retryCount, accepted := incrementBoundedCounter(
-		cli.messageRetries,
+		ensureMap(&cli.messageRetries),
 		id,
 		maxMessageRetryEntries,
 		&cli.messageRetriesReset,

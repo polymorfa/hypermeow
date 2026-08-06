@@ -490,7 +490,6 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			cli.sendMessageReceipt(ctx, info, node)
 		}
 	})
-	return
 }
 
 func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID) error {
@@ -506,7 +505,10 @@ func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID)
 	return nil
 }
 
-var EventAlreadyProcessed = errors.New("event was already processed")
+var ErrEventAlreadyProcessed = errors.New("event was already processed")
+
+// Deprecated: use ErrEventAlreadyProcessed.
+var EventAlreadyProcessed = ErrEventAlreadyProcessed
 
 func (cli *Client) bufferedDecrypt(
 	ctx context.Context,
@@ -752,7 +754,7 @@ func (cli *Client) SendHistorySyncServerErrorReceipt(ctx context.Context, msgID 
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("Failed to send history sync server-error receipt: %w", err)
+		return fmt.Errorf("failed to send history sync server-error receipt: %w", err)
 	}
 	return nil
 }

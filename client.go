@@ -23,7 +23,6 @@ import (
 
 	"go.mau.fi/util/exhttp"
 	"go.mau.fi/util/exsync"
-	"go.mau.fi/util/ptr"
 	"go.mau.fi/util/random"
 	"golang.org/x/net/proxy"
 	"golang.org/x/sync/semaphore"
@@ -44,7 +43,6 @@ import (
 // EventHandler is a function that can handle events from WhatsApp.
 type EventHandler func(evt any)
 type EventHandlerWithSuccessStatus func(evt any) bool
-type nodeHandler func(ctx context.Context, node *waBinary.Node)
 
 var nextHandlerID uint32
 
@@ -110,12 +108,11 @@ type Client struct {
 	lastPreKeyUpload  time.Time
 
 	mediaConnCache *MediaConn
-	mediaConnLock  sync.Mutex
+	mediaConnLock  sync.RWMutex
 
 	responseWaiters     map[string]chan<- *waBinary.Node
 	responseWaitersLock sync.Mutex
 
-	nodeHandlers      map[string]nodeHandler
 	handlerQueue      chan *waBinary.Node
 	eventHandlers     []wrappedEventHandler
 	eventHandlersLock sync.RWMutex
@@ -231,9 +228,18 @@ type SocketConfig struct {
 	NoiseCertificateAuthority *[32]byte
 }
 
-// Size of buffer for the channel that all incoming XML nodes go through.
-// In general it shouldn't go past a few buffered messages, but the channel is big to be safe.
-const handlerQueueSize = 2048
+const handlerQueueSize = 256
+
+var sharedHTTPTransport = func() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 128
+	transport.MaxIdleConnsPerHost = 32
+	return transport
+}()
+
+func newDefaultHTTPClient() *http.Client {
+	return &http.Client{Transport: sharedHTTPTransport}
+}
 
 // NewClient initializes a new WhatsApp web client.
 //
@@ -256,39 +262,24 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		log = waLog.Noop
 	}
 	uniqueIDPrefix := random.Bytes(2)
-	baseHTTPClient := &http.Client{
-		Transport: (http.DefaultTransport.(*http.Transport)).Clone(),
-	}
+	baseHTTPClient := newDefaultHTTPClient()
 	cli := &Client{
-		mediaHTTP:          ptr.Clone(baseHTTPClient),
-		websocketHTTP:      ptr.Clone(baseHTTPClient),
-		preLoginHTTP:       ptr.Clone(baseHTTPClient),
+		mediaHTTP:          baseHTTPClient,
+		websocketHTTP:      baseHTTPClient,
+		preLoginHTTP:       baseHTTPClient,
 		Store:              deviceStore,
 		Log:                log,
 		recvLog:            log.Sub("Recv"),
 		sendLog:            log.Sub("Send"),
 		uniqueID:           fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
-		responseWaiters:    make(map[string]chan<- *waBinary.Node),
-		eventHandlers:      make([]wrappedEventHandler, 0, 1),
-		messageRetries:     make(map[string]int),
 		handlerQueue:       make(chan *waBinary.Node, handlerQueueSize),
 		appStateProc:       appstate.NewProcessor(deviceStore, log.Sub("AppState")),
 		socketWait:         make(chan struct{}),
 		expectedDisconnect: exsync.NewEvent(),
 
-		incomingRetryRequestCounter: make(map[incomingRetryKey]int),
-
 		historySyncNotifications: make(chan *waE2E.HistorySyncNotification, 32),
 
-		tcTokenSenderTS:  make(map[types.JID]time.Time),
-		groupCache:       make(map[types.JID]*groupMetaCache),
-		userDevicesCache: make(map[types.JID]deviceCache),
-
-		sessionRecreateHistory: make(map[types.JID]time.Time),
-		GetMessageForRetry:     func(requester, to types.JID, id types.MessageID) *waE2E.Message { return nil },
-		appStateKeyRequests:    make(map[string]time.Time),
-
-		pendingPhoneRerequests: make(map[types.MessageID]context.CancelFunc),
+		GetMessageForRetry: func(requester, to types.JID, id types.MessageID) *waE2E.Message { return nil },
 
 		EnableAutoReconnect: true,
 		AutoTrustIdentity:   true,
@@ -296,22 +287,6 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		BackgroundEventCtx: context.Background(),
 	}
 	cli.paired.Store(deviceStore.ID != nil)
-	cli.nodeHandlers = map[string]nodeHandler{
-		"message":      cli.handleEncryptedMessage,
-		"status":       cli.handleUnencryptedMessage,
-		"appdata":      cli.handleEncryptedMessage,
-		"receipt":      cli.handleReceipt,
-		"call":         cli.handleCallEvent,
-		"chatstate":    cli.handleChatState,
-		"presence":     cli.handlePresence,
-		"notification": cli.handleNotification,
-		"success":      cli.handleConnectSuccess,
-		"failure":      cli.handleConnectFailure,
-		"stream:error": cli.handleStreamError,
-		"iq":           cli.handleIQ,
-		"ib":           cli.handleIB,
-		// Apparently there's also an <error> node which can have a code=479 and means "Invalid stanza sent (smax-invalid)"
-	}
 	return cli
 }
 
@@ -401,14 +376,20 @@ func (cli *Client) SetSOCKSProxy(px proxy.Dialer, opts ...SetProxyOptions) {
 
 func (cli *Client) setTransport(transport *http.Transport, opt SetProxyOptions) {
 	if !opt.NoWebsocket {
-		cli.preLoginHTTP.Transport = transport
+		cli.preLoginHTTP = cloneHTTPClientWithTransport(cli.preLoginHTTP, transport)
 		if !opt.OnlyLogin {
-			cli.websocketHTTP.Transport = transport
+			cli.websocketHTTP = cloneHTTPClientWithTransport(cli.websocketHTTP, transport)
 		}
 	}
 	if !opt.NoMedia {
-		cli.mediaHTTP.Transport = transport
+		cli.mediaHTTP = cloneHTTPClientWithTransport(cli.mediaHTTP, transport)
 	}
+}
+
+func cloneHTTPClientWithTransport(client *http.Client, transport http.RoundTripper) *http.Client {
+	cloned := *client
+	cloned.Transport = transport
+	return &cloned
 }
 
 // SetMediaHTTPClient sets the HTTP client used to download media.
@@ -833,7 +814,7 @@ func (cli *Client) RemoveEventHandler(id uint32) bool {
 // RemoveEventHandlers removes all event handlers that have been registered with AddEventHandler
 func (cli *Client) RemoveEventHandlers() {
 	cli.eventHandlersLock.Lock()
-	cli.eventHandlers = make([]wrappedEventHandler, 0, 1)
+	cli.eventHandlers = nil
 	cli.eventHandlersLock.Unlock()
 }
 
@@ -858,21 +839,22 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		// TODO should we do something else?
 	} else if cli.receiveResponse(ctx, node) {
 		// handled
-	} else if _, ok := cli.nodeHandlers[node.Tag]; ok {
-		select {
-		case cli.handlerQueue <- node:
-		case <-ctx.Done():
-		default:
-			cli.Log.Warnf("Handler queue is full, message ordering is no longer guaranteed")
-			go func() {
-				select {
-				case cli.handlerQueue <- node:
-				case <-ctx.Done():
-				}
-			}()
-		}
+	} else if cli.hasNodeHandler(node.Tag) {
+		cli.enqueueNode(ctx, node)
 	} else if node.Tag != "ack" {
 		cli.Log.Debugf("Didn't handle WhatsApp node %s", node.Tag)
+	}
+}
+
+func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
+	select {
+	case cli.handlerQueue <- node:
+	case <-ctx.Done():
+	default:
+		if cli.forceAutoReconnect.CompareAndSwap(false, true) {
+			cli.Log.Errorf("Handler queue is full, resetting connection")
+			go cli.ResetConnection()
+		}
 	}
 }
 
@@ -887,7 +869,7 @@ Loop:
 			doneChan := make(chan struct{})
 			start := time.Now()
 			go func() {
-				cli.nodeHandlers[node.Tag](evtCtx, node)
+				cli.handleNode(evtCtx, node)
 				duration := time.Since(start)
 				close(doneChan)
 				if duration > 5*time.Second {
@@ -910,6 +892,44 @@ Loop:
 			cli.Log.Debugf("Closing handler queue loop")
 			return
 		}
+	}
+}
+
+func (cli *Client) hasNodeHandler(tag string) bool {
+	switch tag {
+	case "message", "status", "appdata", "receipt", "call", "chatstate", "presence", "notification", "success", "failure", "stream:error", "iq", "ib":
+		return true
+	default:
+		return false
+	}
+}
+
+func (cli *Client) handleNode(ctx context.Context, node *waBinary.Node) {
+	switch node.Tag {
+	case "message", "appdata":
+		cli.handleEncryptedMessage(ctx, node)
+	case "status":
+		cli.handleUnencryptedMessage(ctx, node)
+	case "receipt":
+		cli.handleReceipt(ctx, node)
+	case "call":
+		cli.handleCallEvent(ctx, node)
+	case "chatstate":
+		cli.handleChatState(ctx, node)
+	case "presence":
+		cli.handlePresence(ctx, node)
+	case "notification":
+		cli.handleNotification(ctx, node)
+	case "success":
+		cli.handleConnectSuccess(ctx, node)
+	case "failure":
+		cli.handleConnectFailure(ctx, node)
+	case "stream:error":
+		cli.handleStreamError(ctx, node)
+	case "iq":
+		cli.handleIQ(ctx, node)
+	case "ib":
+		cli.handleIB(ctx, node)
 	}
 }
 

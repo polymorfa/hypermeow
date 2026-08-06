@@ -9,9 +9,9 @@ WORKDIR /src/benchmark/barback
 RUN go mod edit -replace=go.mau.fi/whatsmeow=/library
 RUN --mount=type=cache,target=/go/pkg/mod go mod tidy
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.revision=${BUILD_REV}" -o /out/hypermeow-bench ./cmd/bench
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.revision=${BUILD_REV}" -o /out/clientmem ./cmd/clientmem
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/hypermeow-bench /usr/local/bin/hypermeow-bench
+COPY --from=build /out/clientmem /usr/local/bin/clientmem
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/hypermeow-bench"]
+ENTRYPOINT ["/usr/local/bin/clientmem"]

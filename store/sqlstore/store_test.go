@@ -7,6 +7,13 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
+func TestNewSQLStoreDefersCaches(t *testing.T) {
+	store := NewSQLStore(nil, types.JID{User: "123", Server: types.DefaultUserServer})
+	if store.contactCache != nil || store.identityCache != nil || store.migratedPNSessionsCache != nil || store.migratingPNSessions != nil {
+		t.Fatal("SQL store allocated caches before use")
+	}
+}
+
 func TestBuildSharedMassInsertQuery(t *testing.T) {
 	query := buildSharedMassInsertQuery("INSERT VALUES ", " ON CONFLICT", 2, 2)
 	want := "INSERT VALUES ($1,$2,$3),($1,$4,$5) ON CONFLICT"

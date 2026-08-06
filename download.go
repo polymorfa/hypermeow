@@ -187,7 +187,7 @@ func (cli *Client) FetchStickerPack(ctx context.Context, packID string) (*types.
 	}
 	var packs []types.StickerPack
 	err = json.NewDecoder(resp.Body).Decode(&packs)
-	_ = resp.Body.Close()
+	drainAndClose(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	} else if len(packs) == 0 {
@@ -364,7 +364,7 @@ func (cli *Client) doMediaDownloadRequest(ctx context.Context, url string) (*htt
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
+		drainAndClose(resp.Body)
 		return nil, DownloadHTTPError{Response: resp}
 	}
 	return resp, nil
@@ -376,7 +376,7 @@ func (cli *Client) downloadMedia(ctx context.Context, url string) ([]byte, error
 		return nil, err
 	}
 	data, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	drainAndClose(resp.Body)
 	return data, err
 }
 

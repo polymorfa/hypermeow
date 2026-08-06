@@ -10,13 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/beeper/argo-go/codec"
-	"github.com/beeper/argo-go/pkg/buf"
-
-	"go.mau.fi/whatsmeow/argo"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waWa6"
 	"go.mau.fi/whatsmeow/store"
@@ -203,32 +198,7 @@ func (cli *Client) sendMexIQ(ctx context.Context, queryID string, variables any)
 		return nil, fmt.Errorf("unexpected content type %T in mex response", result.Content)
 	}
 	if result.AttrGetter().OptionalString("format") == "argo" {
-		if true {
-			return nil, fmt.Errorf("argo decoding is currently broken")
-		}
-		store, err := argo.GetStore()
-		if err != nil {
-			return nil, err
-		}
-		queryIDMap, err := argo.GetQueryIDToMessageName()
-		if err != nil {
-			return nil, err
-		}
-		wt := store[queryIDMap[queryID]]
-
-		decoder, err := codec.NewArgoDecoder(buf.NewBufReadonly(resultContent))
-		if err != nil {
-			return nil, err
-		}
-		data, err := decoder.ArgoToMap(wt)
-		if err != nil {
-			log.Fatalf("argo to map error: %v", err)
-		}
-		b, err := json.Marshal(data)
-		if err != nil {
-			return nil, err
-		}
-		return b, nil
+		return nil, fmt.Errorf("argo decoding is currently broken")
 	} else {
 		var gqlResp types.GraphQLResponse
 		err = json.Unmarshal(resultContent, &gqlResp)

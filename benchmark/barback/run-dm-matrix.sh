@@ -19,6 +19,7 @@ trap cleanup EXIT
 
 run_scenario() {
 	local scenario=$1
+	export BENCH_MESSAGE_PROFILE=text BENCH_WORKERS=1
 	case "$scenario" in
 		dm-steady-1)
 			export BENCH_RATE=60 BENCH_TOTAL=600 BENCH_SENDERS=1 BENCH_WARMUP_MS=1500
@@ -44,6 +45,10 @@ run_scenario() {
 			export BENCH_RATE=80 BENCH_TOTAL=400 BENCH_SENDERS=8 BENCH_WARMUP_MS=3000
 			export HISTORY_CONVERSATIONS=100 HISTORY_MESSAGES=20
 			;;
+		dm-mixed-8)
+			export BENCH_RATE=40 BENCH_TOTAL=320 BENCH_SENDERS=8 BENCH_WARMUP_MS=2500
+			export HISTORY_CONVERSATIONS=10 HISTORY_MESSAGES=5 BENCH_MESSAGE_PROFILE=mixed BENCH_WORKERS=4
+			;;
 		*)
 			printf 'unknown DM scenario: %s\n' "$scenario" >&2
 			return 2
@@ -65,7 +70,7 @@ run_scenario() {
 }
 
 if (($# == 0)); then
-	set -- dm-steady-1 dm-parallel-8 dm-parallel-32 dm-parallel-64 dm-burst-16 dm-history-8
+		set -- dm-steady-1 dm-parallel-8 dm-parallel-32 dm-parallel-64 dm-burst-16 dm-history-8 dm-mixed-8
 fi
 
 for scenario in "$@"; do

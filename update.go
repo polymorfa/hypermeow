@@ -49,7 +49,7 @@ func GetLatestVersion(ctx context.Context, httpClient *http.Client) (*store.WAVe
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	data, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	drainAndClose(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	} else if resp.StatusCode != 200 {

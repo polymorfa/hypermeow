@@ -39,11 +39,25 @@ BENCH_VARIANT=candidate ./run-dm-matrix.sh dm-parallel-32 dm-burst-16
 
 Set `LIBRARY_CONTEXT` to another worktree and change `BENCH_VARIANT` for an A/B run. Set `MEM_PROFILE_SCENARIO` to one scenario name to capture its full-rate heap profile. Each JSON report embeds the complete workload configuration.
 
+`run-system-matrix.sh` adds group and mixed-feature workloads and captures Docker CPU, memory, network, block-I/O, process-I/O, temporary-file, and client network counters. Mixed runs rotate deterministically through text, links, mentions, quotes, forwarding, ephemeral settings, locations, contacts, polls, reactions, images, audio, documents, video, view-once media, and link previews. Documents and video use the streaming upload path so temporary-file behavior is measured.
+
+`run-comparison-matrix.sh` archives immutable WhatsMeow and pre-PR3 revisions, then runs them and the candidate through the same matrix. Set `BENCH_REPEATS=3` for repeated comparisons:
+
+```sh
+BENCH_REPEATS=3 ./run-comparison-matrix.sh
+```
+
+The constructor benchmark measures fixed disconnected client state separately from live-session traffic:
+
+```sh
+BENCH_VARIANT=hypermeow BENCH_SESSIONS=2000 ./run-client-memory.sh
+```
+
 `BARBACK_CONTEXT` must point to a checkout of `titan-api/devcenter` at commit `9e7d0dc45faffc9fde6ab4f9fd405a3a61c0efe5`. The default resolves to the standard local Polymorfa checkout layout. Verify the commit before a comparison with `git -C "$BARBACK_CONTEXT" rev-parse HEAD`.
 
 `LIBRARY_CONTEXT` can point to another HyperMeow worktree to compare two revisions without changing the benchmark code or branches. Barback generates a persisted TLS certificate for each clean stack. The client trusts that certificate and keeps both TLS and Noise certificate verification enabled.
 
-Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's three-second benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, failures, and history-sync counts.
+Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send and upload latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, process and block I/O, temporary-file peaks and cleanup, network traffic, failures, message-shape counts, and history-sync counts. Docker stats include the whole container lifetime; the JSON workload counters begin at the first benchmark message. Network timings are local-container transport measurements, not internet latency.
 
 Set `MEM_PROFILE_PATH=/results/run.heap.pb.gz` to capture a full-rate Go allocation profile. Profiling changes runtime cost, so compare profiles with each other rather than with ordinary benchmark timings. Inspect cumulative allocations with `go tool pprof -top -alloc_space results/run.heap.pb.gz` and retained heap with `go tool pprof -top -inuse_space results/run.heap.pb.gz`.
 

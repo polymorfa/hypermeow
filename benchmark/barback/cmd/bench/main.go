@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
@@ -25,13 +24,10 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/polymorfa/libsignal-protocol-go/ecc"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
-	"google.golang.org/protobuf/proto"
 )
 
 var revision = "working-tree"
@@ -55,10 +51,12 @@ type workloadConfig struct {
 	Mode                 string `json:"mode"`
 	Rate                 int64  `json:"rate"`
 	Senders              int64  `json:"senders"`
+	Workers              int64  `json:"workers"`
 	WarmupMS             int64  `json:"warmup_ms"`
 	GroupSize            int64  `json:"group_size,omitempty"`
 	HistoryConversations int64  `json:"history_conversations"`
 	HistoryMessages      int64  `json:"history_messages_per_conversation"`
+	MessageProfile       string `json:"message_profile"`
 }
 
 type queryStat struct {
@@ -97,25 +95,32 @@ type runtimeStats struct {
 }
 
 type result struct {
-	Variant              string         `json:"variant"`
-	Revision             string         `json:"revision"`
-	StartedAt            time.Time      `json:"started_at"`
-	Completed            bool           `json:"completed"`
-	Error                string         `json:"error,omitempty"`
-	TargetMessages       int64          `json:"target_messages"`
-	Workload             workloadConfig `json:"workload"`
-	MessagesReceived     int64          `json:"messages_received"`
-	MessagesSent         int64          `json:"messages_sent"`
-	SendFailures         int64          `json:"send_failures"`
-	QueueOverflows       int64          `json:"queue_overflows"`
-	HistorySyncs         int64          `json:"history_syncs"`
-	HistoryConversations int64          `json:"history_conversations"`
-	HistoryMessages      int64          `json:"history_messages"`
-	DurationMS           float64        `json:"duration_ms"`
-	ThroughputPerSec     float64        `json:"throughput_per_sec"`
-	SendLatency          latencyStats   `json:"send_latency"`
-	Database             databaseStats  `json:"database"`
-	Runtime              runtimeStats   `json:"runtime"`
+	Variant              string               `json:"variant"`
+	Revision             string               `json:"revision"`
+	StartedAt            time.Time            `json:"started_at"`
+	Completed            bool                 `json:"completed"`
+	Error                string               `json:"error,omitempty"`
+	TargetMessages       int64                `json:"target_messages"`
+	Workload             workloadConfig       `json:"workload"`
+	MessagesReceived     int64                `json:"messages_received"`
+	MessagesSent         int64                `json:"messages_sent"`
+	SendFailures         int64                `json:"send_failures"`
+	FailureReasons       map[string]int64     `json:"failure_reasons,omitempty"`
+	QueueOverflows       int64                `json:"queue_overflows"`
+	HistorySyncs         int64                `json:"history_syncs"`
+	HistoryConversations int64                `json:"history_conversations"`
+	HistoryMessages      int64                `json:"history_messages"`
+	DurationMS           float64              `json:"duration_ms"`
+	ThroughputPerSec     float64              `json:"throughput_per_sec"`
+	SendLatency          latencyStats         `json:"send_latency"`
+	Database             databaseStats        `json:"database"`
+	Runtime              runtimeStats         `json:"runtime"`
+	WorkloadRuntime      workloadRuntimeStats `json:"workload_runtime"`
+	Resources            resourceStats        `json:"resources"`
+	MessageTypes         map[string]int64     `json:"message_types"`
+	MediaUploads         int64                `json:"media_uploads"`
+	MediaUploadBytes     int64                `json:"media_upload_bytes"`
+	MediaUploadLatency   latencyStats         `json:"media_upload_latency"`
 }
 
 type runner struct {
@@ -130,6 +135,9 @@ type runner struct {
 	historySyncs    atomic.Int64
 	historyConvs    atomic.Int64
 	historyMessages atomic.Int64
+	messageSequence atomic.Int64
+	mediaUploads    atomic.Int64
+	mediaBytes      atomic.Int64
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -138,8 +146,19 @@ type runner struct {
 	done       chan struct{}
 	jobs       chan *events.Message
 
-	latencyMu sync.Mutex
-	latencies []float64
+	latencyMu       sync.Mutex
+	latencies       []float64
+	uploadLatencies []float64
+	messageTypes    map[string]int64
+	failureReasons  map[string]int64
+
+	metricsMu      sync.Mutex
+	runtimeStart   runtimeStats
+	resourceStart  resourceStats
+	metricsStarted bool
+	tempStop       chan struct{}
+	tempPeakBytes  atomic.Int64
+	tempPeakFiles  atomic.Int64
 }
 
 func main() {
@@ -152,10 +171,12 @@ func main() {
 		runtime.MemProfileRate = 1
 	}
 	r := &runner{
-		cfg:       cfg,
-		done:      make(chan struct{}),
-		jobs:      make(chan *events.Message, 4096),
-		latencies: make([]float64, 0, cfg.Total),
+		cfg:            cfg,
+		done:           make(chan struct{}),
+		jobs:           make(chan *events.Message, 4096),
+		latencies:      make([]float64, 0, cfg.Total),
+		messageTypes:   make(map[string]int64),
+		failureReasons: make(map[string]int64),
 	}
 	res, runErr := r.run()
 	if cfg.MemProfilePath != "" {
@@ -190,11 +211,19 @@ func loadConfig() (config, error) {
 	if mode != "dm" && mode != "group" {
 		return config{}, fmt.Errorf("invalid BENCH_MODE: must be dm or group")
 	}
+	messageProfile := env("BENCH_MESSAGE_PROFILE", "text")
+	if messageProfile != "text" && messageProfile != "mixed" {
+		return config{}, fmt.Errorf("invalid BENCH_MESSAGE_PROFILE: must be text or mixed")
+	}
 	rate, err := positiveIntEnv("BENCH_RATE", "50")
 	if err != nil {
 		return config{}, err
 	}
 	senders, err := positiveIntEnv("BENCH_SENDERS", "1")
+	if err != nil {
+		return config{}, err
+	}
+	workers, err := positiveIntEnv("BENCH_WORKERS", "1")
 	if err != nil {
 		return config{}, err
 	}
@@ -230,10 +259,12 @@ func loadConfig() (config, error) {
 			Mode:                 mode,
 			Rate:                 rate,
 			Senders:              senders,
+			Workers:              workers,
 			WarmupMS:             warmupMS,
 			GroupSize:            groupSize,
 			HistoryConversations: historyConversations,
 			HistoryMessages:      historyMessages,
+			MessageProfile:       messageProfile,
 		},
 	}, nil
 }
@@ -280,6 +311,7 @@ func env(name, fallback string) string {
 func (r *runner) run() (result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.Timeout)
 	defer cancel()
+	defer r.stopMetricsSampler()
 
 	db, err := sql.Open("pgx", r.cfg.DatabaseURL)
 	if err != nil {
@@ -323,7 +355,9 @@ func (r *runner) run() (result, error) {
 
 	workerCtx, stopWorkers := context.WithCancel(ctx)
 	defer stopWorkers()
-	go r.sendWorker(workerCtx, client)
+	for range r.cfg.Workload.Workers {
+		go r.sendWorker(workerCtx, client)
+	}
 
 	if err = client.ConnectContext(ctx); err != nil {
 		return r.snapshot(false), fmt.Errorf("connect: %w", err)
@@ -338,6 +372,15 @@ func (r *runner) run() (result, error) {
 	case <-ctx.Done():
 		return r.snapshot(false), fmt.Errorf("benchmark incomplete: %w", ctx.Err())
 	}
+}
+
+func (r *runner) stopMetricsSampler() {
+	r.metricsMu.Lock()
+	if r.tempStop != nil {
+		close(r.tempStop)
+		r.tempStop = nil
+	}
+	r.metricsMu.Unlock()
 }
 
 func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
@@ -363,7 +406,7 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			if event.Message.GetConversation() != "ping" {
 				return
 			}
-			r.startOnce.Do(func() { r.startedAt.Store(time.Now().UnixNano()) })
+			r.startOnce.Do(r.startMetrics)
 			r.received.Add(1)
 			select {
 			case r.jobs <- event:
@@ -373,6 +416,37 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 				r.checkDone()
 			}
 		}
+	}
+}
+
+func (r *runner) startMetrics() {
+	r.metricsMu.Lock()
+	r.runtimeStart = runtimeSnapshot()
+	r.resourceStart = resourceSnapshot()
+	r.metricsStarted = true
+	r.tempStop = make(chan struct{})
+	r.metricsMu.Unlock()
+	go r.sampleTemporaryFiles()
+	r.startedAt.Store(time.Now().UnixNano())
+}
+
+func (r *runner) sampleTemporaryFiles() {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		bytes, files := tempDirUsage()
+		updatePeak(&r.tempPeakBytes, bytes)
+		updatePeak(&r.tempPeakFiles, files)
+		select {
+		case <-r.tempStop:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func updatePeak(target *atomic.Int64, value int64) {
+	for previous := target.Load(); value > previous && !target.CompareAndSwap(previous, value); previous = target.Load() {
 	}
 }
 
@@ -403,16 +477,31 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client) {
 		case <-ctx.Done():
 			return
 		case msg := <-r.jobs:
+			sequence := r.messageSequence.Add(1) - 1
+			outgoing, category, mediaBytes, uploadDuration, err := buildWorkloadMessage(ctx, client, string(msg.Info.ID), sequence, r.cfg.Workload.MessageProfile)
+			if uploadDuration > 0 {
+				r.mediaUploads.Add(1)
+				r.mediaBytes.Add(mediaBytes)
+				r.latencyMu.Lock()
+				r.uploadLatencies = append(r.uploadLatencies, float64(uploadDuration)/float64(time.Millisecond))
+				r.latencyMu.Unlock()
+			}
+			if err == nil {
+				r.latencyMu.Lock()
+				r.messageTypes[category]++
+				r.latencyMu.Unlock()
+			}
 			started := time.Now()
-			_, err := client.SendMessage(ctx, msg.Info.Chat, &waE2E.Message{
-				Conversation: proto.String("pong " + string(msg.Info.ID)),
-			})
+			if err == nil {
+				_, err = client.SendMessage(ctx, msg.Info.Chat, outgoing)
+			}
 			latency := float64(time.Since(started)) / float64(time.Millisecond)
 			r.latencyMu.Lock()
 			r.latencies = append(r.latencies, latency)
 			r.latencyMu.Unlock()
 			if err != nil {
 				r.failed.Add(1)
+				r.recordFailure(err)
 				fmt.Fprintf(os.Stderr, "send pong %s: %v\n", msg.Info.ID, err)
 			} else {
 				r.sent.Add(1)
@@ -445,6 +534,7 @@ func (r *runner) snapshot(completed bool) result {
 			duration = now.Sub(startedTime)
 		}
 	}
+	runtimeNow := runtimeSnapshot()
 	res := result{
 		Variant:              r.cfg.Variant,
 		Revision:             revision,
@@ -455,14 +545,32 @@ func (r *runner) snapshot(completed bool) result {
 		MessagesReceived:     r.received.Load(),
 		MessagesSent:         r.sent.Load(),
 		SendFailures:         r.failed.Load(),
+		FailureReasons:       r.failureReasonSnapshot(),
 		QueueOverflows:       r.overflows.Load(),
 		HistorySyncs:         r.historySyncs.Load(),
 		HistoryConversations: r.historyConvs.Load(),
 		HistoryMessages:      r.historyMessages.Load(),
 		DurationMS:           float64(duration) / float64(time.Millisecond),
 		SendLatency:          r.latencySnapshot(),
-		Runtime:              runtimeSnapshot(),
+		Runtime:              runtimeNow,
+		MessageTypes:         r.messageTypeSnapshot(),
+		MediaUploads:         r.mediaUploads.Load(),
+		MediaUploadBytes:     r.mediaBytes.Load(),
+		MediaUploadLatency:   r.uploadLatencySnapshot(),
 	}
+	r.metricsMu.Lock()
+	if r.metricsStarted {
+		res.WorkloadRuntime = runtimeDelta(runtimeNow, r.runtimeStart)
+		res.Resources = resourceDelta(resourceSnapshot(), r.resourceStart)
+		finalTempBytes, finalTempFiles := tempDirUsage()
+		res.Resources.Temp = tempIOStats{
+			PeakBytes:  r.tempPeakBytes.Load(),
+			PeakFiles:  r.tempPeakFiles.Load(),
+			FinalBytes: finalTempBytes,
+			FinalFiles: finalTempFiles,
+		}
+	}
+	r.metricsMu.Unlock()
 	if duration > 0 {
 		res.ThroughputPerSec = float64(res.MessagesSent) / duration.Seconds()
 	}
@@ -476,6 +584,51 @@ func (r *runner) latencySnapshot() latencyStats {
 	r.latencyMu.Lock()
 	values := append([]float64(nil), r.latencies...)
 	r.latencyMu.Unlock()
+	return summarizeLatencies(values)
+}
+
+func (r *runner) uploadLatencySnapshot() latencyStats {
+	r.latencyMu.Lock()
+	values := append([]float64(nil), r.uploadLatencies...)
+	r.latencyMu.Unlock()
+	return summarizeLatencies(values)
+}
+
+func (r *runner) messageTypeSnapshot() map[string]int64 {
+	r.latencyMu.Lock()
+	defer r.latencyMu.Unlock()
+	result := make(map[string]int64, len(r.messageTypes))
+	for key, value := range r.messageTypes {
+		result[key] = value
+	}
+	return result
+}
+
+func (r *runner) recordFailure(err error) {
+	r.latencyMu.Lock()
+	reason := err.Error()
+	if _, exists := r.failureReasons[reason]; exists || len(r.failureReasons) < 16 {
+		r.failureReasons[reason]++
+	} else {
+		r.failureReasons["other"]++
+	}
+	r.latencyMu.Unlock()
+}
+
+func (r *runner) failureReasonSnapshot() map[string]int64 {
+	r.latencyMu.Lock()
+	defer r.latencyMu.Unlock()
+	if len(r.failureReasons) == 0 {
+		return nil
+	}
+	result := make(map[string]int64, len(r.failureReasons))
+	for key, value := range r.failureReasons {
+		result[key] = value
+	}
+	return result
+}
+
+func summarizeLatencies(values []float64) latencyStats {
 	if len(values) == 0 {
 		return latencyStats{}
 	}
@@ -568,8 +721,12 @@ func timevalSeconds(value syscall.Timeval) float64 {
 }
 
 func barbackRootKey() [32]byte {
-	seed := sha256.Sum256([]byte("mock_root_key"))
-	return ecc.CreateKeyPair(seed[:]).PublicKey().PublicKey()
+	return [32]byte{
+		0x70, 0x5e, 0x3c, 0x5b, 0x8d, 0xe0, 0x52, 0xe7,
+		0xb6, 0x46, 0xff, 0xd5, 0x69, 0xfe, 0x6f, 0x79,
+		0x84, 0xd3, 0xf2, 0x4b, 0x45, 0xed, 0x4b, 0x3a,
+		0x21, 0xff, 0x71, 0x5d, 0x30, 0x3e, 0xcf, 0x73,
+	}
 }
 
 func trustedHTTPClient(caPath, serverName string) (*http.Client, error) {

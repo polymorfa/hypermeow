@@ -114,10 +114,10 @@ func Encrypt(key, iv, plaintext []byte) ([]byte, error) {
 	lastBlock := append(plaintext[len(plaintext)-sizeOfLastBlock:], bytes.Repeat([]byte{byte(paddingLen)}, paddingLen)...)
 
 	if len(plaintextStart)%aes.BlockSize != 0 {
-		panic(fmt.Errorf("plaintext is not the correct size: %d %% %d != 0", len(plaintextStart), aes.BlockSize))
+		return nil, fmt.Errorf("plaintext is not the correct size: %d %% %d != 0", len(plaintextStart), aes.BlockSize)
 	}
 	if len(lastBlock) != aes.BlockSize {
-		panic(fmt.Errorf("last block is not the correct size: %d != %d", len(lastBlock), aes.BlockSize))
+		return nil, fmt.Errorf("last block is not the correct size: %d != %d", len(lastBlock), aes.BlockSize)
 	}
 
 	block, err := aes.NewCipher(key)
@@ -193,10 +193,14 @@ func EncryptStream(key, iv, macKey []byte, plaintext io.Reader, ciphertext io.Wr
 		cipherMAC.Write(buf)
 		cipherHasher.Write(buf)
 		if hasWriterAt {
-			_, err = writerAt.WriteAt(buf, writePtr)
+			var n int
+			n, err = writerAt.WriteAt(buf, writePtr)
+			if err == nil && n != len(buf) {
+				err = io.ErrShortWrite
+			}
 			writePtr += int64(len(buf))
 		} else {
-			_, err = ciphertext.Write(buf)
+			err = writeAll(ciphertext, buf)
 		}
 		if err != nil {
 			return nil, nil, 0, 0, fmt.Errorf("failed to write file: %w", err)
@@ -206,12 +210,30 @@ func EncryptStream(key, iv, macKey []byte, plaintext io.Reader, ciphertext io.Wr
 	extraSize += 10
 	cipherHasher.Write(mac)
 	if hasWriterAt {
-		_, err = writerAt.WriteAt(mac, writePtr)
+		var n int
+		n, err = writerAt.WriteAt(mac, writePtr)
+		if err == nil && n != len(mac) {
+			err = io.ErrShortWrite
+		}
 	} else {
-		_, err = ciphertext.Write(mac)
+		err = writeAll(ciphertext, mac)
 	}
 	if err != nil {
 		return nil, nil, 0, 0, fmt.Errorf("failed to write checksum to file: %w", err)
 	}
 	return plainHasher.Sum(nil), cipherHasher.Sum(nil), uint64(size), uint64(size + extraSize), nil
+}
+
+func writeAll(writer io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := writer.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
 }

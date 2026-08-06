@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/polymorfa/libsignal-protocol-go/ecc"
@@ -20,6 +21,8 @@ import (
 )
 
 var SignalProtobufSerializer = serialize.NewProtoBufSerializer()
+
+var ErrUnsupportedSignalStoreOperation = errors.New("signal store operation is not supported by the WhatsApp device store")
 
 var _ store.SignalProtocol = (*Device)(nil)
 
@@ -75,11 +78,15 @@ func (device *Device) RemovePreKey(ctx context.Context, id uint32) error {
 }
 
 func (device *Device) StorePreKey(ctx context.Context, preKeyID uint32, preKeyRecord *record.PreKey) error {
-	panic("not implemented")
+	return fmt.Errorf("StorePreKey: %w", ErrUnsupportedSignalStoreOperation)
 }
 
 func (device *Device) ContainsPreKey(ctx context.Context, preKeyID uint32) (bool, error) {
-	panic("not implemented")
+	preKey, err := device.PreKeys.GetPreKey(ctx, preKeyID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check prekey %d: %w", preKeyID, err)
+	}
+	return preKey != nil, nil
 }
 
 func (device *Device) LoadSession(ctx context.Context, address *protocol.SignalAddress) (*record.Session, error) {
@@ -118,7 +125,7 @@ func (device *Device) LoadSession(ctx context.Context, address *protocol.SignalA
 }
 
 func (device *Device) GetSubDeviceSessions(ctx context.Context, name string) ([]uint32, error) {
-	panic("not implemented")
+	return nil, fmt.Errorf("GetSubDeviceSessions: %w", ErrUnsupportedSignalStoreOperation)
 }
 
 func (device *Device) StoreSession(ctx context.Context, address *protocol.SignalAddress, record *record.Session) error {
@@ -147,14 +154,21 @@ func (device *Device) ContainsSession(ctx context.Context, remoteAddress *protoc
 }
 
 func (device *Device) DeleteSession(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
-	panic("not implemented")
+	addrString := remoteAddress.String()
+	if err := device.Sessions.DeleteSession(ctx, addrString); err != nil {
+		return fmt.Errorf("failed to delete session with %s: %w", addrString, err)
+	}
+	return nil
 }
 
 func (device *Device) DeleteAllSessions(ctx context.Context) error {
-	panic("not implemented")
+	return fmt.Errorf("DeleteAllSessions: %w", ErrUnsupportedSignalStoreOperation)
 }
 
 func (device *Device) LoadSignedPreKey(ctx context.Context, signedPreKeyID uint32) (*record.SignedPreKey, error) {
+	if device.SignedPreKey == nil {
+		return nil, nil
+	}
 	if signedPreKeyID == device.SignedPreKey.KeyID {
 		return record.NewSignedPreKey(signedPreKeyID, 0, ecc.NewECKeyPair(
 			ecc.NewDjbECPublicKey(*device.SignedPreKey.Pub),
@@ -165,19 +179,26 @@ func (device *Device) LoadSignedPreKey(ctx context.Context, signedPreKeyID uint3
 }
 
 func (device *Device) LoadSignedPreKeys(ctx context.Context) ([]*record.SignedPreKey, error) {
-	panic("not implemented")
+	if device.SignedPreKey == nil {
+		return nil, nil
+	}
+	preKey, err := device.LoadSignedPreKey(ctx, device.SignedPreKey.KeyID)
+	if err != nil || preKey == nil {
+		return nil, err
+	}
+	return []*record.SignedPreKey{preKey}, nil
 }
 
 func (device *Device) StoreSignedPreKey(ctx context.Context, signedPreKeyID uint32, record *record.SignedPreKey) error {
-	panic("not implemented")
+	return fmt.Errorf("StoreSignedPreKey: %w", ErrUnsupportedSignalStoreOperation)
 }
 
 func (device *Device) ContainsSignedPreKey(ctx context.Context, signedPreKeyID uint32) (bool, error) {
-	panic("not implemented")
+	return device.SignedPreKey != nil && signedPreKeyID == device.SignedPreKey.KeyID, nil
 }
 
 func (device *Device) RemoveSignedPreKey(ctx context.Context, signedPreKeyID uint32) error {
-	panic("not implemented")
+	return fmt.Errorf("RemoveSignedPreKey: %w", ErrUnsupportedSignalStoreOperation)
 }
 
 func (device *Device) StoreSenderKey(ctx context.Context, senderKeyName *protocol.SenderKeyName, keyRecord *groupRecord.SenderKey) error {

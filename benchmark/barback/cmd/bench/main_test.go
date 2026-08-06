@@ -12,6 +12,7 @@ func TestLoadConfigWorkload(t *testing.T) {
 	t.Setenv("BENCH_MODE", "dm")
 	t.Setenv("BENCH_RATE", "120")
 	t.Setenv("BENCH_SENDERS", "32")
+	t.Setenv("BENCH_WORKERS", "4")
 	t.Setenv("BENCH_WARMUP_MS", "2500")
 	t.Setenv("BENCH_GROUP_SIZE", "0")
 	t.Setenv("HISTORY_CONVERSATIONS", "10")
@@ -24,7 +25,7 @@ func TestLoadConfigWorkload(t *testing.T) {
 	if cfg.Total != 960 || cfg.Workload.Scenario != "dm-parallel-32" || cfg.Workload.Mode != "dm" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if cfg.Workload.Rate != 120 || cfg.Workload.Senders != 32 || cfg.Workload.WarmupMS != 2500 {
+	if cfg.Workload.Rate != 120 || cfg.Workload.Senders != 32 || cfg.Workload.Workers != 4 || cfg.Workload.WarmupMS != 2500 {
 		t.Fatalf("unexpected workload: %+v", cfg.Workload)
 	}
 	if cfg.Workload.HistoryConversations != 10 || cfg.Workload.HistoryMessages != 5 {
@@ -39,6 +40,7 @@ func TestLoadConfigRejectsInvalidWorkload(t *testing.T) {
 	}{
 		{name: "BENCH_RATE", value: "0"},
 		{name: "BENCH_SENDERS", value: "-1"},
+		{name: "BENCH_WORKERS", value: "0"},
 		{name: "BENCH_WARMUP_MS", value: "-1"},
 		{name: "HISTORY_CONVERSATIONS", value: "bad"},
 	}
@@ -57,6 +59,13 @@ func TestLoadConfigRejectsInvalidMode(t *testing.T) {
 	t.Setenv("BENCH_MODE", "broadcast")
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("expected invalid benchmark mode to fail")
+	}
+}
+
+func TestLoadConfigRejectsInvalidMessageProfile(t *testing.T) {
+	t.Setenv("BENCH_MESSAGE_PROFILE", "production")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("expected invalid benchmark message profile to fail")
 	}
 }
 

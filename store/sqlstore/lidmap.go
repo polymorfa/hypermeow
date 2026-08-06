@@ -215,11 +215,11 @@ func (s *CachedLIDMap) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (
 	defer s.lidCacheLock.Unlock()
 
 	var res dbutil.RowIter[store.LIDMapping]
-	if s.db.Dialect == dbutil.Postgres && PostgresArrayWrapper != nil {
+	if wrapped, ok := wrapPostgresArray(s.db, missingPNs); ok {
 		res = convertLIDRow.NewRowIter(s.db.Query(
 			ctx,
 			`SELECT lid, pn FROM whatsmeow_lid_map WHERE pn = ANY($1)`,
-			PostgresArrayWrapper(missingPNs),
+			wrapped,
 		))
 	} else {
 		placeholders := make([]string, len(missingPNs))

@@ -460,6 +460,7 @@ func (cli *Client) fetchAppStatePatches(ctx context.Context, name appstate.WAPat
 
 func (cli *Client) requestMissingAppStateKeys(ctx context.Context, patches *appstate.PatchList) {
 	cli.appStateKeyRequestsLock.Lock()
+	ensureMap(&cli.appStateKeyRequests)
 	rawKeyIDs := cli.appStateProc.GetMissingKeyIDs(ctx, patches)
 	filteredKeyIDs := make([][]byte, 0, len(rawKeyIDs))
 	now := time.Now()
@@ -581,7 +582,7 @@ func (cli *Client) sendAppState(ctx context.Context, patch appstate.PatchInfo, a
 			patches, err := appstate.ParsePatchList(ctx, &respCollection, cli.downloadExternalAppStateBlob)
 			if err != nil {
 				return fmt.Errorf("%w (also, parsing patches in the response failed: %w)", mainErr, err)
-			} else if state, err = cli.applyAppStatePatches(ctx, patch.Type, state, patches, false, &eventsToDispatch); err != nil {
+			} else if _, err = cli.applyAppStatePatches(ctx, patch.Type, state, patches, false, &eventsToDispatch); err != nil {
 				return fmt.Errorf("%w (also, applying patches in the response failed: %w)", mainErr, err)
 			} else {
 				zerolog.Ctx(ctx).Debug().Msg("Retrying app state send after applying conflicting patches")

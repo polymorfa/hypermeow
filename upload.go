@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,16 +105,23 @@ func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaTy
 func (cli *Client) UploadReader(ctx context.Context, plaintext io.Reader, tempFile io.ReadWriteSeeker, appInfo MediaType) (resp UploadResponse, err error) {
 	resp.MediaKey = random.Bytes(32)
 	iv, cipherKey, macKey, _ := getMediaKeys(resp.MediaKey, appInfo)
+	var createdTempFile *os.File
 	if tempFile == nil {
-		tempFile, err = os.CreateTemp("", "whatsmeow-upload-*")
+		createdTempFile, err = os.CreateTemp("", "whatsmeow-upload-*")
 		if err != nil {
 			err = fmt.Errorf("failed to create temporary file: %w", err)
 			return
 		}
+		tempFile = createdTempFile
 		defer func() {
-			tempFileFile := tempFile.(*os.File)
-			_ = tempFileFile.Close()
-			_ = os.Remove(tempFileFile.Name())
+			closeErr := createdTempFile.Close()
+			removeErr := os.Remove(createdTempFile.Name())
+			if closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+				cli.Log.Warnf("Failed to close upload temporary file: %v", closeErr)
+			}
+			if removeErr != nil {
+				cli.Log.Warnf("Failed to remove upload temporary file: %v", removeErr)
+			}
 		}()
 	}
 	var uploadSize uint64
@@ -178,6 +186,9 @@ func (cli *Client) UploadNewsletterReader(ctx context.Context, data io.ReadSeeke
 	hasher := sha256.New()
 	var fileLength int64
 	fileLength, err = io.Copy(hasher, data)
+	if err != nil {
+		return resp, fmt.Errorf("failed to hash newsletter upload: %w", err)
+	}
 	resp.FileLength = uint64(fileLength)
 	resp.FileSHA256 = hasher.Sum(nil)
 	_, err = data.Seek(0, io.SeekStart)
@@ -193,6 +204,9 @@ func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, upload
 	mediaConn, err := cli.refreshMediaConn(ctx, false)
 	if err != nil {
 		return fmt.Errorf("failed to refresh media connections: %w", err)
+	}
+	if len(mediaConn.Hosts) == 0 {
+		return fmt.Errorf("media connection response contained no upload hosts")
 	}
 
 	token := base64.URLEncoding.EncodeToString(fileHash)
@@ -242,11 +256,11 @@ func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, upload
 		err = fmt.Errorf("failed to execute request: %w", err)
 	} else if httpResp.StatusCode != http.StatusOK {
 		err = fmt.Errorf("upload failed with status code %d", httpResp.StatusCode)
-	} else if err = json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+	} else if err = json.NewDecoder(httpResp.Body).Decode(resp); err != nil {
 		err = fmt.Errorf("failed to parse upload response: %w", err)
 	}
 	if httpResp != nil {
-		_ = httpResp.Body.Close()
+		drainAndClose(httpResp.Body)
 	}
 	return err
 }
@@ -258,6 +272,9 @@ func (cli *Client) DeleteMedia(ctx context.Context, appInfo MediaType, directPat
 	mediaConn, err := cli.refreshMediaConn(ctx, false)
 	if err != nil {
 		return fmt.Errorf("failed to refresh media connections: %w", err)
+	}
+	if len(mediaConn.Hosts) == 0 {
+		return fmt.Errorf("media connection response contained no delete hosts")
 	}
 
 	queryStart := strings.IndexByte(directPath, '?')
@@ -298,7 +315,7 @@ func (cli *Client) DeleteMedia(ctx context.Context, appInfo MediaType, directPat
 		err = fmt.Errorf("media delete failed with status code %d", httpResp.StatusCode)
 	}
 	if httpResp != nil {
-		_ = httpResp.Body.Close()
+		drainAndClose(httpResp.Body)
 	}
 	return err
 }

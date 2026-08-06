@@ -13,6 +13,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +39,30 @@ var ErrInvalidLength = errors.New("database returned byte array with illegal len
 var PostgresArrayWrapper func(any) interface {
 	driver.Valuer
 	sql.Scanner
+}
+
+func wrapPostgresArray(db *dbutil.Database, value any) (any, bool) {
+	if db.Dialect != dbutil.Postgres {
+		return nil, false
+	}
+	if PostgresArrayWrapper != nil {
+		return PostgresArrayWrapper(value), true
+	}
+	if isNativePostgresArrayDriver(db) {
+		return value, true
+	}
+	return nil, false
+}
+
+func isNativePostgresArrayDriver(db *dbutil.Database) bool {
+	if db.Dialect != dbutil.Postgres {
+		return false
+	}
+	driverType := reflect.TypeOf(db.RawDB.Driver())
+	if driverType.Kind() == reflect.Pointer {
+		driverType = driverType.Elem()
+	}
+	return driverType.PkgPath() == "github.com/jackc/pgx/v5/stdlib"
 }
 
 type SQLStore struct {
@@ -78,10 +103,16 @@ func setBoundedCacheEntry[K comparable, V any](cache map[K]V, key K, value V, li
 }
 
 func (s *SQLStore) setCachedIdentityLocked(address string, entry identityCacheEntry) {
+	if s.identityCache == nil {
+		s.identityCache = make(map[string]identityCacheEntry)
+	}
 	setBoundedCacheEntry(s.identityCache, address, entry, maxIdentityCacheEntries)
 }
 
 func (s *SQLStore) setCachedContactLocked(user types.JID, info *types.ContactInfo) {
+	if s.contactCache == nil {
+		s.contactCache = make(map[types.JID]*types.ContactInfo)
+	}
 	setBoundedCacheEntry(s.contactCache, user, info, maxContactCacheEntries)
 }
 
@@ -91,13 +122,8 @@ func (s *SQLStore) setCachedContactLocked(user types.JID, info *types.ContactInf
 // In general, you should use Container.NewDevice or Container.GetDevice instead of this.
 func NewSQLStore(c *Container, jid types.JID) *SQLStore {
 	return &SQLStore{
-		Container:     c,
-		JID:           jid.String(),
-		contactCache:  make(map[types.JID]*types.ContactInfo),
-		identityCache: make(map[string]identityCacheEntry),
-
-		migratedPNSessionsCache: make(map[string]struct{}),
-		migratingPNSessions:     make(map[string]struct{}),
+		Container: c,
+		JID:       jid.String(),
 	}
 }
 
@@ -193,8 +219,14 @@ const (
 		INSERT INTO whatsmeow_sessions (our_jid, their_id, session) VALUES ($1, $2, $3)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
 	`
-	putManySessionsPrefix  = `INSERT INTO whatsmeow_sessions (our_jid, their_id, session) VALUES `
-	putManySessionsSuffix  = ` ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session`
+	putManySessionsPrefix   = `INSERT INTO whatsmeow_sessions (our_jid, their_id, session) VALUES `
+	putManySessionsSuffix   = ` ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session`
+	putManySessionsPostgres = `
+		INSERT INTO whatsmeow_sessions (our_jid, their_id, session)
+		SELECT $1, batch.their_id, batch.session
+		FROM UNNEST($2::text[], $3::bytea[]) AS batch(their_id, session)
+		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
+	`
 	deleteAllSessionsQuery = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2`
 	deleteSessionQuery     = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id=$2`
 
@@ -269,8 +301,8 @@ var sessionScanner = dbutil.ConvertRowFn[addressSessionTuple](func(row dbutil.Sc
 })
 
 func (s *SQLStore) queryManySessions(ctx context.Context, addresses []string) (dbutil.Rows, error) {
-	if s.db.Dialect == dbutil.Postgres && PostgresArrayWrapper != nil {
-		return s.db.Query(ctx, getManySessionQueryPostgres, s.JID, PostgresArrayWrapper(addresses))
+	if wrapped, ok := wrapPostgresArray(s.db, addresses); ok {
+		return s.db.Query(ctx, getManySessionQueryPostgres, s.JID, wrapped)
 	}
 	args := make([]any, len(addresses)+1)
 	placeholders := make([]string, len(addresses))
@@ -331,6 +363,17 @@ func (s *SQLStore) PutManySessions(ctx context.Context, sessions map[string][]by
 		addresses = append(addresses, address)
 	}
 	slices.Sort(addresses)
+	if len(addresses) == 1 {
+		return s.PutSession(ctx, addresses[0], sessions[addresses[0]])
+	}
+	if isNativePostgresArrayDriver(s.db) {
+		serialized := make([][]byte, len(addresses))
+		for i, address := range addresses {
+			serialized[i] = sessions[address]
+		}
+		_, err := s.db.Exec(ctx, putManySessionsPostgres, s.JID, addresses, serialized)
+		return err
+	}
 	if len(addresses) <= 1000 {
 		return s.putManySessionsChunk(ctx, addresses, sessions)
 	}
@@ -411,6 +454,9 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	_, migrated := s.migratedPNSessionsCache[pnSignal]
 	_, migrating := s.migratingPNSessions[pnSignal]
 	if !migrated && !migrating {
+		if s.migratingPNSessions == nil {
+			s.migratingPNSessions = make(map[string]struct{})
+		}
 		s.migratingPNSessions[pnSignal] = struct{}{}
 	}
 	s.migratedPNSessionsCacheLock.Unlock()
@@ -463,6 +509,9 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	s.migratedPNSessionsCacheLock.Lock()
 	delete(s.migratingPNSessions, pnSignal)
 	if err == nil {
+		if s.migratedPNSessionsCache == nil {
+			s.migratedPNSessionsCache = make(map[string]struct{})
+		}
 		setBoundedCacheEntry(s.migratedPNSessionsCache, pnSignal, struct{}{}, maxMigratedPNEntries)
 	}
 	s.migratedPNSessionsCacheLock.Unlock()
@@ -732,8 +781,8 @@ func (s *SQLStore) DeleteAppStateMutationMACs(ctx context.Context, name string, 
 	if len(indexMACs) == 0 {
 		return
 	}
-	if s.db.Dialect == dbutil.Postgres && PostgresArrayWrapper != nil {
-		_, err = s.db.Exec(ctx, deleteAppStateMutationMACsQueryPostgres, s.JID, name, PostgresArrayWrapper(indexMACs))
+	if wrapped, ok := wrapPostgresArray(s.db, indexMACs); ok {
+		_, err = s.db.Exec(ctx, deleteAppStateMutationMACsQueryPostgres, s.JID, name, wrapped)
 	} else {
 		args := make([]any, 2+len(indexMACs))
 		args[0] = s.JID
@@ -880,7 +929,7 @@ func (s *SQLStore) PutAllContactNames(ctx context.Context, contacts []store.Cont
 	}
 	s.contactCacheLock.Lock()
 	// Just clear the cache, fetching pushnames and business names would be too much effort
-	s.contactCache = make(map[types.JID]*types.ContactInfo)
+	s.contactCache = nil
 	s.contactCacheLock.Unlock()
 	return nil
 }
