@@ -47,6 +47,18 @@ type config struct {
 	Variant        string
 	Total          int64
 	Timeout        time.Duration
+	Workload       workloadConfig
+}
+
+type workloadConfig struct {
+	Scenario             string `json:"scenario"`
+	Mode                 string `json:"mode"`
+	Rate                 int64  `json:"rate"`
+	Senders              int64  `json:"senders"`
+	WarmupMS             int64  `json:"warmup_ms"`
+	GroupSize            int64  `json:"group_size,omitempty"`
+	HistoryConversations int64  `json:"history_conversations"`
+	HistoryMessages      int64  `json:"history_messages_per_conversation"`
 }
 
 type queryStat struct {
@@ -85,24 +97,25 @@ type runtimeStats struct {
 }
 
 type result struct {
-	Variant              string        `json:"variant"`
-	Revision             string        `json:"revision"`
-	StartedAt            time.Time     `json:"started_at"`
-	Completed            bool          `json:"completed"`
-	Error                string        `json:"error,omitempty"`
-	TargetMessages       int64         `json:"target_messages"`
-	MessagesReceived     int64         `json:"messages_received"`
-	MessagesSent         int64         `json:"messages_sent"`
-	SendFailures         int64         `json:"send_failures"`
-	QueueOverflows       int64         `json:"queue_overflows"`
-	HistorySyncs         int64         `json:"history_syncs"`
-	HistoryConversations int64         `json:"history_conversations"`
-	HistoryMessages      int64         `json:"history_messages"`
-	DurationMS           float64       `json:"duration_ms"`
-	ThroughputPerSec     float64       `json:"throughput_per_sec"`
-	SendLatency          latencyStats  `json:"send_latency"`
-	Database             databaseStats `json:"database"`
-	Runtime              runtimeStats  `json:"runtime"`
+	Variant              string         `json:"variant"`
+	Revision             string         `json:"revision"`
+	StartedAt            time.Time      `json:"started_at"`
+	Completed            bool           `json:"completed"`
+	Error                string         `json:"error,omitempty"`
+	TargetMessages       int64          `json:"target_messages"`
+	Workload             workloadConfig `json:"workload"`
+	MessagesReceived     int64          `json:"messages_received"`
+	MessagesSent         int64          `json:"messages_sent"`
+	SendFailures         int64          `json:"send_failures"`
+	QueueOverflows       int64          `json:"queue_overflows"`
+	HistorySyncs         int64          `json:"history_syncs"`
+	HistoryConversations int64          `json:"history_conversations"`
+	HistoryMessages      int64          `json:"history_messages"`
+	DurationMS           float64        `json:"duration_ms"`
+	ThroughputPerSec     float64        `json:"throughput_per_sec"`
+	SendLatency          latencyStats   `json:"send_latency"`
+	Database             databaseStats  `json:"database"`
+	Runtime              runtimeStats   `json:"runtime"`
 }
 
 type runner struct {
@@ -118,11 +131,12 @@ type runner struct {
 	historyConvs    atomic.Int64
 	historyMessages atomic.Int64
 
-	startOnce sync.Once
-	doneOnce  sync.Once
-	start     time.Time
-	done      chan struct{}
-	jobs      chan *events.Message
+	startOnce  sync.Once
+	doneOnce   sync.Once
+	startedAt  atomic.Int64
+	finishedAt atomic.Int64
+	done       chan struct{}
+	jobs       chan *events.Message
 
 	latencyMu sync.Mutex
 	latencies []float64
@@ -172,6 +186,34 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("invalid BENCH_TIMEOUT: %w", err)
 	}
+	mode := env("BENCH_MODE", "group")
+	if mode != "dm" && mode != "group" {
+		return config{}, fmt.Errorf("invalid BENCH_MODE: must be dm or group")
+	}
+	rate, err := positiveIntEnv("BENCH_RATE", "50")
+	if err != nil {
+		return config{}, err
+	}
+	senders, err := positiveIntEnv("BENCH_SENDERS", "1")
+	if err != nil {
+		return config{}, err
+	}
+	warmupMS, err := nonNegativeIntEnv("BENCH_WARMUP_MS", "3000")
+	if err != nil {
+		return config{}, err
+	}
+	groupSize, err := nonNegativeIntEnv("BENCH_GROUP_SIZE", "128")
+	if err != nil {
+		return config{}, err
+	}
+	historyConversations, err := nonNegativeIntEnv("HISTORY_CONVERSATIONS", "100")
+	if err != nil {
+		return config{}, err
+	}
+	historyMessages, err := nonNegativeIntEnv("HISTORY_MESSAGES", "20")
+	if err != nil {
+		return config{}, err
+	}
 	return config{
 		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
 		BarbackURL:     env("BARBACK_URL", "http://barback:8080"),
@@ -183,7 +225,33 @@ func loadConfig() (config, error) {
 		Variant:        env("BENCH_VARIANT", "candidate"),
 		Total:          total,
 		Timeout:        timeout,
+		Workload: workloadConfig{
+			Scenario:             env("BENCH_SCENARIO", "custom"),
+			Mode:                 mode,
+			Rate:                 rate,
+			Senders:              senders,
+			WarmupMS:             warmupMS,
+			GroupSize:            groupSize,
+			HistoryConversations: historyConversations,
+			HistoryMessages:      historyMessages,
+		},
 	}, nil
+}
+
+func positiveIntEnv(name, fallback string) (int64, error) {
+	value, err := strconv.ParseInt(env(name, fallback), 10, 64)
+	if err != nil || value < 1 {
+		return 0, fmt.Errorf("invalid %s", name)
+	}
+	return value, nil
+}
+
+func nonNegativeIntEnv(name, fallback string) (int64, error) {
+	value, err := strconv.ParseInt(env(name, fallback), 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("invalid %s", name)
+	}
+	return value, nil
 }
 
 func writeMemoryProfile(path string) error {
@@ -295,7 +363,7 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			if event.Message.GetConversation() != "ping" {
 				return
 			}
-			r.startOnce.Do(func() { r.start = time.Now() })
+			r.startOnce.Do(func() { r.startedAt.Store(time.Now().UnixNano()) })
 			r.received.Add(1)
 			select {
 			case r.jobs <- event:
@@ -356,22 +424,34 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client) {
 
 func (r *runner) checkDone() {
 	if r.sent.Load()+r.failed.Load() >= r.cfg.Total {
-		r.doneOnce.Do(func() { close(r.done) })
+		r.doneOnce.Do(func() {
+			r.finishedAt.Store(time.Now().UnixNano())
+			close(r.done)
+		})
 	}
 }
 
 func (r *runner) snapshot(completed bool) result {
 	now := time.Now()
+	startedAt := r.startedAt.Load()
+	finishedAt := r.finishedAt.Load()
+	startedTime := time.Time{}
 	duration := time.Duration(0)
-	if !r.start.IsZero() {
-		duration = now.Sub(r.start)
+	if startedAt != 0 {
+		startedTime = time.Unix(0, startedAt)
+		if finishedAt != 0 {
+			duration = time.Duration(finishedAt - startedAt)
+		} else {
+			duration = now.Sub(startedTime)
+		}
 	}
 	res := result{
 		Variant:              r.cfg.Variant,
 		Revision:             revision,
-		StartedAt:            r.start,
+		StartedAt:            startedTime,
 		Completed:            completed && r.failed.Load() == 0 && r.sent.Load() == r.cfg.Total,
 		TargetMessages:       r.cfg.Total,
+		Workload:             r.cfg.Workload,
 		MessagesReceived:     r.received.Load(),
 		MessagesSent:         r.sent.Load(),
 		SendFailures:         r.failed.Load(),

@@ -1,11 +1,29 @@
 package sqlstore
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestBuildSharedMassInsertQuery(t *testing.T) {
 	query := buildSharedMassInsertQuery("INSERT VALUES ", " ON CONFLICT", 2, 2)
 	want := "INSERT VALUES ($1,$2,$3),($1,$4,$5) ON CONFLICT"
 	if query != want {
 		t.Fatalf("unexpected query:\n%s\nwant:\n%s", query, want)
+	}
+}
+
+func TestIdentityCacheIsBounded(t *testing.T) {
+	store := &SQLStore{identityCache: make(map[string]identityCacheEntry, maxIdentityCacheEntries)}
+	for i := 0; i < maxIdentityCacheEntries; i++ {
+		store.setCachedIdentityLocked(fmt.Sprintf("%d:1", i), identityCacheEntry{Present: true})
+	}
+	store.setCachedIdentityLocked("new:1", identityCacheEntry{Present: true})
+
+	if len(store.identityCache) != maxIdentityCacheEntries {
+		t.Fatalf("cache grew to %d entries", len(store.identityCache))
+	}
+	if _, ok := store.identityCache["new:1"]; !ok {
+		t.Fatal("new identity was not cached")
 	}
 }

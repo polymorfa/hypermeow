@@ -1,6 +1,6 @@
 # HyperMeow Barback benchmark
 
-This benchmark pairs a real WhatsMeow client with Barback, stores its device and Signal state in PostgreSQL, and drives group messages through the full Noise, Signal, sender-key, receipt, and history-sync paths.
+This benchmark pairs a real WhatsMeow client with Barback, stores its device and Signal state in PostgreSQL, and drives DM or group messages through the full Noise, Signal, receipt, sender-key, and history-sync paths.
 
 The Compose profile caps the stack at 2 vCPU and 3.5 GB of service memory:
 
@@ -21,6 +21,24 @@ docker compose wait client
 docker compose down --volumes --remove-orphans
 ```
 
+The default Compose file runs the group workload. Add the DM overlay to run direct messages without weakening TLS or Noise verification:
+
+```sh
+docker compose -f compose.yaml -f compose.dm.yaml down --volumes --remove-orphans
+BENCH_MODE=dm BENCH_SENDERS=8 docker compose -f compose.yaml -f compose.dm.yaml up --build --wait
+docker compose -f compose.yaml -f compose.dm.yaml wait client
+docker compose -f compose.yaml -f compose.dm.yaml down --volumes --remove-orphans
+```
+
+`run-dm-matrix.sh` starts every scenario with new certificates, a new device, and a new PostgreSQL volume. Its default matrix covers one repeatedly active peer, 8, 32, and 64 parallel peers, a 400-message-per-second burst, and DM traffic combined with 8,000 delivered history messages. Pass scenario names to run only a subset:
+
+```sh
+BENCH_VARIANT=candidate BUILD_REV="$(git rev-parse HEAD)" ./run-dm-matrix.sh
+BENCH_VARIANT=candidate ./run-dm-matrix.sh dm-parallel-32 dm-burst-16
+```
+
+Set `LIBRARY_CONTEXT` to another worktree and change `BENCH_VARIANT` for an A/B run. Set `MEM_PROFILE_SCENARIO` to one scenario name to capture its full-rate heap profile. Each JSON report embeds the complete workload configuration.
+
 `BARBACK_CONTEXT` must point to a checkout of `titan-api/devcenter` at commit `9e7d0dc45faffc9fde6ab4f9fd405a3a61c0efe5`. The default resolves to the standard local Polymorfa checkout layout. Verify the commit before a comparison with `git -C "$BARBACK_CONTEXT" rev-parse HEAD`.
 
 `LIBRARY_CONTEXT` can point to another HyperMeow worktree to compare two revisions without changing the benchmark code or branches. Barback generates a persisted TLS certificate for each clean stack. The client trusts that certificate and keeps both TLS and Noise certificate verification enabled.
@@ -29,4 +47,4 @@ Results are written to `results/`. PostgreSQL statement statistics are reset on 
 
 Set `MEM_PROFILE_PATH=/results/run.heap.pb.gz` to capture a full-rate Go allocation profile. Profiling changes runtime cost, so compare profiles with each other rather than with ordinary benchmark timings. Inspect cumulative allocations with `go tool pprof -top -alloc_space results/run.heap.pb.gz` and retained heap with `go tool pprof -top -inuse_space results/run.heap.pb.gz`.
 
-Change only one workload dimension at a time. Recommended group sizes are 32, 128, 512, and 1024. Keep the Barback revision, rate, total, history size, container limits, host power state, and Docker version fixed across a baseline/candidate pair.
+Change only one workload dimension at a time. Recommended group sizes are 32, 128, 512, and 1024. Keep the Barback revision, mode, sender count, rate, total, history size, container limits, host power state, and Docker version fixed across a baseline/candidate pair.

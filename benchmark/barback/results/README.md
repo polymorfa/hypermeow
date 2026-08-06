@@ -4,7 +4,7 @@ Two clean runs per revision used the same Barback revision, PostgreSQL image, TL
 
 | Metric, mean of two runs | Baseline | HyperMeow | Change |
 | --- | ---: | ---: | ---: |
-| Throughput | 18.72 msg/s | 22.39 msg/s | +19.6% |
+| Recorded throughput | 18.72 msg/s | 22.39 msg/s | +19.6% |
 | Send latency p95 | 33.68 ms | 8.63 ms | -74.4% |
 | WhatsMeow SQL calls | 85,853 | 2,056 | -97.6% |
 | PostgreSQL execution time | 630.35 ms | 243.37 ms | -61.4% |
@@ -14,6 +14,8 @@ Two clean runs per revision used the same Barback revision, PostgreSQL image, TL
 | Database size at snapshot | 15.34 MB | 20.63 MB | +34.5% |
 
 The database-size increase is PostgreSQL heap bloat from repeatedly updating the same 130 live Signal-session rows in large statements. Autovacuum removes dead tuples but does not shrink the relation file. A tested 32-row session batch reduced allocation but produced more bloat and SQL calls without improving latency, so it was rejected.
+
+These archived group results predate the benchmark's corrected completion boundary. Their recorded throughput includes a two-second metrics-settling delay and must not be used for capacity estimates. The latency, SQL, CPU, allocation, RSS, and database-size measurements are unaffected.
 
 The accepted change is a database-load and latency improvement, not a memory or storage-footprint improvement. Capacity decisions need longer soak tests on the target VPS, including relation growth, autovacuum behavior, reconnect churn, and multiple simultaneous clients.
 
@@ -25,3 +27,5 @@ Raw reports:
 - `candidate-secure-2-g128.json`
 
 The full-rate allocation comparison and portable pprof captures are documented in `memory-g128.md`.
+
+The direct-message matrix, refinement, and burst memory profile are documented in `dm-matrix.md`.

@@ -50,7 +50,7 @@ type SQLStore struct {
 	contactCache      map[types.JID]*types.ContactInfo
 	contactCacheLock  sync.Mutex
 	identityCache     map[string]identityCacheEntry
-	identityCacheLock sync.Mutex
+	identityCacheLock sync.RWMutex
 
 	migratedPNSessionsCache *exsync.Set[string]
 }
@@ -58,6 +58,18 @@ type SQLStore struct {
 type identityCacheEntry struct {
 	Key     [32]byte
 	Present bool
+}
+
+const maxIdentityCacheEntries = 8192
+
+func (s *SQLStore) setCachedIdentityLocked(address string, entry identityCacheEntry) {
+	if _, exists := s.identityCache[address]; !exists && len(s.identityCache) >= maxIdentityCacheEntries {
+		for oldAddress := range s.identityCache {
+			delete(s.identityCache, oldAddress)
+			break
+		}
+	}
+	s.identityCache[address] = entry
 }
 
 // NewSQLStore creates a new SQLStore with the given database container and user JID.
@@ -88,14 +100,20 @@ const (
 )
 
 func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte) error {
+	s.identityCacheLock.RLock()
+	cached, ok := s.identityCache[address]
+	s.identityCacheLock.RUnlock()
+	if ok && cached.Present && cached.Key == key {
+		return nil
+	}
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
-	if cached, ok := s.identityCache[address]; ok && cached.Present && cached.Key == key {
+	if cached, ok = s.identityCache[address]; ok && cached.Present && cached.Key == key {
 		return nil
 	}
 	_, err := s.db.Exec(ctx, putIdentityQuery, s.JID, address, key[:])
 	if err == nil {
-		s.identityCache[address] = identityCacheEntry{Key: key, Present: true}
+		s.setCachedIdentityLocked(address, identityCacheEntry{Key: key, Present: true})
 	}
 	return err
 }
@@ -125,15 +143,21 @@ func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
 }
 
 func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [32]byte) (bool, error) {
+	s.identityCacheLock.RLock()
+	cached, ok := s.identityCache[address]
+	s.identityCacheLock.RUnlock()
+	if ok {
+		return !cached.Present || cached.Key == key, nil
+	}
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
-	if cached, ok := s.identityCache[address]; ok {
+	if cached, ok = s.identityCache[address]; ok {
 		return !cached.Present || cached.Key == key, nil
 	}
 	var existingIdentity []byte
 	err := s.db.QueryRow(ctx, getIdentityQuery, s.JID, address).Scan(&existingIdentity)
 	if errors.Is(err, sql.ErrNoRows) {
-		s.identityCache[address] = identityCacheEntry{}
+		s.setCachedIdentityLocked(address, identityCacheEntry{})
 		// Trust if not known, it'll be saved automatically later
 		return true, nil
 	} else if err != nil {
@@ -142,7 +166,7 @@ func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [3
 		return false, ErrInvalidLength
 	}
 	existingKey := *(*[32]byte)(existingIdentity)
-	s.identityCache[address] = identityCacheEntry{Key: existingKey, Present: true}
+	s.setCachedIdentityLocked(address, identityCacheEntry{Key: existingKey, Present: true})
 	return existingKey == key, nil
 }
 
@@ -253,21 +277,29 @@ func (s *SQLStore) PutManySessions(ctx context.Context, sessions map[string][]by
 		addresses = append(addresses, address)
 	}
 	slices.Sort(addresses)
+	if len(addresses) <= 1000 {
+		return s.putManySessionsChunk(ctx, addresses, sessions)
+	}
 	return s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
 		for start := 0; start < len(addresses); start += 1000 {
 			end := min(start+1000, len(addresses))
-			args := make([]any, 1, 1+(end-start)*2)
-			args[0] = s.JID
-			for _, address := range addresses[start:end] {
-				args = append(args, address, sessions[address])
-			}
-			query := buildSharedMassInsertQuery(putManySessionsPrefix, putManySessionsSuffix, end-start, 2)
-			if _, err := s.db.Exec(ctx, query, args...); err != nil {
+			if err := s.putManySessionsChunk(ctx, addresses[start:end], sessions); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func (s *SQLStore) putManySessionsChunk(ctx context.Context, addresses []string, sessions map[string][]byte) error {
+	args := make([]any, 1, 1+len(addresses)*2)
+	args[0] = s.JID
+	for _, address := range addresses {
+		args = append(args, address, sessions[address])
+	}
+	query := buildSharedMassInsertQuery(putManySessionsPrefix, putManySessionsSuffix, len(addresses), 2)
+	_, err := s.db.Exec(ctx, query, args...)
+	return err
 }
 
 func buildSharedMassInsertQuery(prefix, suffix string, rows, valuesPerRow int) string {
@@ -974,21 +1006,29 @@ func (s *SQLStore) PutMessageSecrets(ctx context.Context, inserts []store.Messag
 	if len(inserts) == 0 {
 		return nil
 	}
+	if len(inserts) <= 500 {
+		return s.putMessageSecretsChunk(ctx, inserts)
+	}
 	return s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
 		for start := 0; start < len(inserts); start += 500 {
 			end := min(start+500, len(inserts))
-			args := make([]any, 1, 1+(end-start)*4)
-			args[0] = s.JID
-			for _, insert := range inserts[start:end] {
-				args = append(args, insert.Chat.ToNonAD(), insert.Sender.ToNonAD(), insert.ID, insert.Secret)
-			}
-			query := buildSharedMassInsertQuery(putMsgSecretsPrefix, putMsgSecretsSuffix, end-start, 4)
-			if _, err = s.db.Exec(ctx, query, args...); err != nil {
+			if err = s.putMessageSecretsChunk(ctx, inserts[start:end]); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func (s *SQLStore) putMessageSecretsChunk(ctx context.Context, inserts []store.MessageSecretInsert) error {
+	args := make([]any, 1, 1+len(inserts)*4)
+	args[0] = s.JID
+	for _, insert := range inserts {
+		args = append(args, insert.Chat.ToNonAD(), insert.Sender.ToNonAD(), insert.ID, insert.Secret)
+	}
+	query := buildSharedMassInsertQuery(putMsgSecretsPrefix, putMsgSecretsSuffix, len(inserts), 4)
+	_, err := s.db.Exec(ctx, query, args...)
+	return err
 }
 
 func (s *SQLStore) PutMessageSecret(ctx context.Context, chat, sender types.JID, id types.MessageID, secret []byte) (err error) {

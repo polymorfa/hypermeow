@@ -1,0 +1,24 @@
+services:
+  barback:
+    command: !override
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --cert-dir
+      - /certs
+      - --pairing-delay
+      - "0"
+      - --bench
+      - --bench-rate
+      - ${BENCH_RATE:-50}
+      - --bench-total
+      - ${BENCH_TOTAL:-200}
+      - --bench-senders
+      - ${BENCH_SENDERS:-1}
+      - --bench-warmup-ms
+      - ${BENCH_WARMUP_MS:-3000}
+      - --history-sync-conversations
+      - ${HISTORY_CONVERSATIONS:-100}
+      - --history-sync-messages
+      - ${HISTORY_MESSAGES:-20}
