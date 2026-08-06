@@ -16,11 +16,12 @@ Run a clean benchmark:
 
 ```sh
 docker compose down --volumes --remove-orphans
-BARBACK_CONTEXT=/path/to/devcenter BUILD_REV="$(git rev-parse HEAD)" BENCH_VARIANT=baseline RESULT_FILE=baseline.json docker compose up --build --abort-on-container-exit --exit-code-from client
+BARBACK_CONTEXT=/path/to/devcenter BUILD_REV="$(git rev-parse HEAD)" BENCH_VARIANT=baseline RESULT_FILE=baseline.json docker compose up --build --wait
+docker compose wait client
 docker compose down --volumes --remove-orphans
 ```
 
-`BARBACK_CONTEXT` must point to a checkout of `titan-api/devcenter` at commit `c79b2d3fe864977837377d59228c6779546b0deb`. The default resolves to the standard local Polymorfa checkout layout. Verify the commit before a comparison with `git -C "$BARBACK_CONTEXT" rev-parse HEAD`.
+`BARBACK_CONTEXT` must point to a checkout of `titan-api/devcenter` at commit `9e7d0dc45faffc9fde6ab4f9fd405a3a61c0efe5`. The default resolves to the standard local Polymorfa checkout layout. Verify the commit before a comparison with `git -C "$BARBACK_CONTEXT" rev-parse HEAD`.
 
 `LIBRARY_CONTEXT` can point to another HyperMeow worktree to compare two revisions without changing the benchmark code or branches. Barback generates a persisted TLS certificate for each clean stack. The client trusts that certificate and keeps both TLS and Noise certificate verification enabled.
 

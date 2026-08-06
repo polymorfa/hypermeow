@@ -1,6 +1,15 @@
 name: hypermeow-benchmark
 
 services:
+  cert-init:
+    image: busybox:1.37.0
+    command: ["chown", "-R", "65532:65532", "/certs"]
+    volumes:
+      - barback-certs:/certs
+    cpus: 0.05
+    mem_limit: 32m
+    pids_limit: 16
+
   postgres:
     image: postgres:17.6-bookworm
     command:
@@ -61,6 +70,9 @@ services:
       - ${HISTORY_CONVERSATIONS:-100}
       - --history-sync-messages
       - ${HISTORY_MESSAGES:-20}
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
     environment:
       MEDIA_CONN_HOST: barback:8080
     healthcheck:

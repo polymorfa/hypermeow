@@ -391,8 +391,13 @@ func databaseSnapshot(db *sql.DB) databaseStats {
 	defer cancel()
 	stats := databaseStats{}
 	_ = db.QueryRowContext(ctx, "SELECT pg_database_size(current_database())").Scan(&stats.SizeBytes)
+	_ = db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(total_exec_time), 0), COALESCE(SUM(rows), 0)
+		FROM pg_stat_statements
+		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+		  AND query ILIKE '%whatsmeow_%'`).Scan(&stats.Calls, &stats.TotalExecMS, &stats.Rows)
 	rows, err := db.QueryContext(ctx, `
-		SELECT query, calls, total_exec_time, rows
+		SELECT LEFT(query, 512), calls, total_exec_time, rows
 		FROM pg_stat_statements
 		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 		  AND query ILIKE '%whatsmeow_%'
@@ -408,9 +413,6 @@ func databaseSnapshot(db *sql.DB) databaseStats {
 			break
 		}
 		item.Query = strings.Join(strings.Fields(item.Query), " ")
-		stats.Calls += item.Calls
-		stats.TotalExecMS += item.TotalExecMS
-		stats.Rows += item.Rows
 		stats.Queries = append(stats.Queries, item)
 	}
 	return stats
