@@ -1,0 +1,9 @@
+{
+  "revision": "be55f11511f0da723aeb5ec301613572bbbac386",
+  "sessions": 2000,
+  "heap_alloc_bytes": 8480848,
+  "heap_inuse_bytes": 8585216,
+  "total_alloc_bytes": 8481400,
+  "heap_alloc_per_session": 4240,
+  "peak_rss_bytes": 22831104
+}

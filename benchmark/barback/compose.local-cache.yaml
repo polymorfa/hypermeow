@@ -1,0 +1,5 @@
+services:
+  barback:
+    image: hypermeow-benchmark-barback:latest
+    build: !reset null
+    pull_policy: never

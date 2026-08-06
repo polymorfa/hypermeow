@@ -23,7 +23,7 @@ The 128-member group profile sent and received 200 messages and processed 8,000 
 
 ## Retained state
 
-The outgoing retry cache still covers 256 messages, but stores serialized protobuf bytes instead of retaining full 904-byte `waE2E.Message` objects and their pointer graphs. It is allocated on the first outgoing message instead of in `NewClient`. The profile attributes about 20 KB to `NewClient`, down from about 77 KB before this pass. That sampled 57 KB difference is about 111 MB across 2,000 clients. A completely populated old retry ring retained at least 441 MB of outer protobuf structs across 2,000 clients before referenced payloads were counted; the compact cache replaces that cost with the encoded message size.
+The outgoing retry cache still covers 256 messages, but stores serialized protobuf bytes instead of retaining full 904-byte `waE2E.Message` objects and their pointer graphs. It is allocated on the first outgoing message instead of in `NewClient`. The exact isolated-container constructor benchmark measures 4,240 bytes per HyperMeow client, down from 78,929 bytes in upstream and pre-PR3. Across 2,000 clients, that saves 149,377,464 bytes of Go heap, or 142.46 MiB and 94.6%. A completely populated old retry ring retained at least 441 MB of outer protobuf structs across 2,000 clients before referenced payloads were counted; the compact cache replaces that cost with the encoded message size.
 
 Attacker- or workload-influenced caches now have hard ceilings:
 

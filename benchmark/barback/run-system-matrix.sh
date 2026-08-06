@@ -9,6 +9,11 @@ export LIBRARY_CONTEXT=${LIBRARY_CONTEXT:-../..}
 export BUILD_REV=${BUILD_REV:-working-tree}
 export BENCH_VARIANT=${BENCH_VARIANT:-candidate}
 export BENCH_TIMEOUT=${BENCH_TIMEOUT:-8m}
+setup_attempts=${BENCH_SETUP_ATTEMPTS:-3}
+if ! [[ $setup_attempts =~ ^[1-9][0-9]*$ ]]; then
+	printf 'BENCH_SETUP_ATTEMPTS must be a positive integer\n' >&2
+	exit 2
+fi
 
 cleanup() {
 	docker compose -f compose.yaml -f "${compose_override:-compose.dm.yaml}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -63,7 +68,22 @@ run_scenario() {
 	: > "$stats_file"
 	printf 'Running %s (%s, %s)\n' "$scenario" "$BENCH_VARIANT" "$BUILD_REV"
 	local compose=(docker compose -f compose.yaml -f "$compose_override")
-	"${compose[@]}" up --build --wait
+	if [[ ${BENCH_LOCAL_IMAGE_CACHE:-0} == 1 ]]; then
+		compose+=(-f compose.local-cache.yaml)
+	fi
+	local setup_attempt=1
+	local up_args=(up --build --wait)
+	if [[ ${BENCH_LOCAL_IMAGE_CACHE:-0} == 1 ]]; then
+		up_args+=(--pull never)
+	fi
+	while ! "${compose[@]}" "${up_args[@]}"; do
+		if ((setup_attempt >= setup_attempts)); then
+			return 1
+		fi
+		printf 'Setup failed; retrying %s (%d/%d)\n' "$scenario" "$((setup_attempt + 1))" "$setup_attempts" >&2
+		cleanup
+		((setup_attempt++))
+	done
 	(
 		while true; do
 			local_ids=$("${compose[@]}" ps -q)
