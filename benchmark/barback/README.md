@@ -16,9 +16,11 @@ Run a clean benchmark:
 
 ```sh
 docker compose down --volumes --remove-orphans
-BUILD_REV="$(git rev-parse HEAD)" BENCH_VARIANT=baseline RESULT_FILE=baseline.json docker compose up --build --abort-on-container-exit --exit-code-from client
+BARBACK_CONTEXT=/path/to/devcenter BUILD_REV="$(git rev-parse HEAD)" BENCH_VARIANT=baseline RESULT_FILE=baseline.json docker compose up --build --abort-on-container-exit --exit-code-from client
 docker compose down --volumes --remove-orphans
 ```
+
+`BARBACK_CONTEXT` must point to a checkout of `titan-api/devcenter` at commit `c79b2d3fe864977837377d59228c6779546b0deb`. The default resolves to the standard local Polymorfa checkout layout. Verify the commit before a comparison with `git -C "$BARBACK_CONTEXT" rev-parse HEAD`.
 
 Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's three-second benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, failures, and history-sync counts.
 

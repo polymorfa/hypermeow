@@ -34,7 +34,7 @@ services:
 
   barback:
     build:
-      context: https://github.com/titan-api/devcenter.git#c79b2d3fe864977837377d59228c6779546b0deb
+      context: ${BARBACK_CONTEXT:-../../../Titan/devcenter}
       dockerfile: apps/barback/Dockerfile
     command:
       - --host
