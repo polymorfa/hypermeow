@@ -1,0 +1,101 @@
+name: hypermeow-benchmark
+
+services:
+  postgres:
+    image: postgres:17.6-bookworm
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=32
+      - -c
+      - synchronous_commit=on
+      - -c
+      - track_io_timing=on
+    environment:
+      POSTGRES_DB: hypermeow
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hypermeow"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-stats.sql:ro
+    cpus: 0.50
+    mem_limit: 768m
+    mem_reservation: 384m
+    pids_limit: 128
+
+  barback:
+    build:
+      context: https://github.com/titan-api/devcenter.git#c79b2d3fe864977837377d59228c6779546b0deb
+      dockerfile: apps/barback/Dockerfile
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --no-tls
+      - --pairing-delay
+      - "0"
+      - --bench
+      - --bench-rate
+      - ${BENCH_RATE:-50}
+      - --bench-total
+      - ${BENCH_TOTAL:-200}
+      - --bench-senders
+      - ${BENCH_SENDERS:-1}
+      - --bench-warmup-ms
+      - ${BENCH_WARMUP_MS:-3000}
+      - --bench-group
+      - --bench-group-size
+      - ${BENCH_GROUP_SIZE:-128}
+      - --history-sync-conversations
+      - ${HISTORY_CONVERSATIONS:-100}
+      - --history-sync-messages
+      - ${HISTORY_MESSAGES:-20}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/barback", "--healthcheck", "--port", "8080"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+    cpus: 0.50
+    mem_limit: 768m
+    mem_reservation: 384m
+    pids_limit: 256
+
+  client:
+    build:
+      context: ../..
+      dockerfile: benchmark/barback/Dockerfile
+      args:
+        BUILD_REV: ${BUILD_REV:-working-tree}
+    depends_on:
+      barback:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      BARBACK_URL: http://barback:8080
+      BARBACK_WS: ws://barback:8080/ws/chat
+      BENCH_TIMEOUT: ${BENCH_TIMEOUT:-5m}
+      BENCH_TOTAL: ${BENCH_TOTAL:-200}
+      BENCH_VARIANT: ${BENCH_VARIANT:-candidate}
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable
+      RESULT_PATH: /results/${RESULT_FILE:-result.json}
+    init: true
+    volumes:
+      - ./results:/results
+    cpus: 1.00
+    mem_limit: 2g
+    mem_reservation: 1g
+    pids_limit: 256
+
+volumes:
+  pgdata:
