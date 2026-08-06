@@ -56,6 +56,15 @@ func getCachedSession(ctx context.Context, addr string) *record.Session {
 	return sess.Record
 }
 
+func hasCachedSession(ctx context.Context, addr string) (found, cached bool) {
+	cache := getSessionCache(ctx)
+	if cache == nil {
+		return false, false
+	}
+	sess, cached := cache.Get(addr)
+	return sess.Found, cached
+}
+
 func putCachedSession(ctx context.Context, addr string, record *record.Session) bool {
 	cache := getSessionCache(ctx)
 	if cache == nil {
