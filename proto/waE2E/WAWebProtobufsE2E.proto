@@ -716,6 +716,13 @@ message PeerDataOperationRequestResponseMessage {
 			optional uint64 fileLength = 10;
 		}
 
+		message ContactRefreshResponse {
+			repeated string coveredRequestIDs = 1;
+			optional uint64 collectionVersion = 2;
+			optional int64 primaryDurationMS = 3;
+			optional uint32 uniqueContactCount = 4;
+		}
+
 		message BizBroadcastInsightsContactListResponse {
 			optional string campaignID = 1;
 			optional int64 timestampMS = 2;
@@ -805,6 +812,7 @@ message PeerDataOperationRequestResponseMessage {
 		optional HistorySyncChunkRetryResponse historySyncChunkRetryResponse = 10;
 		optional FlowResponsesCsvBundle flowResponsesCsvBundle = 11;
 		optional BizBroadcastInsightsContactListResponse bizBroadcastInsightsContactListResponse = 12;
+		optional ContactRefreshResponse contactRefreshResponse = 13;
 	}
 
 	optional PeerDataOperationRequestType peerDataOperationRequestType = 1;
