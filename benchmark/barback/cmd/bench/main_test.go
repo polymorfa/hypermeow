@@ -1,8 +1,11 @@
 package main
 
 import (
+	"strconv"
 	"testing"
 	"time"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 func TestLoadConfigWorkload(t *testing.T) {
@@ -82,5 +85,26 @@ func TestSnapshotUsesMessageCompletionBoundary(t *testing.T) {
 	}
 	if result.ThroughputPerSec != 0.125 {
 		t.Fatalf("unexpected throughput: %f", result.ThroughputPerSec)
+	}
+}
+
+func TestJobShardKeepsChatOrdered(t *testing.T) {
+	chat := types.NewJID("15551234567", types.DefaultUserServer)
+	first := jobShard(chat, 64)
+	for range 100 {
+		if got := jobShard(chat, 64); got != first {
+			t.Fatalf("chat moved shards: got %d, want %d", got, first)
+		}
+	}
+}
+
+func TestJobShardDistributesChats(t *testing.T) {
+	seen := make(map[int]struct{})
+	for i := range 64 {
+		chat := types.NewJID("1555123"+strconv.Itoa(i), types.DefaultUserServer)
+		seen[jobShard(chat, 64)] = struct{}{}
+	}
+	if len(seen) < 32 {
+		t.Fatalf("chat sharding is too concentrated: %d shards", len(seen))
 	}
 }
