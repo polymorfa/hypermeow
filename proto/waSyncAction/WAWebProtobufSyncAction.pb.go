@@ -182,6 +182,7 @@ const (
 	MutationProps_WASA_ROOT_SECRET_ACTION                                     MutationProps = 89
 	MutationProps_BUBBLE_LOCK_MESSAGE_ACTION                                  MutationProps = 90
 	MutationProps_LABEL_SUBLIST_ACTION                                        MutationProps = 91
+	MutationProps_DEVICE_CAPABILITIES_V2                                      MutationProps = 92
 	MutationProps_SHARE_OWN_PN                                                MutationProps = 10001
 	MutationProps_BUSINESS_BROADCAST_ACTION                                   MutationProps = 10002
 	MutationProps_AI_THREAD_DELETE_ACTION                                     MutationProps = 10003
@@ -275,6 +276,7 @@ var (
 		89:    "WASA_ROOT_SECRET_ACTION",
 		90:    "BUBBLE_LOCK_MESSAGE_ACTION",
 		91:    "LABEL_SUBLIST_ACTION",
+		92:    "DEVICE_CAPABILITIES_V2",
 		10001: "SHARE_OWN_PN",
 		10002: "BUSINESS_BROADCAST_ACTION",
 		10003: "AI_THREAD_DELETE_ACTION",
@@ -365,6 +367,7 @@ var (
 		"WASA_ROOT_SECRET_ACTION":                                     89,
 		"BUBBLE_LOCK_MESSAGE_ACTION":                                  90,
 		"LABEL_SUBLIST_ACTION":                                        91,
+		"DEVICE_CAPABILITIES_V2":                                      92,
 		"SHARE_OWN_PN":                                                10001,
 		"BUSINESS_BROADCAST_ACTION":                                   10002,
 		"AI_THREAD_DELETE_ACTION":                                     10003,
@@ -1245,12 +1248,13 @@ func (AvatarUpdatedAction_AvatarEventType) EnumDescriptor() ([]byte, []int) {
 type BizAISettingsNudgeAction_BizAISettingsCategory int32
 
 const (
-	BizAISettingsNudgeAction_UNKNOWN           BizAISettingsNudgeAction_BizAISettingsCategory = 0
-	BizAISettingsNudgeAction_INSTRUCTIONS      BizAISettingsNudgeAction_BizAISettingsCategory = 1
-	BizAISettingsNudgeAction_RESPONSE_SETTINGS BizAISettingsNudgeAction_BizAISettingsCategory = 2
-	BizAISettingsNudgeAction_EXAMPLE_RESPONSES BizAISettingsNudgeAction_BizAISettingsCategory = 3
-	BizAISettingsNudgeAction_KNOWLEDGE         BizAISettingsNudgeAction_BizAISettingsCategory = 4
-	BizAISettingsNudgeAction_LEAD_GEN          BizAISettingsNudgeAction_BizAISettingsCategory = 5
+	BizAISettingsNudgeAction_UNKNOWN                BizAISettingsNudgeAction_BizAISettingsCategory = 0
+	BizAISettingsNudgeAction_INSTRUCTIONS           BizAISettingsNudgeAction_BizAISettingsCategory = 1
+	BizAISettingsNudgeAction_RESPONSE_SETTINGS      BizAISettingsNudgeAction_BizAISettingsCategory = 2
+	BizAISettingsNudgeAction_EXAMPLE_RESPONSES      BizAISettingsNudgeAction_BizAISettingsCategory = 3
+	BizAISettingsNudgeAction_KNOWLEDGE              BizAISettingsNudgeAction_BizAISettingsCategory = 4
+	BizAISettingsNudgeAction_LEAD_GEN               BizAISettingsNudgeAction_BizAISettingsCategory = 5
+	BizAISettingsNudgeAction_HANDOFF_REMOVAL_TIMING BizAISettingsNudgeAction_BizAISettingsCategory = 6
 )
 
 // Enum value maps for BizAISettingsNudgeAction_BizAISettingsCategory.
@@ -1262,14 +1266,16 @@ var (
 		3: "EXAMPLE_RESPONSES",
 		4: "KNOWLEDGE",
 		5: "LEAD_GEN",
+		6: "HANDOFF_REMOVAL_TIMING",
 	}
 	BizAISettingsNudgeAction_BizAISettingsCategory_value = map[string]int32{
-		"UNKNOWN":           0,
-		"INSTRUCTIONS":      1,
-		"RESPONSE_SETTINGS": 2,
-		"EXAMPLE_RESPONSES": 3,
-		"KNOWLEDGE":         4,
-		"LEAD_GEN":          5,
+		"UNKNOWN":                0,
+		"INSTRUCTIONS":           1,
+		"RESPONSE_SETTINGS":      2,
+		"EXAMPLE_RESPONSES":      3,
+		"KNOWLEDGE":              4,
+		"LEAD_GEN":               5,
+		"HANDOFF_REMOVAL_TIMING": 6,
 	}
 )
 
@@ -3707,6 +3713,7 @@ type SyncActionValue struct {
 	WasaRootSecretAction                                   *WASARootSecretAction                                   `protobuf:"bytes,89,opt,name=wasaRootSecretAction" json:"wasaRootSecretAction,omitempty"`
 	BubbleLockMessageAction                                *BubbleLockMessageAction                                `protobuf:"bytes,90,opt,name=bubbleLockMessageAction" json:"bubbleLockMessageAction,omitempty"`
 	LabelSublistAction                                     *LabelSublistAction                                     `protobuf:"bytes,91,opt,name=labelSublistAction" json:"labelSublistAction,omitempty"`
+	DeviceCapabilitiesV2                                   *waDeviceCapabilities.DeviceCapabilities                `protobuf:"bytes,92,opt,name=deviceCapabilitiesV2" json:"deviceCapabilitiesV2,omitempty"`
 	unknownFields                                          protoimpl.UnknownFields
 	sizeCache                                              protoimpl.SizeCache
 }
@@ -4311,6 +4318,13 @@ func (x *SyncActionValue) GetBubbleLockMessageAction() *BubbleLockMessageAction 
 func (x *SyncActionValue) GetLabelSublistAction() *LabelSublistAction {
 	if x != nil {
 		return x.LabelSublistAction
+	}
+	return nil
+}
+
+func (x *SyncActionValue) GetDeviceCapabilitiesV2() *waDeviceCapabilities.DeviceCapabilities {
+	if x != nil {
+		return x.DeviceCapabilitiesV2
 	}
 	return nil
 }
@@ -8589,18 +8603,19 @@ const file_waSyncAction_WAWebProtobufSyncAction_proto_rawDesc = "" +
 	"\x0fAvatarEventType\x12\v\n" +
 	"\aUPDATED\x10\x00\x12\v\n" +
 	"\aCREATED\x10\x01\x12\v\n" +
-	"\aDELETED\x10\x02\"\xbf\x02\n" +
+	"\aDELETED\x10\x02\"\xdb\x02\n" +
 	"\x18BizAISettingsNudgeAction\x12c\n" +
 	"\bcategory\x18\x01 \x01(\x0e2G.WAWebProtobufSyncAction.BizAISettingsNudgeAction.BizAISettingsCategoryR\bcategory\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x03R\aversion\x12 \n" +
-	"\vupdatedAtMS\x18\x03 \x01(\x03R\vupdatedAtMS\"\x81\x01\n" +
+	"\vupdatedAtMS\x18\x03 \x01(\x03R\vupdatedAtMS\"\x9d\x01\n" +
 	"\x15BizAISettingsCategory\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x10\n" +
 	"\fINSTRUCTIONS\x10\x01\x12\x15\n" +
 	"\x11RESPONSE_SETTINGS\x10\x02\x12\x15\n" +
 	"\x11EXAMPLE_RESPONSES\x10\x03\x12\r\n" +
 	"\tKNOWLEDGE\x10\x04\x12\f\n" +
-	"\bLEAD_GEN\x10\x05\"\x89\x03\n" +
+	"\bLEAD_GEN\x10\x05\x12\x1a\n" +
+	"\x16HANDOFF_REMOVAL_TIMING\x10\x06\"\x89\x03\n" +
 	"\x1cMaibaAIFeaturesControlAction\x12t\n" +
 	"\x0faiFeatureStatus\x18\x01 \x01(\x0e2J.WAWebProtobufSyncAction.MaibaAIFeaturesControlAction.MaibaAIFeatureStatusR\x0faiFeatureStatus\x12h\n" +
 	"\vaiReplyMode\x18\x02 \x01(\x0e2F.WAWebProtobufSyncAction.MaibaAIFeaturesControlAction.MaibaAIReplyModeR\vaiReplyMode\"<\n" +
@@ -8761,7 +8776,7 @@ const file_waSyncAction_WAWebProtobufSyncAction_proto_rawDesc = "" +
 	"\x04CAPI\x10\v\"A\n" +
 	"\x11RecentEmojiWeight\x12\x14\n" +
 	"\x05emoji\x18\x01 \x01(\tR\x05emoji\x12\x16\n" +
-	"\x06weight\x18\x02 \x01(\x02R\x06weight\"\xff@\n" +
+	"\x06weight\x18\x02 \x01(\x02R\x06weight\"\xe9A\n" +
 	"\x0fSyncActionValue\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12C\n" +
 	"\n" +
@@ -8848,7 +8863,8 @@ const file_waSyncAction_WAWebProtobufSyncAction_proto_rawDesc = "" +
 	"\x13coexV2VersionAction\x18X \x01(\v2,.WAWebProtobufSyncAction.CoexV2VersionActionR\x13coexV2VersionAction\x12a\n" +
 	"\x14wasaRootSecretAction\x18Y \x01(\v2-.WAWebProtobufSyncAction.WASARootSecretActionR\x14wasaRootSecretAction\x12j\n" +
 	"\x17bubbleLockMessageAction\x18Z \x01(\v20.WAWebProtobufSyncAction.BubbleLockMessageActionR\x17bubbleLockMessageAction\x12[\n" +
-	"\x12labelSublistAction\x18[ \x01(\v2+.WAWebProtobufSyncAction.LabelSublistActionR\x12labelSublistAction\"/\n" +
+	"\x12labelSublistAction\x18[ \x01(\v2+.WAWebProtobufSyncAction.LabelSublistActionR\x12labelSublistAction\x12h\n" +
+	"\x14deviceCapabilitiesV2\x18\\ \x01(\v24.WAWebProtobufsDeviceCapabilities.DeviceCapabilitiesR\x14deviceCapabilitiesV2\"/\n" +
 	"\x13CoexV2VersionAction\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\"\xd6\x04\n" +
 	"\x19SubscriptionsSyncV2Action\x12i\n" +
@@ -9107,7 +9123,7 @@ const file_waSyncAction_WAWebProtobufSyncAction_proto_rawDesc = "" +
 	"\vREGULAR_LOW\x10\x02\x12\x10\n" +
 	"\fREGULAR_HIGH\x10\x03\x12\x12\n" +
 	"\x0eCRITICAL_BLOCK\x10\x04\x12\x18\n" +
-	"\x14CRITICAL_UNBLOCK_LOW\x10\x05*\xa5\x14\n" +
+	"\x14CRITICAL_UNBLOCK_LOW\x10\x05*\xc1\x14\n" +
 	"\rMutationProps\x12\x0f\n" +
 	"\vSTAR_ACTION\x10\x02\x12\x12\n" +
 	"\x0eCONTACT_ACTION\x10\x03\x12\x0f\n" +
@@ -9195,7 +9211,8 @@ const file_waSyncAction_WAWebProtobufSyncAction_proto_rawDesc = "" +
 	"\x16COEX_V2_VERSION_ACTION\x10X\x12\x1b\n" +
 	"\x17WASA_ROOT_SECRET_ACTION\x10Y\x12\x1e\n" +
 	"\x1aBUBBLE_LOCK_MESSAGE_ACTION\x10Z\x12\x18\n" +
-	"\x14LABEL_SUBLIST_ACTION\x10[\x12\x11\n" +
+	"\x14LABEL_SUBLIST_ACTION\x10[\x12\x1a\n" +
+	"\x16DEVICE_CAPABILITIES_V2\x10\\\x12\x11\n" +
 	"\fSHARE_OWN_PN\x10\x91N\x12\x1e\n" +
 	"\x19BUSINESS_BROADCAST_ACTION\x10\x92N\x12\x1c\n" +
 	"\x17AI_THREAD_DELETE_ACTION\x10\x93N*a\n" +
@@ -9459,29 +9476,30 @@ var file_waSyncAction_WAWebProtobufSyncAction_proto_depIdxs = []int32{
 	28,  // 105: WAWebProtobufSyncAction.SyncActionValue.wasaRootSecretAction:type_name -> WAWebProtobufSyncAction.WASARootSecretAction
 	67,  // 106: WAWebProtobufSyncAction.SyncActionValue.bubbleLockMessageAction:type_name -> WAWebProtobufSyncAction.BubbleLockMessageAction
 	107, // 107: WAWebProtobufSyncAction.SyncActionValue.labelSublistAction:type_name -> WAWebProtobufSyncAction.LabelSublistAction
-	121, // 108: WAWebProtobufSyncAction.SubscriptionsSyncV2Action.subscriptions:type_name -> WAWebProtobufSyncAction.SubscriptionsSyncV2Action.SubscriptionInfo
-	120, // 109: WAWebProtobufSyncAction.SubscriptionsSyncV2Action.paidFeature:type_name -> WAWebProtobufSyncAction.SubscriptionsSyncV2Action.PaidFeature
-	2,   // 110: WAWebProtobufSyncAction.BusinessBroadcastCampaignAction.status:type_name -> WAWebProtobufSyncAction.BusinessBroadcastCampaignStatus
-	56,  // 111: WAWebProtobufSyncAction.BusinessBroadcastListAction.participants:type_name -> WAWebProtobufSyncAction.BroadcastListParticipant
-	122, // 112: WAWebProtobufSyncAction.FavoritesAction.favorites:type_name -> WAWebProtobufSyncAction.FavoritesAction.Favorite
-	70,  // 113: WAWebProtobufSyncAction.CustomPaymentMethodsAction.customPaymentMethods:type_name -> WAWebProtobufSyncAction.CustomPaymentMethod
-	71,  // 114: WAWebProtobufSyncAction.CustomPaymentMethod.metadata:type_name -> WAWebProtobufSyncAction.CustomPaymentMethodMetadata
-	27,  // 115: WAWebProtobufSyncAction.CallLogAction.callLogRecord:type_name -> WAWebProtobufSyncAction.CallLogRecord
-	125, // 116: WAWebProtobufSyncAction.SyncActionMessage.key:type_name -> WACommon.MessageKey
-	98,  // 117: WAWebProtobufSyncAction.SyncActionMessageRange.messages:type_name -> WAWebProtobufSyncAction.SyncActionMessage
-	99,  // 118: WAWebProtobufSyncAction.DeleteChatAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
-	99,  // 119: WAWebProtobufSyncAction.ClearChatAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
-	99,  // 120: WAWebProtobufSyncAction.MarkChatAsReadAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
-	99,  // 121: WAWebProtobufSyncAction.ArchiveChatAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
-	45,  // 122: WAWebProtobufSyncAction.RecentEmojiWeightsAction.weights:type_name -> WAWebProtobufSyncAction.RecentEmojiWeight
-	46,  // 123: WAWebProtobufSyncAction.SyncActionData.value:type_name -> WAWebProtobufSyncAction.SyncActionValue
-	5,   // 124: WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo.callResult:type_name -> WAWebProtobufSyncAction.CallLogRecord.CallResult
-	6,   // 125: WAWebProtobufSyncAction.WASARootSecretAction.RootSecretEntry.status:type_name -> WAWebProtobufSyncAction.WASARootSecretAction.RootSecretEntry.Status
-	126, // [126:126] is the sub-list for method output_type
-	126, // [126:126] is the sub-list for method input_type
-	126, // [126:126] is the sub-list for extension type_name
-	126, // [126:126] is the sub-list for extension extendee
-	0,   // [0:126] is the sub-list for field type_name
+	124, // 108: WAWebProtobufSyncAction.SyncActionValue.deviceCapabilitiesV2:type_name -> WAWebProtobufsDeviceCapabilities.DeviceCapabilities
+	121, // 109: WAWebProtobufSyncAction.SubscriptionsSyncV2Action.subscriptions:type_name -> WAWebProtobufSyncAction.SubscriptionsSyncV2Action.SubscriptionInfo
+	120, // 110: WAWebProtobufSyncAction.SubscriptionsSyncV2Action.paidFeature:type_name -> WAWebProtobufSyncAction.SubscriptionsSyncV2Action.PaidFeature
+	2,   // 111: WAWebProtobufSyncAction.BusinessBroadcastCampaignAction.status:type_name -> WAWebProtobufSyncAction.BusinessBroadcastCampaignStatus
+	56,  // 112: WAWebProtobufSyncAction.BusinessBroadcastListAction.participants:type_name -> WAWebProtobufSyncAction.BroadcastListParticipant
+	122, // 113: WAWebProtobufSyncAction.FavoritesAction.favorites:type_name -> WAWebProtobufSyncAction.FavoritesAction.Favorite
+	70,  // 114: WAWebProtobufSyncAction.CustomPaymentMethodsAction.customPaymentMethods:type_name -> WAWebProtobufSyncAction.CustomPaymentMethod
+	71,  // 115: WAWebProtobufSyncAction.CustomPaymentMethod.metadata:type_name -> WAWebProtobufSyncAction.CustomPaymentMethodMetadata
+	27,  // 116: WAWebProtobufSyncAction.CallLogAction.callLogRecord:type_name -> WAWebProtobufSyncAction.CallLogRecord
+	125, // 117: WAWebProtobufSyncAction.SyncActionMessage.key:type_name -> WACommon.MessageKey
+	98,  // 118: WAWebProtobufSyncAction.SyncActionMessageRange.messages:type_name -> WAWebProtobufSyncAction.SyncActionMessage
+	99,  // 119: WAWebProtobufSyncAction.DeleteChatAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
+	99,  // 120: WAWebProtobufSyncAction.ClearChatAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
+	99,  // 121: WAWebProtobufSyncAction.MarkChatAsReadAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
+	99,  // 122: WAWebProtobufSyncAction.ArchiveChatAction.messageRange:type_name -> WAWebProtobufSyncAction.SyncActionMessageRange
+	45,  // 123: WAWebProtobufSyncAction.RecentEmojiWeightsAction.weights:type_name -> WAWebProtobufSyncAction.RecentEmojiWeight
+	46,  // 124: WAWebProtobufSyncAction.SyncActionData.value:type_name -> WAWebProtobufSyncAction.SyncActionValue
+	5,   // 125: WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo.callResult:type_name -> WAWebProtobufSyncAction.CallLogRecord.CallResult
+	6,   // 126: WAWebProtobufSyncAction.WASARootSecretAction.RootSecretEntry.status:type_name -> WAWebProtobufSyncAction.WASARootSecretAction.RootSecretEntry.Status
+	127, // [127:127] is the sub-list for method output_type
+	127, // [127:127] is the sub-list for method input_type
+	127, // [127:127] is the sub-list for extension type_name
+	127, // [127:127] is the sub-list for extension extendee
+	0,   // [0:127] is the sub-list for field type_name
 }
 
 func init() { file_waSyncAction_WAWebProtobufSyncAction_proto_init() }

@@ -237,7 +237,7 @@ func (s *CachedLIDMap) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (
 			lidDev := dev
 			lidDev.Server = types.HiddenUserServer
 			lidDev.User = lid
-			result[dev] = lidDev.ToNonAD()
+			result[dev] = lidDev
 		}
 	})
 	return result, err
