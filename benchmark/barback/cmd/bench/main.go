@@ -26,6 +26,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
@@ -145,7 +146,7 @@ type runner struct {
 	startedAt  atomic.Int64
 	finishedAt atomic.Int64
 	done       chan struct{}
-	jobs       chan *events.Message
+	jobs       []chan *events.Message
 
 	latencyMu       sync.Mutex
 	latencies       []float64
@@ -173,13 +174,21 @@ func main() {
 	if cfg.MemProfilePath != "" {
 		runtime.MemProfileRate = 1
 	}
+	workerCount := int(cfg.Workload.Workers)
+	queueCapacity := (4096 + workerCount - 1) / workerCount
+	if queueCapacity < 512 {
+		queueCapacity = 512
+	}
 	r := &runner{
 		cfg:            cfg,
 		done:           make(chan struct{}),
-		jobs:           make(chan *events.Message, 4096),
+		jobs:           make([]chan *events.Message, workerCount),
 		latencies:      make([]float64, 0, cfg.Total),
 		messageTypes:   make(map[string]int64),
 		failureReasons: make(map[string]int64),
+	}
+	for i := range r.jobs {
+		r.jobs[i] = make(chan *events.Message, queueCapacity)
 	}
 	res, runErr := r.run()
 	if cfg.MemProfilePath != "" {
@@ -358,8 +367,8 @@ func (r *runner) run() (result, error) {
 
 	workerCtx, stopWorkers := context.WithCancel(ctx)
 	defer stopWorkers()
-	for range r.cfg.Workload.Workers {
-		go r.sendWorker(workerCtx, client)
+	for _, jobs := range r.jobs {
+		go r.sendWorker(workerCtx, client, jobs)
 	}
 
 	if err = client.ConnectContext(ctx); err != nil {
@@ -412,8 +421,9 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			}
 			r.startOnce.Do(r.startMetrics)
 			r.received.Add(1)
+			jobs := r.jobs[jobShard(event.Info.Chat, len(r.jobs))]
 			select {
-			case r.jobs <- event:
+			case jobs <- event:
 			default:
 				r.overflows.Add(1)
 				r.failed.Add(1)
@@ -484,12 +494,26 @@ func (r *runner) scanQR(code string) {
 	}
 }
 
-func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client) {
+func jobShard(jid types.JID, count int) int {
+	const offset64 = uint64(14695981039346656037)
+	const prime64 = uint64(1099511628211)
+	hash := offset64
+	for i := range jid.User {
+		hash = (hash ^ uint64(jid.User[i])) * prime64
+	}
+	for i := range jid.Server {
+		hash = (hash ^ uint64(jid.Server[i])) * prime64
+	}
+	hash = (hash ^ uint64(jid.Device)) * prime64
+	return int(hash % uint64(count))
+}
+
+func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs <-chan *events.Message) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-r.jobs:
+		case msg := <-jobs:
 			sequence := r.messageSequence.Add(1) - 1
 			outgoing, category, mediaBytes, uploadDuration, err := buildWorkloadMessage(ctx, client, string(msg.Info.ID), sequence, r.cfg.Workload.MessageProfile)
 			if uploadDuration > 0 {

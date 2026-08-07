@@ -69,6 +69,8 @@ BENCH_VARIANT=hypermeow BENCH_SESSIONS=2000 ./run-client-memory.sh
 
 Results are written to `results/`. PostgreSQL statement statistics are reset on the authenticated connection event, before Barback's benchmark warmup. The report includes the top WhatsMeow queries, total statement calls and execution time, send and upload latency percentiles, throughput, Go heap/GC/CPU data, peak RSS, process and block I/O, temporary-file peaks and cleanup, network traffic, failures, message-shape counts, and history-sync counts. `session_runtime` begins at the connected event and includes history sync; `workload_runtime` begins at the first live benchmark message. Docker stats include the whole container lifetime. Network timings are local-container transport measurements, not internet latency.
 
+When `BENCH_WORKERS` is greater than one, messages are assigned to chat-affine worker queues. Different chats run concurrently, while messages for one Signal session remain ordered. Set `BARBACK_LOG_LEVEL=info` when validating ping-pong throughput so the final decrypted-pong count and wire RTT are visible in the Barback logs.
+
 The frozen three-repeat comparison is summarized in `results/system-comparison.md`; its 45 JSON reports and 45 Docker-stat streams remain alongside it.
 
 Set `MEM_PROFILE_PATH=/results/run.heap.pb.gz` to capture a full-rate Go allocation profile. Profiling changes runtime cost, so compare profiles with each other rather than with ordinary benchmark timings. Inspect cumulative allocations with `go tool pprof -top -alloc_space results/run.heap.pb.gz` and retained heap with `go tool pprof -top -inuse_space results/run.heap.pb.gz`.

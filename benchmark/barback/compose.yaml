@@ -75,6 +75,7 @@ services:
         condition: service_completed_successfully
     environment:
       MEDIA_CONN_HOST: barback:8080
+      RUST_LOG: ${BARBACK_LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "/usr/local/bin/barback", "--healthcheck", "--port", "8080"]
       interval: 1s
