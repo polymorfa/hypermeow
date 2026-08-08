@@ -84,6 +84,12 @@ func (cli *Client) SetPrivacySetting(ctx context.Context, name types.PrivacySett
 		return settings, err
 	}
 	settings = *settingsPtr
+	applyPrivacySetting(&settings, name, value)
+	cli.privacySettingsCache.Store(&settings)
+	return
+}
+
+func applyPrivacySetting(settings *types.PrivacySettings, name types.PrivacySettingType, value types.PrivacySetting) {
 	switch name {
 	case types.PrivacySettingTypeGroupAdd:
 		settings.GroupAdd = value
@@ -99,9 +105,13 @@ func (cli *Client) SetPrivacySetting(ctx context.Context, name types.PrivacySett
 		settings.Online = value
 	case types.PrivacySettingTypeCallAdd:
 		settings.CallAdd = value
+	case types.PrivacySettingTypeMessages:
+		settings.Messages = value
+	case types.PrivacySettingTypeDefense:
+		settings.Defense = value
+	case types.PrivacySettingTypeStickers:
+		settings.Stickers = value
 	}
-	cli.privacySettingsCache.Store(&settings)
-	return
 }
 
 // SetDefaultDisappearingTimer will set the default disappearing message timer.
