@@ -9,6 +9,7 @@ package whatsmeow
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -303,4 +304,76 @@ func TestChildIndexAddressesTheEncItCameFrom(t *testing.T) {
 func TestNoDecryptedPayloadHandlerIsHarmless(t *testing.T) {
 	cli, info, node := decryptFixture(t, []byte("not-a-protobuf"), encNode(t, "msg"))
 	cli.decryptMessages(context.Background(), info, node)
+}
+
+func TestPaddingThatTheLibraryRejectsStillReachesTheHook(t *testing.T) {
+	// Unpadding runs after Signal, so a plaintext with padding the library
+	// refuses has already cost a ratchet step. Before this it left through
+	// the decryption-error branch and nobody ever saw it.
+	cli, info, node := decryptFixture(t, nil, encNode(t, "msg"))
+	// Not `padded`: a trailing byte that claims more padding than there is.
+	cli.Store.EventBuffer = &bufferedPlaintext{plaintext: []byte{'a', 'b', 0x7f}}
+
+	var seen [][]byte
+	cli.DecryptedPayloadHandler = func(_ context.Context, payload DecryptedPayload) {
+		seen = append(seen, bytes.Clone(payload.Plaintext))
+	}
+	cli.decryptMessages(context.Background(), info, node)
+
+	if len(seen) != 1 {
+		t.Fatalf("a plaintext rejected by unpadding was dropped without anyone seeing it (got %d)", len(seen))
+	}
+	if !bytes.Equal(seen[0], []byte{'a', 'b', 0x7f}) {
+		t.Fatalf("the hook got something other than the Signal output: %q", seen[0])
+	}
+}
+
+func TestNothingReachesTheHookWhenDecryptionItselfFails(t *testing.T) {
+	// The other side of the same rule: no plaintext existed, so there is
+	// nothing to hand over and the hook must stay quiet.
+	cli, info, node := decryptFixture(t, nil, encNode(t, "msg"))
+	cli.Store.EventBuffer = &failingBuffer{}
+
+	called := false
+	cli.DecryptedPayloadHandler = func(_ context.Context, _ DecryptedPayload) {
+		called = true
+	}
+	cli.decryptMessages(context.Background(), info, node)
+
+	if called {
+		t.Fatal("the hook fired for a decryption that never produced anything")
+	}
+}
+
+type failingBuffer struct {
+	store.NoopStore
+}
+
+func (f *failingBuffer) GetBufferedEvent(context.Context, [32]byte) (*store.BufferedEvent, error) {
+	return nil, errors.New("no buffered event, and no session to decrypt with")
+}
+
+func TestTheRerequestTimerIsCancelledBeforeTheHookRuns(t *testing.T) {
+	// A handler that blocks must not let the phone be asked to resend a
+	// message that did arrive and did decrypt.
+	cli, info, node := decryptFixture(t, []byte("not-a-protobuf"), encNode(t, "msg"))
+	cli.AutomaticMessageRerequestFromPhone = true
+
+	cancelled := false
+	cli.pendingPhoneRerequestsLock.Lock()
+	cli.pendingPhoneRerequests = map[types.MessageID]context.CancelFunc{
+		info.ID: func() { cancelled = true },
+	}
+	cli.pendingPhoneRerequestsLock.Unlock()
+
+	cli.DecryptedPayloadHandler = func(_ context.Context, _ DecryptedPayload) {
+		if !cancelled {
+			t.Error("the hook ran while the phone rerequest was still pending")
+		}
+	}
+	cli.decryptMessages(context.Background(), info, node)
+
+	if !cancelled {
+		t.Fatal("the pending rerequest was never cancelled")
+	}
 }
