@@ -59,7 +59,80 @@ type EventHandlerWithSuccessStatus func(evt any) bool
 // invariants, and other stateful parts of the protocol. Intended for
 // proxy implementations where an external system owns part of the
 // protocol state machine (see also [DisabledFeatures]).
-type RawNodeHandler func(ctx context.Context, node *waBinary.Node) (modified *waBinary.Node, drop bool)
+type RawNodeHandler func(ctx context.Context, raw RawNode) (modified *waBinary.Node, drop bool)
+
+// RawNode is one inbound stanza as it arrived, handed to a
+// [RawNodeHandler].
+//
+// A struct rather than separate parameters so that later additions do not
+// change the handler signature again.
+type RawNode struct {
+	// Node is the decoded stanza.
+	Node *waBinary.Node
+
+	// Frame is the buffer Node was decoded from: after Noise decryption
+	// and after decompression, before parsing.
+	//
+	// A proxy that forwards stanzas elsewhere wants these rather than a
+	// re-encoding of Node. The two are not interchangeable: this library
+	// and whoever wrote the frame may encode one value differently
+	// (a token here, bytes there) and both are valid, so re-encoding
+	// produces a stanza that means the same and is not the same bytes.
+	//
+	// Only valid for the duration of the call: an uncompressed frame is a
+	// window into the transport's own read buffer rather than a buffer of
+	// its own. A handler that keeps the slice must copy it first. Handing
+	// the buffer over as it stands is what keeps this hook free for the
+	// callers that only look at Node.
+	Frame []byte
+}
+
+// DecryptedPayloadHandler is called for every <enc> child this library
+// decrypts, with the plaintext exactly as Signal produced it and before
+// anything interprets it.
+//
+// It exists because decryption is irreversible. The ratchet has advanced
+// and a prekey may have been spent by the time the plaintext exists, so a
+// payload the library then fails to interpret (an unknown protobuf
+// version, a malformed message) is gone for good: retrying yields the
+// same failure and the sender will not send it again. This fires before
+// that interpretation, so a caller that wants the bytes gets them whether
+// or not this library can make sense of them.
+//
+// Fires once per successfully decrypted <enc>, in the order the children
+// appear in the stanza. A failed decryption produces nothing here;
+// [events.UndecryptableMessage] reports that.
+//
+// Runs on the goroutine handling that stanza, which the handler queue
+// waits on. Blocking here therefore does not stall the receive loop, but
+// it does stall the queue behind it: past 30 seconds the queue starts
+// logging, and once the queue fills the client force-reconnects.
+type DecryptedPayloadHandler func(ctx context.Context, payload DecryptedPayload)
+
+// DecryptedPayload is one plaintext, addressed to the node it came from.
+type DecryptedPayload struct {
+	// Info is the enclosing message's metadata.
+	Info *types.MessageInfo
+
+	// Node is the <message> stanza the <enc> belongs to.
+	Node *waBinary.Node
+
+	// ChildIndex is the position of the <enc> among Node's children, so a
+	// caller can address the plaintext to the node it came from without
+	// re-deriving which <enc> this was. Counting <enc> nodes separately
+	// would be ambiguous the moment a stanza carries anything else.
+	ChildIndex int
+
+	// EncType is the <enc> node's type attribute: pkmsg, msg, skmsg, msmsg.
+	EncType string
+
+	// Plaintext is what Signal produced, unparsed.
+	//
+	// Only valid for the duration of the call: the buffer belongs to the
+	// decryption that produced it and is passed on to be parsed. A handler
+	// that keeps it must copy.
+	Plaintext []byte
+}
 
 // DisabledFeatures lets callers turn off built-in whatsmeow processing
 // paths. Used by proxies where an external system owns parts of the
@@ -216,6 +289,11 @@ type Client struct {
 	// RawNodeHandler, if non-nil, is called for every inbound node
 	// after decoding but before standard dispatch. See [RawNodeHandler].
 	RawNodeHandler RawNodeHandler
+
+	// DecryptedPayloadHandler, if non-nil, is called for every <enc> this
+	// library decrypts, before the plaintext is interpreted.
+	// See [DecryptedPayloadHandler].
+	DecryptedPayloadHandler DecryptedPayloadHandler
 
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
@@ -886,7 +964,10 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		return
 	}
 	if h := cli.RawNodeHandler; h != nil {
-		modified, drop := h(ctx, node)
+		// `decompressed` is the buffer `node` was decoded from, and it is
+		// about to go out of scope. Handing it over costs nothing and is
+		// the only chance anyone has at the original bytes.
+		modified, drop := h(ctx, RawNode{Node: node, Frame: decompressed})
 		if drop {
 			cli.recvLog.Debugf("RawNodeHandler dropped node: %s", node)
 			return

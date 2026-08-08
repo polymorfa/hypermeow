@@ -354,7 +354,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		}
 	}
 	var recognizedStanza, protobufFailed bool
-	for _, child := range children {
+	for childIndex, child := range children {
 		if child.Tag != "enc" {
 			continue
 		}
@@ -434,6 +434,19 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			})
 			return
 		}
+		// Before anything reads the plaintext, including the protobuf
+		// unmarshal below: decryption already advanced the ratchet, so a
+		// payload this library cannot interpret is one nobody can recover.
+		if h := cli.DecryptedPayloadHandler; h != nil {
+			h(ctx, DecryptedPayload{
+				Info:       info,
+				Node:       node,
+				ChildIndex: childIndex,
+				EncType:    encType,
+				Plaintext:  decrypted,
+			})
+		}
+
 		retryCount := ag.OptionalInt("count")
 		cli.cancelDelayedRequestFromPhone(info.ID)
 
