@@ -314,6 +314,12 @@ func (cli *Client) handlePlaintextMessage(ctx context.Context, info *types.Messa
 // Called from both the path where the library goes on to interpret the
 // plaintext and the path where something between Signal and that interpretation
 // refused it, because the hook promises the bytes in either case.
+//
+// Both call sites test the handler themselves before calling. That reads like
+// a duplicate of the test below and is not: this function misses the inliner
+// by a point (cost 81, budget 80), so without the outer test an unset hook
+// pays a call per <enc> instead of a compare. The test stays here too because
+// nothing about the signature says the caller has to make it.
 func (cli *Client) notifyDecryptedPayload(
 	ctx context.Context,
 	info *types.MessageInfo,
@@ -438,7 +444,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			// after it refused the result, so this is the last moment those
 			// bytes exist. Handing them over is the whole reason the hook is
 			// not simply placed on the success path.
-			if decrypted != nil {
+			if decrypted != nil && cli.DecryptedPayloadHandler != nil {
 				cli.notifyDecryptedPayload(ctx, info, node, childIndex, encType, decrypted)
 			}
 			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
@@ -474,7 +480,9 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		// Before anything reads the plaintext, including the protobuf
 		// unmarshal below: decryption already advanced the ratchet, so a
 		// payload this library cannot interpret is one nobody can recover.
-		cli.notifyDecryptedPayload(ctx, info, node, childIndex, encType, decrypted)
+		if cli.DecryptedPayloadHandler != nil {
+			cli.notifyDecryptedPayload(ctx, info, node, childIndex, encType, decrypted)
+		}
 
 		var msg waE2E.Message
 		var handlerFailed bool
