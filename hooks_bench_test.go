@@ -15,12 +15,15 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-// Both hooks take their argument by value rather than by pointer, and these
-// exist to keep it that way. A pointer would escape through the indirect call
-// and cost one heap allocation per stanza. Small, and on the receive path of
-// a long-running process, which is where small and per-stanza adds up.
+// [RawNodeHandler] takes its argument by value rather than by pointer, and
+// these exist to keep it that way. A pointer would escape through the indirect
+// call and cost one heap allocation per stanza. Small, and on the receive path
+// of a long-running process, which is where small and per-stanza adds up.
 //
-// Compare the two: the numbers have to match.
+// Compare the two: the allocation counts have to match. Both let the node
+// through, so that the difference between them is the hook and not the work
+// downstream of it — a hook that drops would skip the dispatch the unset case
+// still pays for, and the two would not be comparable.
 //
 //	go test -run XXX -bench BenchmarkRawNodeHook -benchmem
 func benchmarkFrame(b *testing.B) []byte {
@@ -52,11 +55,16 @@ func BenchmarkRawNodeHookUnset(b *testing.B) {
 
 func BenchmarkRawNodeHookSet(b *testing.B) {
 	cli := NewClient(&store.Device{}, waLog.Noop)
+	// Drained, as above.
+	go func() {
+		for range cli.handlerQueue {
+		}
+	}()
 	cli.RawNodeHandler = func(_ context.Context, raw RawNode) (*waBinary.Node, bool) {
 		if len(raw.Frame) == 0 {
 			b.Fatal("the hook was handed no frame")
 		}
-		return nil, true
+		return nil, false
 	}
 	frame := benchmarkFrame(b)
 
