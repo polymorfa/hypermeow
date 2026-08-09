@@ -122,16 +122,17 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 	if fromLID != nil {
 		cli.StoreLIDPNMapping(ctx, *fromLID, from)
 	}
-	cached, ok := cli.userDevicesCache[from]
-	if !ok {
-		cli.Log.Debugf("No device list cached for %s, ignoring device list notification", from)
-		return
-	}
+	cached, hasCachedPN := cli.userDevicesCache[from]
 	var cachedLID deviceCache
 	var cachedLIDHash string
+	var hasCachedLID bool
 	if fromLID != nil {
-		cachedLID = cli.userDevicesCache[*fromLID]
+		cachedLID, hasCachedLID = cli.userDevicesCache[*fromLID]
 		cachedLIDHash = participantListHashV2(cachedLID.devices)
+	}
+	if !hasCachedPN && !hasCachedLID {
+		cli.Log.Debugf("No device list cached for %s, ignoring device list notification", from)
+		return
 	}
 	cachedParticipantHash := participantListHashV2(cached.devices)
 	for _, child := range node.GetChildren() {
@@ -143,15 +144,19 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 		changedDeviceLID := deviceChild.AttrGetter().OptionalJID("lid")
 		switch child.Tag {
 		case "add":
-			cached.devices = append(cached.devices, changedDeviceJID)
-			if changedDeviceLID != nil {
+			if hasCachedPN {
+				cached.devices = append(cached.devices, changedDeviceJID)
+			}
+			if hasCachedLID && changedDeviceLID != nil {
 				cachedLID.devices = append(cachedLID.devices, *changedDeviceLID)
 			}
 		case "remove":
-			cached.devices = slices.DeleteFunc(cached.devices, func(existing types.JID) bool {
-				return existing == changedDeviceJID
-			})
-			if changedDeviceLID != nil {
+			if hasCachedPN {
+				cached.devices = slices.DeleteFunc(cached.devices, func(existing types.JID) bool {
+					return existing == changedDeviceJID
+				})
+			}
+			if hasCachedLID && changedDeviceLID != nil {
 				cachedLID.devices = slices.DeleteFunc(cachedLID.devices, func(existing types.JID) bool {
 					return existing == *changedDeviceLID
 				})
@@ -160,20 +165,25 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 			// Exact meaning of "update" is unknown, clear device list cache to be safe
 			cli.Log.Debugf("%s's device list updated, dropping cached devices", from)
 			delete(cli.userDevicesCache, from)
+			if fromLID != nil {
+				delete(cli.userDevicesCache, *fromLID)
+			}
 			continue
 		default:
 			cli.Log.Debugf("Unknown device list change tag %s", child.Tag)
 			continue
 		}
-		newParticipantHash := participantListHashV2(cached.devices)
-		if newParticipantHash == deviceHash {
-			cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", from, cachedParticipantHash, deviceHash, child.Tag)
-			putBoundedCache(ensureMap(&cli.userDevicesCache), from, cached, maxUserDeviceCacheEntries)
-		} else {
-			cli.Log.Warnf("%s's device list hash changed from %s to %s (%s). New hash doesn't match (%s)", from, cachedParticipantHash, deviceHash, child.Tag, newParticipantHash)
-			delete(cli.userDevicesCache, from)
+		if hasCachedPN {
+			newParticipantHash := participantListHashV2(cached.devices)
+			if newParticipantHash == deviceHash {
+				cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", from, cachedParticipantHash, deviceHash, child.Tag)
+				putBoundedCache(ensureMap(&cli.userDevicesCache), from, cached, maxUserDeviceCacheEntries)
+			} else {
+				cli.Log.Warnf("%s's device list hash changed from %s to %s (%s). New hash doesn't match (%s)", from, cachedParticipantHash, deviceHash, child.Tag, newParticipantHash)
+				delete(cli.userDevicesCache, from)
+			}
 		}
-		if fromLID != nil && changedDeviceLID != nil && deviceLIDHash != "" {
+		if fromLID != nil && hasCachedLID && changedDeviceLID != nil && deviceLIDHash != "" {
 			newLIDParticipantHash := participantListHashV2(cachedLID.devices)
 			if newLIDParticipantHash == deviceLIDHash {
 				cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", fromLID, cachedLIDHash, deviceLIDHash, child.Tag)
