@@ -68,8 +68,11 @@ func buildBusinessProfileDelta(update types.BusinessProfileUpdate) (waBinary.Nod
 		children = append(children, waBinary.Node{Tag: "description", Content: []byte(*update.Description)})
 	}
 	if update.Websites != nil {
-		if len(*update.Websites) < 1 || len(*update.Websites) > 2 {
-			return waBinary.Node{}, fmt.Errorf("business profile must contain between 1 and 2 websites")
+		if len(*update.Websites) > 2 {
+			return waBinary.Node{}, fmt.Errorf("business profile must contain at most 2 websites")
+		}
+		if len(*update.Websites) == 0 {
+			children = append(children, waBinary.Node{Tag: "website", Content: []byte{}})
 		}
 		for _, website := range *update.Websites {
 			if len(website) > 2048 {

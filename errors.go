@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 )
@@ -231,7 +232,7 @@ func (iqe *IQError) Is(other error) bool {
 	} else if iqe.Code != 0 && otherIQE.Code != 0 {
 		return otherIQE.Code == iqe.Code && otherIQE.Text == iqe.Text
 	} else if iqe.ErrorNode != nil && otherIQE.ErrorNode != nil {
-		return iqe.ErrorNode.String() == otherIQE.ErrorNode.String()
+		return reflect.DeepEqual(iqe.ErrorNode, otherIQE.ErrorNode)
 	} else {
 		return false
 	}

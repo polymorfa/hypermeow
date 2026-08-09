@@ -62,6 +62,22 @@ func TestBuildBusinessProfileDelta(t *testing.T) {
 	}
 }
 
+func TestBuildBusinessProfileDeltaClearsWebsites(t *testing.T) {
+	websites := []string{}
+	node, err := buildBusinessProfileDelta(types.BusinessProfileUpdate{Websites: &websites})
+	if err != nil {
+		t.Fatal(err)
+	}
+	websiteNodes := node.GetChildrenByTag("website")
+	if len(websiteNodes) != 1 {
+		t.Fatalf("website nodes = %d, want removal node", len(websiteNodes))
+	}
+	content, ok := websiteNodes[0].Content.([]byte)
+	if !ok || len(content) != 0 {
+		t.Fatalf("website removal content = %#v", websiteNodes[0].Content)
+	}
+}
+
 func TestBuildBusinessProfileDeltaRejectsInvalidInput(t *testing.T) {
 	tooManyWebsites := []string{"https://one.test", "https://two.test", "https://three.test"}
 	tests := []types.BusinessProfileUpdate{
