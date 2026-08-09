@@ -190,14 +190,14 @@ func decodeBusinessCollectionMutation(data json.RawMessage, discriminator string
 	return &types.BusinessCollectionMutationResult{ID: response.Collection.ID, ReviewStatus: response.Collection.Status.Status}, nil
 }
 
-func decodeBusinessCollectionSuccess(data json.RawMessage, discriminator string) error {
+func decodeBusinessCatalogSuccess(data json.RawMessage, discriminator string) error {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return fmt.Errorf("decode business collection response: %w", err)
+		return fmt.Errorf("decode business catalog response: %w", err)
 	}
 	raw, ok := envelope[discriminator]
 	if !ok {
-		return fmt.Errorf("business collection response is missing %s", discriminator)
+		return fmt.Errorf("business catalog response is missing %s", discriminator)
 	}
 	var response struct {
 		Success *bool `json:"success"`
@@ -260,7 +260,7 @@ func (cli *Client) DeleteBusinessCollections(ctx context.Context, collectionIDs 
 	if err != nil {
 		return fmt.Errorf("delete business collections: %w", err)
 	}
-	return decodeBusinessCollectionSuccess(data, "xfb_whatsapp_catalog_delete_collections")
+	return decodeBusinessCatalogSuccess(data, "xfb_whatsapp_catalog_delete_collections")
 }
 
 func (cli *Client) ReorderBusinessCollections(ctx context.Context, moves []types.BusinessCollectionMove) error {
@@ -276,5 +276,5 @@ func (cli *Client) ReorderBusinessCollections(ctx context.Context, moves []types
 	if err != nil {
 		return fmt.Errorf("reorder business collections: %w", err)
 	}
-	return decodeBusinessCollectionSuccess(data, "xfb_whatsapp_catalog_update_collection_list")
+	return decodeBusinessCatalogSuccess(data, "xfb_whatsapp_catalog_update_collection_list")
 }

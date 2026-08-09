@@ -96,10 +96,10 @@ func TestDecodeBusinessCollectionMutationResponses(t *testing.T) {
 		t.Fatalf("updated = %#v, error = %v", updated, err)
 	}
 	for _, discriminator := range []string{"xfb_whatsapp_catalog_delete_collections", "xfb_whatsapp_catalog_update_collection_list"} {
-		if err = decodeBusinessCollectionSuccess(json.RawMessage(`{"`+discriminator+`":{"success":true}}`), discriminator); err != nil {
+		if err = decodeBusinessCatalogSuccess(json.RawMessage(`{"`+discriminator+`":{"success":true}}`), discriminator); err != nil {
 			t.Fatalf("%s success failed: %v", discriminator, err)
 		}
-		if err = decodeBusinessCollectionSuccess(json.RawMessage(`{"`+discriminator+`":{"success":false}}`), discriminator); err == nil {
+		if err = decodeBusinessCatalogSuccess(json.RawMessage(`{"`+discriminator+`":{"success":false}}`), discriminator); err == nil {
 			t.Fatalf("%s false success unexpectedly passed", discriminator)
 		}
 	}
