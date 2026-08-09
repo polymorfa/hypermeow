@@ -79,6 +79,16 @@ func TestNativeFlowBusinessMetadataUnwrapsMessages(t *testing.T) {
 	}
 }
 
+func TestListBusinessMetadataUnwrapsViewOnceV2Extension(t *testing.T) {
+	msg := &waE2E.Message{ViewOnceMessageV2Extension: &waE2E.FutureProofMessage{Message: &waE2E.Message{
+		ListMessage: &waE2E.ListMessage{ListType: waE2E.ListMessage_SINGLE_SELECT.Enum()},
+	}}}
+	attrs := getButtonAttributes(msg)
+	if attrs["v"] != "2" || attrs["type"] != "single_select" {
+		t.Fatalf("unexpected list metadata: %#v", attrs)
+	}
+}
+
 func TestSetParticipantHashMismatch(t *testing.T) {
 	tests := []struct {
 		name string

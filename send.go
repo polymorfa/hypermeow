@@ -1049,6 +1049,8 @@ func getButtonAttributes(msg *waE2E.Message) waBinary.Attrs {
 		return getButtonAttributes(msg.ViewOnceMessage.Message)
 	case msg.ViewOnceMessageV2 != nil:
 		return getButtonAttributes(msg.ViewOnceMessageV2.Message)
+	case msg.ViewOnceMessageV2Extension != nil:
+		return getButtonAttributes(msg.ViewOnceMessageV2Extension.Message)
 	case msg.EphemeralMessage != nil:
 		return getButtonAttributes(msg.EphemeralMessage.Message)
 	case msg.TemplateMessage != nil:
