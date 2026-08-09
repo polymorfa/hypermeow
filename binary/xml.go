@@ -21,6 +21,19 @@ var (
 	MaxBytesToPrintAsHex = 128
 )
 
+func sensitiveXMLAttribute(key string) bool {
+	return key == "auth" || key == "token"
+}
+
+func sensitiveXMLNodeContent(tag string) bool {
+	switch tag {
+	case "address", "description", "email", "website":
+		return true
+	default:
+		return false
+	}
+}
+
 // String converts the Node to its XML representation
 func (n Node) String() string {
 	content := n.contentString()
@@ -41,6 +54,9 @@ func (n *Node) attributeString() string {
 	stringAttrs := make([]string, len(n.Attrs)+1)
 	i := 1
 	for key, value := range n.Attrs {
+		if sensitiveXMLAttribute(key) {
+			value = "[redacted]"
+		}
 		stringAttrs[i] = fmt.Sprintf(`%s="%v"`, key, value)
 		i++
 	}
@@ -69,6 +85,10 @@ func (n *Node) contentString() []string {
 			split = append(split, strings.Split(item.String(), "\n")...)
 		}
 	case []byte:
+		if sensitiveXMLNodeContent(n.Tag) {
+			split = append(split, "[redacted]")
+			break
+		}
 		if strContent := printable(content); len(strContent) > 0 {
 			if IndentXML {
 				split = append(split, strings.Split(string(content), "\n")...)
