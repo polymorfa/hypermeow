@@ -174,6 +174,24 @@ func TestGetIdentityVerificationCodesRequiresLID(t *testing.T) {
 	}
 }
 
+func TestSplitIdentityVerificationDevicesExcludesCurrentDevice(t *testing.T) {
+	local := types.NewJID("100000000000001", types.HiddenUserServer)
+	remote := types.NewJID("100000000000002", types.HiddenUserServer)
+	devices := []types.JID{
+		types.NewADJID(local.User, types.LIDDomain, 67),
+		types.NewADJID(local.User, types.LIDDomain, 0),
+		types.NewADJID(remote.User, types.LIDDomain, 0),
+	}
+
+	localDevices, remoteDevices := splitIdentityVerificationDevices(devices, local, remote, 67)
+	if len(localDevices) != 1 || localDevices[0].Device != 0 {
+		t.Fatalf("local devices = %v, want only device 0", localDevices)
+	}
+	if len(remoteDevices) != 1 || remoteDevices[0].Device != 0 {
+		t.Fatalf("remote devices = %v, want only device 0", remoteDevices)
+	}
+}
+
 func TestReadIdentityKeysUsesOptionalBatchReader(t *testing.T) {
 	devices := []types.JID{
 		types.NewADJID("100000000000001", types.LIDDomain, 1),

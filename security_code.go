@@ -81,16 +81,11 @@ func (cli *Client) GetIdentityVerificationCodes(ctx context.Context, userID type
 	if err != nil {
 		return nil, fmt.Errorf("get identity verification devices: %w", err)
 	}
-	localDevices := make([]types.JID, 0, len(devices))
-	remoteDevices := make([]types.JID, 0, len(devices))
-	for _, device := range devices {
-		switch {
-		case device.User == localLID.User && (device.Server == types.HiddenUserServer || device.Server == types.HostedLIDServer):
-			localDevices = append(localDevices, device)
-		case device.User == userID.User && (device.Server == types.HiddenUserServer || device.Server == types.HostedLIDServer):
-			remoteDevices = append(remoteDevices, device)
-		}
+	var currentDevice uint16
+	if cli.Store.ID != nil {
+		currentDevice = cli.Store.ID.Device
 	}
+	localDevices, remoteDevices := splitIdentityVerificationDevices(devices, localLID, userID, currentDevice)
 	if len(remoteDevices) == 0 {
 		return nil, fmt.Errorf("no devices found for %s", userID)
 	}
@@ -127,6 +122,22 @@ func (cli *Client) GetIdentityVerificationCodes(ctx context.Context, userID type
 		}
 	}
 	return newIdentityVerificationCodes(ctx, local, remote)
+}
+
+func splitIdentityVerificationDevices(devices []types.JID, localLID, remoteLID types.JID, currentDevice uint16) ([]types.JID, []types.JID) {
+	localDevices := make([]types.JID, 0, len(devices))
+	remoteDevices := make([]types.JID, 0, len(devices))
+	for _, device := range devices {
+		switch {
+		case device.User == localLID.User && (device.Server == types.HiddenUserServer || device.Server == types.HostedLIDServer):
+			if device.Device != currentDevice {
+				localDevices = append(localDevices, device)
+			}
+		case device.User == remoteLID.User && (device.Server == types.HiddenUserServer || device.Server == types.HostedLIDServer):
+			remoteDevices = append(remoteDevices, device)
+		}
+	}
+	return localDevices, remoteDevices
 }
 
 func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([][32]byte, error) {
