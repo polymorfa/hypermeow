@@ -230,6 +230,7 @@ func (cli *Client) filterContacts(mutations []appstate.Mutation) ([]appstate.Mut
 				JID:       jid,
 				FirstName: act.GetFirstName(),
 				FullName:  act.GetFullName(),
+				Username:  act.GetUsername(),
 			})
 		} else {
 			filteredMutations = append(filteredMutations, mutation)
@@ -313,6 +314,9 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		eventToDispatch = &events.Contact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
 		if cli.Store.Contacts != nil {
 			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
+			if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && storeUpdateError == nil {
+				storeUpdateError = usernameStore.PutContactUsername(ctx, jid, act.GetUsername())
+			}
 		}
 	case appstate.IndexClearChat:
 		act := mutation.Action.GetClearChatAction()

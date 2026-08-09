@@ -85,10 +85,11 @@ type ContactEntry struct {
 	JID       types.JID
 	FirstName string
 	FullName  string
+	Username  string
 }
 
-func (ce ContactEntry) GetMassInsertValues() [3]any {
-	return [...]any{ce.JID.String(), ce.FirstName, ce.FullName}
+func (ce ContactEntry) GetMassInsertValues() [4]any {
+	return [...]any{ce.JID.String(), ce.FirstName, ce.FullName, ce.Username}
 }
 
 type RedactedPhoneEntry struct {
@@ -108,6 +109,10 @@ type ContactStore interface {
 	PutManyRedactedPhones(ctx context.Context, entries []RedactedPhoneEntry) error
 	GetContact(ctx context.Context, user types.JID) (types.ContactInfo, error)
 	GetAllContacts(ctx context.Context) (map[types.JID]types.ContactInfo, error)
+}
+
+type ContactUsernameStore interface {
+	PutContactUsername(ctx context.Context, user types.JID, username string) error
 }
 
 var MutedForever = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)

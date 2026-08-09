@@ -343,14 +343,21 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		if info.SenderAlt.Server == types.HiddenUserServer {
 			senderEncryptionJID = info.SenderAlt
 			cli.migrateSessionStore(ctx, info.Sender, info.SenderAlt)
-		} else if lid, err := cli.Store.LIDs.GetLIDForPN(ctx, info.Sender); err != nil {
-			cli.Log.Errorf("Failed to get LID for %s: %v", info.Sender, err)
-		} else if !lid.IsEmpty() {
+		} else if lid, err := cli.resolveLID(ctx, info.Sender); err != nil {
+			cli.Log.Errorf("Failed to resolve LID for %s: %v", info.Sender, err)
+			if cli.SynchronousAck {
+				cli.sendRetryReceipt(ctx, node, info, false)
+				cli.sendAck(ctx, node, 0)
+			} else {
+				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, false)
+				go cli.sendAck(ctx, node, 0)
+			}
+			cli.dispatchEvent(&events.UndecryptableMessage{Info: *info})
+			return
+		} else {
 			cli.migrateSessionStore(ctx, info.Sender, lid)
 			senderEncryptionJID = lid
 			info.SenderAlt = lid
-		} else {
-			cli.Log.Warnf("No LID found for %s", info.Sender)
 		}
 	}
 	var recognizedStanza, protobufFailed bool
@@ -812,6 +819,9 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		if len(historySync.GetPhoneNumberToLidMappings()) > 0 {
 			cli.storeHistoricalPNLIDMappings(ctx, historySync.GetPhoneNumberToLidMappings())
 		}
+		if len(historySync.GetInlineContacts()) > 0 {
+			cli.storeHistoricalInlineContacts(ctx, historySync.GetInlineContacts())
+		}
 		if historySync.GetSyncType() == waHistorySync.HistorySync_PUSH_NAME {
 			cli.handleHistoricalPushNames(ctx, historySync.GetPushnames())
 		} else if len(historySync.GetConversations()) > 0 {
@@ -829,6 +839,49 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		go doStorage(storageCtx)
 	}
 	return &historySync, nil
+}
+
+func historicalInlineContactEntries(contacts []*waHistorySync.InlineContact) ([]store.ContactEntry, []store.LIDMapping) {
+	entries := make([]store.ContactEntry, 0, len(contacts))
+	mappings := make([]store.LIDMapping, 0, len(contacts))
+	for _, contact := range contacts {
+		if contact == nil {
+			continue
+		}
+		pn, _ := types.ParseJID(contact.GetPnJID())
+		lid, _ := types.ParseJID(contact.GetLidJID())
+		if pn.Server == types.DefaultUserServer && lid.Server == types.HiddenUserServer {
+			mappings = append(mappings, store.LIDMapping{PN: pn.ToNonAD(), LID: lid.ToNonAD()})
+		}
+		jid := lid.ToNonAD()
+		if jid.Server != types.HiddenUserServer {
+			jid = pn.ToNonAD()
+		}
+		if jid.Server != types.HiddenUserServer && jid.Server != types.DefaultUserServer {
+			continue
+		}
+		entries = append(entries, store.ContactEntry{
+			JID:       jid,
+			FirstName: contact.GetFirstName(),
+			FullName:  contact.GetFullName(),
+			Username:  contact.GetUsername(),
+		})
+	}
+	return entries, mappings
+}
+
+func (cli *Client) storeHistoricalInlineContacts(ctx context.Context, contacts []*waHistorySync.InlineContact) {
+	entries, mappings := historicalInlineContactEntries(contacts)
+	if len(mappings) > 0 {
+		if err := cli.Store.LIDs.PutManyLIDMappings(ctx, mappings); err != nil {
+			cli.Log.Warnf("Failed to store LID mappings from inline contacts: %v", err)
+		}
+	}
+	if len(entries) > 0 && cli.Store.Contacts != nil {
+		if err := cli.Store.Contacts.PutAllContactNames(ctx, entries); err != nil {
+			cli.Log.Warnf("Failed to store inline contacts: %v", err)
+		}
+	}
 }
 
 func (cli *Client) handleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.AppStateSyncKeyShare) {

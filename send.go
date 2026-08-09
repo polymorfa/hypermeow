@@ -337,21 +337,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	} else if to.Server == types.DefaultUserServer && !req.Peer {
 		start := time.Now()
 		var toLID types.JID
-		toLID, err = cli.Store.LIDs.GetLIDForPN(ctx, to)
+		toLID, err = cli.resolveLID(ctx, to)
 		if err != nil {
-			err = fmt.Errorf("failed to get LID for PN %s: %w", to, err)
+			err = fmt.Errorf("failed to resolve LID for PN %s: %w", to, err)
 			return
-		} else if toLID.IsEmpty() {
-			var info map[types.JID]types.UserInfo
-			cli.Log.Debugf("LID for %s not found, fetching user info", to)
-			info, err = cli.GetUserInfo(ctx, []types.JID{to})
-			if err != nil {
-				err = fmt.Errorf("failed to get user info for %s to fill LID cache: %w", to, err)
-				return
-			} else if toLID = info[to].LID; toLID.IsEmpty() {
-				err = fmt.Errorf("no LID found for %s from server", to)
-				return
-			}
 		}
 		resp.DebugTimings.LIDFetch = time.Since(start)
 		cli.Log.Debugf("Replacing SendMessage destination with LID %s -> %s", to, toLID)

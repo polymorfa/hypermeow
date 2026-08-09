@@ -33,6 +33,7 @@ type UserInfo struct {
 	PictureID    string
 	Devices      []JID
 	LID          JID
+	Username     string
 }
 
 type BotListInfo struct {
@@ -77,6 +78,7 @@ type ContactInfo struct {
 	FullName     string
 	PushName     string
 	BusinessName string
+	Username     string
 	// Only for LID members encountered in groups, the phone number in the form "+1∙∙∙∙∙∙∙∙80"
 	RedactedPhone string
 }
@@ -99,6 +101,12 @@ type IsOnWhatsAppResponse struct {
 	PhoneNumber JID
 
 	VerifiedName *VerifiedName // If the phone is a business, the verified business details.
+}
+
+type UsernameResolution struct {
+	LID         JID
+	Username    string
+	KeyRequired bool
 }
 
 // BusinessMessageLinkTarget contains the info that is found using a business message link (see Client.ResolveBusinessMessageLink)

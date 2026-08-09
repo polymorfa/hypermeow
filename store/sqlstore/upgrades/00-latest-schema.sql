@@ -114,6 +114,7 @@ CREATE TABLE whatsmeow_contacts (
 	push_name      TEXT,
 	business_name  TEXT,
 	redacted_phone TEXT,
+	username       TEXT,
 
 	PRIMARY KEY (our_jid, their_jid),
 	FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
