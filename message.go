@@ -790,6 +790,9 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 	cli.Log.Debugf("Received history sync (type %s, chunk %d, progress %d)", historySync.GetSyncType(), historySync.GetChunkOrder(), historySync.GetProgress())
+	if historySync.CompanionMetaNonce != nil && cli.shouldStoreHistorySyncNonce() {
+		cli.storeCompanionMetaNonce(ctx, historySync.GetCompanionMetaNonce())
+	}
 	doStorage := func(ctx context.Context) {
 		if err := cli.storeNCTSalt(ctx, historySync.GetNctSalt()); err != nil {
 			cli.Log.Warnf("Failed to store NCT salt from history sync: %v", err)
@@ -804,9 +807,6 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		}
 		if historySync.GlobalSettings != nil {
 			cli.storeGlobalSettings(ctx, historySync.GlobalSettings)
-		}
-		if historySync.CompanionMetaNonce != nil {
-			cli.storeCompanionMetaNonce(ctx, historySync.GetCompanionMetaNonce())
 		}
 	}
 	if !cli.shouldStoreHistorySync() {
@@ -940,6 +940,10 @@ func (cli *Client) shouldStoreHistorySync() bool {
 
 func (cli *Client) shouldDeleteHistorySyncMedia() bool {
 	return !cli.DisableHistorySyncMediaDelete
+}
+
+func (cli *Client) shouldStoreHistorySyncNonce() bool {
+	return cli.shouldStoreHistorySync() || cli.shouldDeleteHistorySyncMedia()
 }
 
 func (cli *Client) processProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {

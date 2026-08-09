@@ -38,3 +38,14 @@ func TestHistorySyncSideEffectsCanBeDisabledIndependently(t *testing.T) {
 		t.Fatal("history side effect was enabled")
 	}
 }
+
+func TestHistorySyncDeletionKeepsCompanionNonce(t *testing.T) {
+	client := &Client{DisableHistorySyncStorage: true}
+	if !client.shouldStoreHistorySyncNonce() {
+		t.Fatal("media deletion did not retain its companion nonce")
+	}
+	client.DisableHistorySyncMediaDelete = true
+	if client.shouldStoreHistorySyncNonce() {
+		t.Fatal("nonce storage remained enabled without storage or deletion")
+	}
+}
