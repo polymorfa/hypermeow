@@ -94,7 +94,7 @@ type BusinessNativeFlowButtonsMessageParams struct {
 }
 
 func validBusinessOwner(jid types.JID) bool {
-	return !jid.IsEmpty() && (jid.Server == types.DefaultUserServer || jid.Server == types.HiddenUserServer)
+	return !jid.IsEmpty() && jid.User != "" && (jid.Server == types.DefaultUserServer || jid.Server == types.HiddenUserServer)
 }
 
 func validCurrency(code string) bool {
@@ -144,11 +144,15 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 	if !bounded(params.Description, 4096) || !bounded(params.RetailerID, 256) || !bounded(params.URL, 2048) || !bounded(params.Body, 4096) || !bounded(params.Footer, 256) {
 		return nil, errors.New("business product message field is too large")
 	}
-	if !validCurrency(params.CurrencyCode) || params.PriceAmount1000 < 0 || params.SalePriceAmount1000 < 0 {
+	if params.PriceAmount1000 < 0 || params.SalePriceAmount1000 < 0 {
 		return nil, errors.New("invalid business product price")
 	}
-	if params.SalePriceAmount1000 > 0 && params.PriceAmount1000 == 0 {
-		return nil, errors.New("business product sale price requires a base price")
+	if params.PriceAmount1000 == 0 {
+		if params.CurrencyCode != "" || params.SalePriceAmount1000 > 0 {
+			return nil, errors.New("business product currency and sale price require a base price")
+		}
+	} else if !validCurrency(params.CurrencyCode) {
+		return nil, errors.New("invalid business product currency")
 	}
 	if params.ProductImageCount > 10 {
 		return nil, errors.New("business product cannot contain more than 10 images")
@@ -162,7 +166,7 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 	return &waE2E.Message{ProductMessage: &waE2E.ProductMessage{
 		Product: &waE2E.ProductMessage_ProductSnapshot{
 			ProductImage: params.ProductImage, ProductID: proto.String(params.ProductID), Title: proto.String(params.Title),
-			Description: optionalString(params.Description), CurrencyCode: proto.String(params.CurrencyCode),
+			Description: optionalString(params.Description), CurrencyCode: optionalString(params.CurrencyCode),
 			PriceAmount1000: optionalPositiveInt64(params.PriceAmount1000), SalePriceAmount1000: optionalPositiveInt64(params.SalePriceAmount1000),
 			RetailerID: optionalString(params.RetailerID), URL: optionalString(params.URL), ProductImageCount: optionalPositiveUint32(params.ProductImageCount),
 		},
@@ -174,7 +178,7 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 	if !validBusinessOwner(params.BusinessOwnerJID) {
 		return nil, errors.New("invalid business owner JID")
 	}
-	if strings.TrimSpace(params.Title) == "" || !bounded(params.Title, 256) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Description, 4096) || !bounded(params.Footer, 256) {
+	if strings.TrimSpace(params.Title) == "" || !bounded(params.Title, 60) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business product list text")
 	}
 	if len(params.Sections) == 0 || len(params.Sections) > 10 {
@@ -184,7 +188,7 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 	seen := make(map[string]struct{})
 	productCount := 0
 	for index, section := range params.Sections {
-		if !bounded(section.Title, 256) || len(section.ProductIDs) == 0 {
+		if !bounded(section.Title, 24) || len(section.ProductIDs) == 0 {
 			return nil, fmt.Errorf("invalid business product section %d", index)
 		}
 		products := make([]*waE2E.ListMessage_Product, len(section.ProductIDs))
@@ -270,7 +274,7 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 }
 
 func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 4096) || !bounded(params.Title, 256) || !bounded(params.Footer, 256) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || !bounded(params.Title, 60) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business native-flow text")
 	}
 	if len(params.Buttons) == 0 || len(params.Buttons) > 3 {

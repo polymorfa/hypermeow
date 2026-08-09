@@ -94,7 +94,7 @@ func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 func TestBusinessMessageBuildersNormalizeOwnerJIDs(t *testing.T) {
 	deviceOwner := types.NewADJID("15550001", 0, 3)
 	product, err := BuildBusinessProductMessage(BusinessProductMessageParams{
-		BusinessOwnerJID: deviceOwner, ProductID: "p-tea", Title: "Tea", CurrencyCode: "USD",
+		BusinessOwnerJID: deviceOwner, ProductID: "p-tea", Title: "Tea", CurrencyCode: "USD", PriceAmount1000: 1250,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestBusinessMessageBuildersNormalizeOwnerJIDs(t *testing.T) {
 	}
 	lidOwner := types.NewJID("123456789", types.HiddenUserServer)
 	list, err := BuildBusinessProductListMessage(BusinessProductListMessageParams{
-		BusinessOwnerJID: lidOwner, Title: "Products", ButtonText: "View",
+		BusinessOwnerJID: lidOwner, Title: "Products", Description: "Choose a product", ButtonText: "View",
 		Sections: []BusinessProductSection{{ProductIDs: []string{"p-tea"}}},
 	})
 	if err != nil {
@@ -155,6 +155,16 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 			}
 		})
 	}
+	if _, err := BuildBusinessProductMessage(BusinessProductMessageParams{
+		BusinessOwnerJID: owner, ProductID: "p", Title: "Tea",
+	}); err != nil {
+		t.Fatalf("unpriced product was rejected: %v", err)
+	}
+	if _, err := BuildBusinessProductMessage(BusinessProductMessageParams{
+		BusinessOwnerJID: types.NewJID("", types.DefaultUserServer), ProductID: "p", Title: "Tea",
+	}); err == nil {
+		t.Fatal("expected ownerless business JID to fail")
+	}
 	if _, err := BuildBusinessProductListMessage(BusinessProductListMessageParams{
 		BusinessOwnerJID: types.NewJID("15550001", types.DefaultUserServer), Title: "Products", ButtonText: "View",
 		Sections: []BusinessProductSection{{Title: "Tea", ProductIDs: []string{"p", "p"}}},
@@ -177,6 +187,51 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 		Body: "Choose", Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: "not-json"}},
 	}); err == nil {
 		t.Fatal("expected malformed native-flow parameters to fail")
+	}
+}
+
+func TestBusinessProductListAndNativeFlowTextLimits(t *testing.T) {
+	owner := types.NewJID("15550001", types.DefaultUserServer)
+	productList := BusinessProductListMessageParams{
+		BusinessOwnerJID: owner, Title: "Products", Description: "Choose", ButtonText: "View", Footer: "Footer",
+		Sections: []BusinessProductSection{{Title: "Section", ProductIDs: []string{"p"}}},
+	}
+	productMutations := map[string]func(*BusinessProductListMessageParams){
+		"missing body":  func(params *BusinessProductListMessageParams) { params.Description = "" },
+		"header":        func(params *BusinessProductListMessageParams) { params.Title = strings.Repeat("h", 61) },
+		"body":          func(params *BusinessProductListMessageParams) { params.Description = strings.Repeat("b", 1025) },
+		"button":        func(params *BusinessProductListMessageParams) { params.ButtonText = strings.Repeat("c", 21) },
+		"footer":        func(params *BusinessProductListMessageParams) { params.Footer = strings.Repeat("f", 61) },
+		"section title": func(params *BusinessProductListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 25) },
+	}
+	for name, mutate := range productMutations {
+		t.Run("product list "+name, func(t *testing.T) {
+			params := productList
+			params.Sections = append([]BusinessProductSection(nil), productList.Sections...)
+			mutate(&params)
+			if _, err := BuildBusinessProductListMessage(params); err == nil {
+				t.Fatal("expected product-list protocol limit error")
+			}
+		})
+	}
+
+	nativeFlow := BusinessNativeFlowButtonsMessageParams{
+		Title: "Title", Body: "Choose", Footer: "Footer",
+		Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: `{}`}},
+	}
+	nativeMutations := map[string]func(*BusinessNativeFlowButtonsMessageParams){
+		"header": func(params *BusinessNativeFlowButtonsMessageParams) { params.Title = strings.Repeat("h", 61) },
+		"body":   func(params *BusinessNativeFlowButtonsMessageParams) { params.Body = strings.Repeat("b", 1025) },
+		"footer": func(params *BusinessNativeFlowButtonsMessageParams) { params.Footer = strings.Repeat("f", 61) },
+	}
+	for name, mutate := range nativeMutations {
+		t.Run("native flow "+name, func(t *testing.T) {
+			params := nativeFlow
+			mutate(&params)
+			if _, err := BuildBusinessNativeFlowButtonsMessage(params); err == nil {
+				t.Fatal("expected native-flow protocol limit error")
+			}
+		})
 	}
 }
 
