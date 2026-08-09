@@ -152,6 +152,26 @@ func TestIdentityCacheIsBounded(t *testing.T) {
 	}
 }
 
+func TestCacheFetchedIdentitiesPreservesConcurrentWrites(t *testing.T) {
+	address := "100000011111111_1:7"
+	oldKey := [32]byte{1}
+	newKey := [32]byte{2}
+	store := &SQLStore{identityCache: map[string]identityCacheEntry{
+		address: {Key: newKey, Present: true},
+	}}
+	result := map[string][32]byte{address: oldKey}
+	store.cacheFetchedIdentities(result, map[string]identityCacheEntry{
+		address: {Key: oldKey, Present: true},
+	})
+
+	if got := store.identityCache[address]; !got.Present || got.Key != newKey {
+		t.Fatalf("identity cache was overwritten with stale query result: %#v", got)
+	}
+	if result[address] != newKey {
+		t.Fatalf("returned identity = %x, want concurrent value %x", result[address], newKey)
+	}
+}
+
 func TestContactCacheIsBounded(t *testing.T) {
 	store := &SQLStore{contactCache: make(map[types.JID]*types.ContactInfo, maxContactCacheEntries)}
 	for i := 0; i < maxContactCacheEntries; i++ {

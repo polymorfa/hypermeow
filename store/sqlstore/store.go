@@ -281,12 +281,24 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 	if err != nil {
 		return nil, err
 	}
+	s.cacheFetchedIdentities(result, fetched)
+	return result, nil
+}
+
+func (s *SQLStore) cacheFetchedIdentities(result map[string][32]byte, fetched map[string]identityCacheEntry) {
 	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
 	for address, entry := range fetched {
+		if current, ok := s.identityCache[address]; ok {
+			if current.Present {
+				result[address] = current.Key
+			} else {
+				delete(result, address)
+			}
+			continue
+		}
 		s.setCachedIdentityLocked(address, entry)
 	}
-	s.identityCacheLock.Unlock()
-	return result, nil
 }
 
 const (
