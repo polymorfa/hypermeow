@@ -202,6 +202,25 @@ func TestBusinessNonceDeliveredBeforeHandlerQueue(t *testing.T) {
 	}
 }
 
+func TestBusinessNonceIsNotRedeliveredFromHandlerQueue(t *testing.T) {
+	client := &Client{}
+	state := client.getBusinessCatalogAuth()
+	firstWaiter := &businessNonceWaiter{ch: make(chan string, 1)}
+	state.nonceWaiter.Store(firstWaiter)
+	node := &waBinary.Node{Tag: "notification", Attrs: waBinary.Attrs{"type": "business"}, Content: []waBinary.Node{{Tag: "wa_ad_account_nonce", Content: []byte("stale-nonce")}}}
+	client.handleOutOfBandNode(node)
+	<-firstWaiter.ch
+
+	secondWaiter := &businessNonceWaiter{ch: make(chan string, 1)}
+	state.nonceWaiter.Store(secondWaiter)
+	client.handleQueuedBusinessCatalogNotification(node)
+	select {
+	case nonce := <-secondWaiter.ch:
+		t.Fatalf("queued handler redelivered stale nonce %q", nonce)
+	default:
+	}
+}
+
 func TestSendBusinessFacebookGraphQL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {

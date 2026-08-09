@@ -38,6 +38,8 @@ var (
 	errBusinessIncorrectNonce        = errors.New("business access token nonce was rejected")
 )
 
+const businessNonceDeliveredAttr = "__whatsmeow_business_nonce_delivered"
+
 type businessAccessToken struct {
 	accessToken string
 	actorID     string
@@ -405,6 +407,12 @@ func (cli *Client) handleBusinessCatalogNotification(node *waBinary.Node) {
 	select {
 	case waiter.ch <- string(nonce):
 	default:
+	}
+}
+
+func (cli *Client) handleQueuedBusinessCatalogNotification(node *waBinary.Node) {
+	if delivered, _ := node.Attrs[businessNonceDeliveredAttr].(bool); !delivered {
+		cli.handleBusinessCatalogNotification(node)
 	}
 }
 

@@ -939,6 +939,7 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 func (cli *Client) handleOutOfBandNode(node *waBinary.Node) {
 	if node.Tag == "notification" && node.Attrs["type"] == "business" {
 		cli.handleBusinessCatalogNotification(node)
+		node.Attrs[businessNonceDeliveredAttr] = true
 	}
 }
 

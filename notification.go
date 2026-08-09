@@ -507,7 +507,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "passkey_prologue_request":
 		cli.handlePasskeyNotification(ctx, node)
 	case "business":
-		cli.handleBusinessCatalogNotification(node)
+		cli.handleQueuedBusinessCatalogNotification(node)
 	case "crsc_continuation":
 		go cli.tryHandlePasskeyContinuationNotification(ctx, node)
 	// Other types: disappearing_mode, server, status, pay, psa
