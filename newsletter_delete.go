@@ -17,6 +17,14 @@ func buildDeleteNewsletterVariables(jid types.JID) (deleteNewsletterVariables, e
 	if jid.IsEmpty() || jid.User == "" || jid.Server != types.NewsletterServer {
 		return deleteNewsletterVariables{}, fmt.Errorf("newsletter JID must use the newsletter server")
 	}
+	if len(jid.User) > 256 {
+		return deleteNewsletterVariables{}, fmt.Errorf("newsletter JID user exceeds 256 bytes")
+	}
+	for _, character := range jid.User {
+		if character < '0' || character > '9' {
+			return deleteNewsletterVariables{}, fmt.Errorf("newsletter JID user must be numeric")
+		}
+	}
 	if jid.RawAgent != 0 || jid.Device != 0 || jid.Integrator != 0 {
 		return deleteNewsletterVariables{}, fmt.Errorf("newsletter JID must not identify a device")
 	}

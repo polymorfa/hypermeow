@@ -2,6 +2,7 @@ package whatsmeow
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"go.mau.fi/whatsmeow/types"
@@ -12,6 +13,8 @@ func TestBuildDeleteNewsletterVariablesRejectsNonNewsletterJID(t *testing.T) {
 		types.EmptyJID,
 		types.NewJID("15551234567", types.DefaultUserServer),
 		types.NewJID("120363000000000000", types.GroupServer),
+		types.NewJID("not-numeric", types.NewsletterServer),
+		types.NewJID(strings.Repeat("1", 257), types.NewsletterServer),
 	}
 	for _, jid := range tests {
 		if _, err := buildDeleteNewsletterVariables(jid); err == nil {
