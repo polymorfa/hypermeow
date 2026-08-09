@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -291,5 +292,31 @@ func TestUploadBusinessProductImageUsesPlaintextProductPath(t *testing.T) {
 	got, err := client.UploadBusinessProductImage(context.Background(), image)
 	if err != nil || got != "https://mmg.whatsapp.net/product/tea" {
 		t.Fatalf("URL = %q, error = %v", got, err)
+	}
+}
+
+type businessProductRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip businessProductRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+func TestUploadBusinessProductImageRedactsTransportURL(t *testing.T) {
+	sentinel := errors.New("synthetic transport failure")
+	client := &Client{
+		mediaHTTP: &http.Client{Transport: businessProductRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, sentinel
+		})},
+		mediaConnCache: &MediaConn{
+			Auth: "sensitive-auth", TTL: 3600, FetchedAt: time.Now(), Hosts: []MediaConnHost{{Hostname: "upload.invalid"}},
+		},
+	}
+	image := append([]byte("\x89PNG\r\n\x1a\n"), []byte("synthetic-product-image")...)
+	_, err := client.UploadBusinessProductImage(context.Background(), image)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("transport cause was not preserved: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive-auth") {
+		t.Fatalf("transport error exposed auth query: %v", err)
 	}
 }

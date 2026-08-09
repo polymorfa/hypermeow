@@ -689,6 +689,9 @@ func (cli *Client) UploadBusinessProductImage(ctx context.Context, image []byte)
 	request.Header.Set("Referer", socket.Origin+"/")
 	response, err := cli.mediaHTTP.Do(request)
 	if err != nil {
+		if urlErr, ok := err.(*url.Error); ok {
+			err = urlErr.Err
+		}
 		return "", fmt.Errorf("upload business product image: %w", err)
 	}
 	defer drainAndClose(response.Body)
