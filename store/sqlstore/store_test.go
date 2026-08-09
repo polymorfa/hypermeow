@@ -114,7 +114,7 @@ func TestContactCacheIsBounded(t *testing.T) {
 	}
 }
 
-func TestMigratePNToLIDSkipsTransactionWhenNoPNRowsExist(t *testing.T) {
+func TestMigratePNToLIDDoesNotCacheEmptyPreflight(t *testing.T) {
 	state := &pnMigrationTestDB{}
 	db := sql.OpenDB(&pnMigrationTestConnector{state: state})
 	t.Cleanup(func() { _ = db.Close() })
@@ -132,7 +132,7 @@ func TestMigratePNToLIDSkipsTransactionWhenNoPNRowsExist(t *testing.T) {
 	if err := store.MigratePNToLID(context.Background(), pn, lid); err != nil {
 		t.Fatal(err)
 	}
-	if state.queries != 1 || state.begins != 0 {
+	if state.queries != 2 || state.begins != 0 {
 		t.Fatalf("unexpected database work: %d queries, %d transactions", state.queries, state.begins)
 	}
 	for _, table := range []string{"whatsmeow_sessions", "whatsmeow_identity_keys", "whatsmeow_sender_keys"} {
@@ -140,7 +140,7 @@ func TestMigratePNToLIDSkipsTransactionWhenNoPNRowsExist(t *testing.T) {
 			t.Fatalf("existence query did not cover %s", table)
 		}
 	}
-	wantArgs := []string{store.JID, "15551234567:", "15551234567;"}
+	wantArgs := []string{store.JID, "15551234567"}
 	if len(state.args) != len(wantArgs) {
 		t.Fatalf("unexpected existence query argument count %d", len(state.args))
 	}
