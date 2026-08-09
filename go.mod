@@ -5,7 +5,6 @@ go 1.25.0
 toolchain go1.26.5
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/beeper/argo-go v1.1.2
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
