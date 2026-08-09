@@ -1,6 +1,7 @@
 package whatsmeow
 
 import (
+	"fmt"
 	"testing"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -86,6 +87,54 @@ func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 	button := buttons.GetButtonsMessage().GetButtons()[0]
 	if button.GetType() != waE2E.ButtonsMessage_Button_NATIVE_FLOW || button.GetNativeFlowInfo().GetName() != "cta_url" {
 		t.Fatalf("unexpected native-flow button: %#v", button)
+	}
+}
+
+func TestBusinessMessageBuildersNormalizeOwnerJIDs(t *testing.T) {
+	deviceOwner := types.NewADJID("15550001", 0, 3)
+	product, err := BuildBusinessProductMessage(BusinessProductMessageParams{
+		BusinessOwnerJID: deviceOwner, ProductID: "p-tea", Title: "Tea", CurrencyCode: "USD",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := product.GetProductMessage().GetBusinessOwnerJID(); got != deviceOwner.ToNonAD().String() {
+		t.Fatalf("product owner = %q", got)
+	}
+	lidOwner := types.NewJID("123456789", types.HiddenUserServer)
+	list, err := BuildBusinessProductListMessage(BusinessProductListMessageParams{
+		BusinessOwnerJID: lidOwner, Title: "Products", ButtonText: "View",
+		Sections: []BusinessProductSection{{ProductIDs: []string{"p-tea"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := list.GetListMessage().GetProductListInfo().GetBusinessOwnerJID(); got != lidOwner.String() {
+		t.Fatalf("product list owner = %q", got)
+	}
+}
+
+func TestBuildBusinessListRequiresBodyAndCapsRows(t *testing.T) {
+	valid := BusinessListMessageParams{
+		Description: "Choose a topic", ButtonText: "View topics",
+		Sections: []BusinessListSection{{Rows: []BusinessListRow{{ID: "one", Title: "One"}}}},
+	}
+	if _, err := BuildBusinessListMessage(valid); err != nil {
+		t.Fatalf("headerless list failed: %v", err)
+	}
+	missingBody := valid
+	missingBody.Title = "Optional header"
+	missingBody.Description = ""
+	if _, err := BuildBusinessListMessage(missingBody); err == nil {
+		t.Fatal("list without a body unexpectedly passed")
+	}
+	tooManyRows := valid
+	tooManyRows.Sections[0].Rows = make([]BusinessListRow, 11)
+	for index := range tooManyRows.Sections[0].Rows {
+		tooManyRows.Sections[0].Rows[index] = BusinessListRow{ID: fmt.Sprintf("row-%d", index), Title: "Row"}
+	}
+	if _, err := BuildBusinessListMessage(tooManyRows); err == nil {
+		t.Fatal("list with more than ten rows unexpectedly passed")
 	}
 }
 

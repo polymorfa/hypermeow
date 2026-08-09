@@ -93,7 +93,7 @@ type BusinessNativeFlowButtonsMessageParams struct {
 }
 
 func validBusinessOwner(jid types.JID) bool {
-	return !jid.IsEmpty() && jid.Server == types.DefaultUserServer && jid.Device == 0
+	return !jid.IsEmpty() && (jid.Server == types.DefaultUserServer || jid.Server == types.HiddenUserServer)
 }
 
 func validCurrency(code string) bool {
@@ -153,7 +153,7 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 			PriceAmount1000: optionalPositiveInt64(params.PriceAmount1000), SalePriceAmount1000: optionalPositiveInt64(params.SalePriceAmount1000),
 			RetailerID: optionalString(params.RetailerID), URL: optionalString(params.URL), ProductImageCount: optionalPositiveUint32(params.ProductImageCount),
 		},
-		BusinessOwnerJID: proto.String(params.BusinessOwnerJID.String()), Body: optionalString(params.Body), Footer: optionalString(params.Footer), ContextInfo: params.ContextInfo,
+		BusinessOwnerJID: proto.String(params.BusinessOwnerJID.ToNonAD().String()), Body: optionalString(params.Body), Footer: optionalString(params.Footer), ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
@@ -194,7 +194,7 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 	return &waE2E.Message{ListMessage: &waE2E.ListMessage{
 		Title: proto.String(params.Title), Description: optionalString(params.Description), ButtonText: proto.String(params.ButtonText),
 		ListType: waE2E.ListMessage_PRODUCT_LIST.Enum(), FooterText: optionalString(params.Footer),
-		ProductListInfo: &waE2E.ListMessage_ProductListInfo{ProductSections: sections, BusinessOwnerJID: proto.String(params.BusinessOwnerJID.String())}, ContextInfo: params.ContextInfo,
+		ProductListInfo: &waE2E.ListMessage_ProductListInfo{ProductSections: sections, BusinessOwnerJID: proto.String(params.BusinessOwnerJID.ToNonAD().String())}, ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
@@ -214,13 +214,13 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 	return &waE2E.Message{OrderMessage: &waE2E.OrderMessage{
 		OrderID: proto.String(params.OrderID), Thumbnail: params.Thumbnail, ItemCount: proto.Int32(params.ItemCount),
 		Status: params.Status.Enum(), Surface: waE2E.OrderMessage_CATALOG.Enum(), Message: optionalString(params.Message),
-		OrderTitle: optionalString(params.OrderTitle), SellerJID: proto.String(params.SellerJID.String()), Token: optionalString(params.Token),
+		OrderTitle: optionalString(params.OrderTitle), SellerJID: proto.String(params.SellerJID.ToNonAD().String()), Token: optionalString(params.Token),
 		TotalAmount1000: proto.Int64(params.TotalAmount1000), TotalCurrencyCode: proto.String(params.TotalCurrencyCode), CatalogType: optionalString(params.CatalogType), ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
 func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Title) == "" || !bounded(params.Title, 256) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Description, 4096) || !bounded(params.Footer, 256) {
+	if !bounded(params.Title, 256) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 4096) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Footer, 256) {
 		return nil, errors.New("invalid business list text")
 	}
 	if len(params.Sections) == 0 || len(params.Sections) > 10 {
@@ -247,8 +247,8 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 		}
 		sections[sectionIndex] = &waE2E.ListMessage_Section{Title: optionalString(section.Title), Rows: rows}
 	}
-	if rowCount > 30 {
-		return nil, errors.New("business list exceeds 30 rows")
+	if rowCount > 10 {
+		return nil, errors.New("business list exceeds 10 rows")
 	}
 	return &waE2E.Message{ListMessage: &waE2E.ListMessage{
 		Title: proto.String(params.Title), Description: optionalString(params.Description), ButtonText: proto.String(params.ButtonText),
