@@ -104,6 +104,8 @@ func (cli *Client) GetIdentityVerificationCodes(ctx context.Context, userID type
 
 	local := identityVerificationFingerprint{LID: localLID, Keys: localKeys}
 	remote := identityVerificationFingerprint{LID: userID, Keys: remoteKeys}
+	local.Hosted = hasHostedIdentityDevice(localDevices)
+	remote.Hosted = hasHostedIdentityDevice(remoteDevices)
 	if cli.Store.ID != nil && cli.Store.ID.Server == types.DefaultUserServer {
 		local.Phone = cli.Store.ID.ToNonAD()
 	}
@@ -141,6 +143,12 @@ func splitIdentityVerificationDevices(devices []types.JID, localLID, remoteLID t
 	return localDevices, remoteDevices
 }
 
+func hasHostedIdentityDevice(devices []types.JID) bool {
+	return slices.ContainsFunc(devices, func(device types.JID) bool {
+		return device.Server == types.HostedLIDServer || device.Server == types.HostedServer
+	})
+}
+
 func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([][32]byte, error) {
 	if cli == nil || cli.Store == nil {
 		return nil, ErrClientIsNil
@@ -162,6 +170,9 @@ func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([
 	stored, err := reader.GetManyIdentities(ctx, addresses)
 	if err != nil {
 		return nil, fmt.Errorf("read identity keys: %w", err)
+	}
+	if stored == nil {
+		stored = make(map[string][32]byte, len(addresses))
 	}
 	missing := make([]types.JID, 0, len(addresses)-len(stored))
 	for _, address := range addresses {

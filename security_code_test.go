@@ -206,6 +206,16 @@ func TestSplitIdentityVerificationDevicesKeepsDeviceZeroWithoutCurrentDevice(t *
 	}
 }
 
+func TestIdentityVerificationFingerprintMarksHostedDevices(t *testing.T) {
+	devices := []types.JID{
+		types.NewADJID("100000000000002", types.LIDDomain, 1),
+		types.NewADJID("100000000000002", types.HostedLIDDomain, 2),
+	}
+	if !hasHostedIdentityDevice(devices) {
+		t.Fatal("hosted identity device was labeled E2EE")
+	}
+}
+
 func TestReadIdentityKeysUsesOptionalBatchReader(t *testing.T) {
 	devices := []types.JID{
 		types.NewADJID("100000000000001", types.LIDDomain, 1),

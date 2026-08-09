@@ -169,7 +169,7 @@ func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error 
 	if err == nil {
 		for address := range s.identityCache {
 			if strings.HasPrefix(address, phone+":") {
-				delete(s.identityCache, address)
+				s.setCachedIdentityLocked(address, identityCacheEntry{})
 			}
 		}
 	}
@@ -181,7 +181,7 @@ func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
 	defer s.identityCacheLock.Unlock()
 	_, err := s.db.Exec(ctx, deleteIdentityQuery, s.JID, address)
 	if err == nil {
-		delete(s.identityCache, address)
+		s.setCachedIdentityLocked(address, identityCacheEntry{})
 	}
 	return err
 }
@@ -264,6 +264,23 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 		return result, nil
 	}
 
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	stillMissing := missing[:0]
+	for _, address := range missing {
+		if cached, ok := s.identityCache[address]; ok {
+			if cached.Present {
+				result[address] = cached.Key
+			}
+		} else {
+			stillMissing = append(stillMissing, address)
+		}
+	}
+	missing = stillMissing
+	if len(missing) == 0 {
+		return result, nil
+	}
+
 	rows, err := s.queryManyIdentities(ctx, missing)
 	fetched := make(map[string]identityCacheEntry, len(missing))
 	for _, address := range missing {
@@ -281,13 +298,17 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 	if err != nil {
 		return nil, err
 	}
-	s.cacheFetchedIdentities(result, fetched)
+	s.cacheFetchedIdentitiesLocked(result, fetched)
 	return result, nil
 }
 
 func (s *SQLStore) cacheFetchedIdentities(result map[string][32]byte, fetched map[string]identityCacheEntry) {
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
+	s.cacheFetchedIdentitiesLocked(result, fetched)
+}
+
+func (s *SQLStore) cacheFetchedIdentitiesLocked(result map[string][32]byte, fetched map[string]identityCacheEntry) {
 	for address, entry := range fetched {
 		if current, ok := s.identityCache[address]; ok {
 			if current.Present {

@@ -172,6 +172,24 @@ func TestCacheFetchedIdentitiesPreservesConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestDeleteIdentityLeavesNegativeCacheEntry(t *testing.T) {
+	state := &contactUsernameRaceDB{entered: make(chan struct{}), release: make(chan struct{})}
+	close(state.release)
+	db := sql.OpenDB(&contactUsernameRaceConnector{state: state})
+	t.Cleanup(func() { _ = db.Close() })
+	address := "100000011111111_1:7"
+	sqlStore := NewSQLStore(NewWithDB(db, "postgres", nil), types.NewJID("15550000000", types.DefaultUserServer))
+	sqlStore.identityCache = map[string]identityCacheEntry{address: {Key: [32]byte{1}, Present: true}}
+
+	if err := sqlStore.DeleteIdentity(context.Background(), address); err != nil {
+		t.Fatal(err)
+	}
+	entry, exists := sqlStore.identityCache[address]
+	if !exists || entry.Present {
+		t.Fatalf("identity deletion did not leave a negative cache entry: %#v", entry)
+	}
+}
+
 func TestContactCacheIsBounded(t *testing.T) {
 	store := &SQLStore{contactCache: make(map[types.JID]*types.ContactInfo, maxContactCacheEntries)}
 	for i := 0; i < maxContactCacheEntries; i++ {
