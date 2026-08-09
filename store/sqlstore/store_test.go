@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +70,44 @@ func (r *pnMigrationTestRows) Next(values []driver.Value) error {
 	return nil
 }
 
+type contactUsernameRaceDB struct {
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+type contactUsernameRaceConnector struct{ state *contactUsernameRaceDB }
+
+func (connector *contactUsernameRaceConnector) Connect(context.Context) (driver.Conn, error) {
+	return &contactUsernameRaceConn{state: connector.state}, nil
+}
+
+func (*contactUsernameRaceConnector) Driver() driver.Driver { return pnMigrationTestDriver{} }
+
+type contactUsernameRaceConn struct{ state *contactUsernameRaceDB }
+
+func (*contactUsernameRaceConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (*contactUsernameRaceConn) Close() error { return nil }
+func (*contactUsernameRaceConn) Begin() (driver.Tx, error) {
+	return contactUsernameRaceTx{}, nil
+}
+
+func (conn *contactUsernameRaceConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	conn.state.once.Do(func() {
+		close(conn.state.entered)
+		<-conn.state.release
+	})
+	return driver.RowsAffected(1), nil
+}
+
+type contactUsernameRaceTx struct{}
+
+func (contactUsernameRaceTx) Commit() error   { return nil }
+func (contactUsernameRaceTx) Rollback() error { return nil }
+
 func TestNewSQLStoreDefersCaches(t *testing.T) {
 	store := NewSQLStore(nil, types.JID{User: "123", Server: types.DefaultUserServer})
 	if store.contactCache != nil || store.identityCache != nil || store.migratedPNSessionsCache != nil || store.emptyPNMigrationCache != nil || store.migratingPNSessions != nil {
@@ -127,6 +166,40 @@ func TestContactCacheIsBounded(t *testing.T) {
 	}
 	if _, ok := store.contactCache[newJID]; !ok {
 		t.Fatal("new contact was not cached")
+	}
+}
+
+func TestPutManyContactUsernamesSerializesSingleWrites(t *testing.T) {
+	state := &contactUsernameRaceDB{entered: make(chan struct{}), release: make(chan struct{})}
+	db := sql.OpenDB(&contactUsernameRaceConnector{state: state})
+	t.Cleanup(func() { _ = db.Close() })
+	jid := types.NewJID("100000011111111", types.HiddenUserServer)
+	sqlStore := NewSQLStore(NewWithDB(db, "postgres", nil), types.NewJID("15550000000", types.DefaultUserServer))
+	sqlStore.contactCache = map[types.JID]*types.ContactInfo{jid: {Found: true, Username: "initial"}}
+
+	batchDone := make(chan error, 1)
+	go func() {
+		batchDone <- sqlStore.PutManyContactUsernames(context.Background(), []store.ContactUsernameEntry{{JID: jid, Username: "batch"}})
+	}()
+	<-state.entered
+	singleDone := make(chan error, 1)
+	go func() {
+		singleDone <- sqlStore.PutContactUsername(context.Background(), jid, "single")
+	}()
+	select {
+	case err := <-singleDone:
+		t.Fatalf("single write overtook batch write: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(state.release)
+	if err := <-batchDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-singleDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := sqlStore.contactCache[jid].Username; got != "single" {
+		t.Fatalf("cached username = %q, want single", got)
 	}
 }
 

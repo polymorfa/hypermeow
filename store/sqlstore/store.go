@@ -1010,6 +1010,8 @@ func (s *SQLStore) PutManyContactUsernames(ctx context.Context, entries []store.
 	entries = exslices.DeduplicateUnsortedOverwriteFunc(entries, func(entry store.ContactUsernameEntry) types.JID {
 		return entry.JID
 	})
+	s.contactCacheLock.Lock()
+	defer s.contactCacheLock.Unlock()
 	if err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
 		for batch := range slices.Chunk(entries, contactBatchSize) {
 			query, vars := putContactUsernamesMassInsertBuilder.Build([1]any{s.JID}, batch)
@@ -1021,14 +1023,12 @@ func (s *SQLStore) PutManyContactUsernames(ctx context.Context, entries []store.
 	}); err != nil {
 		return err
 	}
-	s.contactCacheLock.Lock()
 	for _, entry := range entries {
 		if cached, ok := s.contactCache[entry.JID]; ok {
 			cached.Username = entry.Username
 			cached.Found = true
 		}
 	}
-	s.contactCacheLock.Unlock()
 	return nil
 }
 
