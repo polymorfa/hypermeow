@@ -418,18 +418,27 @@ func (r *runner) run() (result, error) {
 		r.businessValid.Store(true)
 	}
 
+	if err = r.waitForRunCompletion(ctx); err != nil {
+		return r.snapshot(false), err
+	}
+	time.Sleep(2 * time.Second)
+	res := r.snapshot(true)
+	return res, nil
+}
+
+func (r *runner) waitForRunCompletion(ctx context.Context) error {
 	select {
 	case <-r.done:
 		select {
-		case err = <-r.fatalErr:
-			return r.snapshot(false), err
+		case err := <-r.fatalErr:
+			return err
 		default:
+			return nil
 		}
-		time.Sleep(2 * time.Second)
-		res := r.snapshot(true)
-		return res, nil
+	case err := <-r.fatalErr:
+		return err
 	case <-ctx.Done():
-		return r.snapshot(false), fmt.Errorf("benchmark incomplete: %w", ctx.Err())
+		return fmt.Errorf("benchmark incomplete: %w", ctx.Err())
 	}
 }
 

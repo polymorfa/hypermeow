@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"strconv"
@@ -90,6 +91,18 @@ func TestRunnerReportsFatalSmokeFailure(t *testing.T) {
 		}
 	default:
 		t.Fatal("fatal smoke failure was not propagated")
+	}
+}
+
+func TestWaitForRunCompletionWakesOnFatalSmokeFailure(t *testing.T) {
+	r := &runner{done: make(chan struct{}), fatalErr: make(chan error, 1)}
+	sentinel := errors.New("phone consent failed")
+	r.reportFatal(sentinel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.waitForRunCompletion(ctx); !errors.Is(err, sentinel) {
+		t.Fatalf("completion error = %v, want %v", err, sentinel)
 	}
 }
 
