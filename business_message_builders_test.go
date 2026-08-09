@@ -32,6 +32,23 @@ func TestBuildBusinessProductMessageMatchesWebGenerator(t *testing.T) {
 	}
 }
 
+func TestBuildBusinessProductMessagePreservesExplicitZeroPrice(t *testing.T) {
+	msg, err := BuildBusinessProductMessage(BusinessProductMessageParams{
+		BusinessOwnerJID: types.NewJID("15550001", types.DefaultUserServer),
+		ProductID:        "p-free",
+		Title:            "Free sample",
+		CurrencyCode:     "USD",
+		PriceAmount1000:  0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	price := msg.GetProductMessage().GetProduct().PriceAmount1000
+	if price == nil || *price != 0 {
+		t.Fatalf("explicit zero price was not preserved: %#v", price)
+	}
+}
+
 func TestBuildBusinessProductListMessageMatchesWebGenerator(t *testing.T) {
 	msg, err := BuildBusinessProductListMessage(BusinessProductListMessageParams{
 		BusinessOwnerJID: types.NewJID("15550001", types.DefaultUserServer),
@@ -146,7 +163,7 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	owner := types.NewJID("15550001", types.DefaultUserServer)
 	for name, params := range map[string]BusinessProductMessageParams{
 		"non-HTTPS URL":      {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", CurrencyCode: "USD", URL: "http://synthetic.invalid/product"},
-		"sale without price": {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", CurrencyCode: "USD", SalePriceAmount1000: 1000},
+		"sale without price": {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", SalePriceAmount1000: 1000},
 		"too many images":    {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", CurrencyCode: "USD", ProductImageCount: 11},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -147,11 +147,11 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 	if params.PriceAmount1000 < 0 || params.SalePriceAmount1000 < 0 {
 		return nil, errors.New("invalid business product price")
 	}
-	if params.PriceAmount1000 == 0 {
-		if params.CurrencyCode != "" || params.SalePriceAmount1000 > 0 {
-			return nil, errors.New("business product currency and sale price require a base price")
-		}
-	} else if !validCurrency(params.CurrencyCode) {
+	pricePresent := params.PriceAmount1000 != 0 || params.CurrencyCode != ""
+	if !pricePresent && params.SalePriceAmount1000 > 0 {
+		return nil, errors.New("business product sale price requires a base price")
+	}
+	if pricePresent && !validCurrency(params.CurrencyCode) {
 		return nil, errors.New("invalid business product currency")
 	}
 	if params.ProductImageCount > 10 {
@@ -163,11 +163,15 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 			return nil, errors.New("business product URL must be absolute HTTPS")
 		}
 	}
+	priceAmount1000 := optionalPositiveInt64(params.PriceAmount1000)
+	if pricePresent {
+		priceAmount1000 = proto.Int64(params.PriceAmount1000)
+	}
 	return &waE2E.Message{ProductMessage: &waE2E.ProductMessage{
 		Product: &waE2E.ProductMessage_ProductSnapshot{
 			ProductImage: params.ProductImage, ProductID: proto.String(params.ProductID), Title: proto.String(params.Title),
 			Description: optionalString(params.Description), CurrencyCode: optionalString(params.CurrencyCode),
-			PriceAmount1000: optionalPositiveInt64(params.PriceAmount1000), SalePriceAmount1000: optionalPositiveInt64(params.SalePriceAmount1000),
+			PriceAmount1000: priceAmount1000, SalePriceAmount1000: optionalPositiveInt64(params.SalePriceAmount1000),
 			RetailerID: optionalString(params.RetailerID), URL: optionalString(params.URL), ProductImageCount: optionalPositiveUint32(params.ProductImageCount),
 		},
 		BusinessOwnerJID: proto.String(params.BusinessOwnerJID.ToNonAD().String()), Body: optionalString(params.Body), Footer: optionalString(params.Footer), ContextInfo: params.ContextInfo,
