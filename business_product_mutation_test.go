@@ -180,6 +180,28 @@ func TestHandleBusinessNonceNotificationIsLazyAndNonBlocking(t *testing.T) {
 	}
 }
 
+func TestBusinessNonceDeliveredBeforeHandlerQueue(t *testing.T) {
+	client := &Client{handlerQueue: make(chan *waBinary.Node, 1)}
+	client.handlerQueue <- &waBinary.Node{Tag: "message"}
+	state := client.getBusinessCatalogAuth()
+	waiter := &businessNonceWaiter{ch: make(chan string, 1)}
+	state.nonceWaiter.Store(waiter)
+	node := &waBinary.Node{Tag: "notification", Attrs: waBinary.Attrs{"type": "business"}, Content: []waBinary.Node{{Tag: "wa_ad_account_nonce", Content: []byte("synthetic-nonce")}}}
+
+	client.handleOutOfBandNode(node)
+	select {
+	case nonce := <-waiter.ch:
+		if nonce != "synthetic-nonce" {
+			t.Fatalf("nonce = %q", nonce)
+		}
+	default:
+		t.Fatal("nonce was blocked behind the handler queue")
+	}
+	if len(client.handlerQueue) != 1 {
+		t.Fatalf("out-of-band delivery changed handler queue length to %d", len(client.handlerQueue))
+	}
+}
+
 func TestSendBusinessFacebookGraphQL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
