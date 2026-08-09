@@ -7,7 +7,7 @@ func TestCatalogBindingsMatchPinnedSpec(t *testing.T) {
 		t.Fatalf("source revision = %q", SourceRevision)
 	}
 	tests := map[OperationName]string{
-		DeleteNewsletter:              "30062808666639665",
+		DeleteNewsletter:             "30062808666639665",
 		QueryCatalog:                 "30445081048424116",
 		QueryCatalogProduct:          "9660926520672123",
 		QueryProductCollections:      "9430970660362540",
