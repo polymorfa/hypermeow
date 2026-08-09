@@ -357,6 +357,7 @@ func (cli *Client) ResolveUsername(ctx context.Context, username, key string) (t
 }
 
 func (cli *Client) resolveLID(ctx context.Context, phone types.JID) (types.JID, error) {
+	device := phone.Device
 	phone = phone.ToNonAD()
 	if phone.Server != types.DefaultUserServer {
 		return types.EmptyJID, fmt.Errorf("cannot resolve non-PN JID %s to LID", phone)
@@ -369,7 +370,9 @@ func (cli *Client) resolveLID(ctx context.Context, phone types.JID) (types.JID, 
 		return types.EmptyJID, fmt.Errorf("get cached LID for %s: %w", phone, err)
 	}
 	if !lid.IsEmpty() {
-		return lid.ToNonAD(), nil
+		lid = lid.ToNonAD()
+		lid.Device = device
+		return lid, nil
 	}
 	info, err := cli.GetUserInfo(ctx, []types.JID{phone})
 	if err != nil {
@@ -379,6 +382,7 @@ func (cli *Client) resolveLID(ctx context.Context, phone types.JID) (types.JID, 
 	if lid.IsEmpty() {
 		return types.EmptyJID, fmt.Errorf("USync returned no LID for %s", phone)
 	}
+	lid.Device = device
 	return lid, nil
 }
 

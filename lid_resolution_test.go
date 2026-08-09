@@ -23,17 +23,19 @@ func (cached *cachedLIDStore) GetLIDForPN(_ context.Context, pn types.JID) (type
 }
 
 func TestResolveLIDUsesCachedMapping(t *testing.T) {
-	pn := types.NewJID("15550001111", types.DefaultUserServer)
+	pn := types.NewADJID("15550001111", types.WhatsAppDomain, 7)
 	lid := types.NewJID("100000011111111", types.HiddenUserServer)
-	lids := &cachedLIDStore{pn: pn, lid: lid}
+	lids := &cachedLIDStore{pn: pn.ToNonAD(), lid: lid}
 	client := NewClient(&store.Device{LIDs: lids}, waLog.Noop)
 
 	resolved, err := client.resolveLID(context.Background(), pn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved != lid {
-		t.Fatalf("resolved LID = %s, want %s", resolved, lid)
+	want := lid
+	want.Device = pn.Device
+	if resolved != want {
+		t.Fatalf("resolved LID = %s, want %s", resolved, want)
 	}
 }
 
