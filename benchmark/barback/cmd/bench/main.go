@@ -166,6 +166,8 @@ type runner struct {
 	tempStop       chan struct{}
 	tempPeakBytes  atomic.Int64
 	tempPeakFiles  atomic.Int64
+	connected      chan struct{}
+	connectedOnce  sync.Once
 }
 
 func main() {
@@ -189,6 +191,7 @@ func main() {
 		latencies:      make([]float64, 0, cfg.Total),
 		messageTypes:   make(map[string]int64),
 		failureReasons: make(map[string]int64),
+		connected:      make(chan struct{}),
 	}
 	for i := range r.jobs {
 		r.jobs[i] = make(chan *events.Message, queueCapacity)
@@ -384,8 +387,14 @@ func (r *runner) run() (result, error) {
 	}
 	defer client.Disconnect()
 	if r.cfg.BusinessSmoke {
-		if !client.WaitForConnection(30 * time.Second) {
+		connectionTimer := time.NewTimer(30 * time.Second)
+		defer connectionTimer.Stop()
+		select {
+		case <-r.connected:
+		case <-connectionTimer.C:
 			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready")
+		case <-ctx.Done():
+			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready: %w", ctx.Err())
 		}
 		if err = validateBusinessApp(ctx, client); err != nil {
 			return r.snapshot(false), err
@@ -468,6 +477,11 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 				scanOnce.Do(func() { go r.scanQR(event.Codes[0]) })
 			}
 		case *events.Connected:
+			r.connectedOnce.Do(func() {
+				if r.connected != nil {
+					close(r.connected)
+				}
+			})
 			if _, err := r.db.ExecContext(context.Background(), "SELECT pg_stat_statements_reset()"); err != nil {
 				fmt.Fprintf(os.Stderr, "reset statement stats: %v\n", err)
 			}
