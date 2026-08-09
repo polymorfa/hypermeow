@@ -49,6 +49,39 @@ type BusinessComplianceInfo struct {
 	ImporterAddress   *BusinessAddress `json:"importer_address,omitempty"`
 }
 
+type BusinessMerchantEntityType string
+
+const (
+	BusinessMerchantEntitySoleProprietorship          BusinessMerchantEntityType = "SOLE_PROPRIETORSHIP"
+	BusinessMerchantEntityPartnership                 BusinessMerchantEntityType = "PARTNERSHIP"
+	BusinessMerchantEntityPrivateCompany              BusinessMerchantEntityType = "PRIVATE_COMPANY"
+	BusinessMerchantEntityPublicCompany               BusinessMerchantEntityType = "PUBLIC_COMPANY"
+	BusinessMerchantEntityLimitedLiabilityPartnership BusinessMerchantEntityType = "LIMITED_LIABILITY_PARTNERSHIP"
+	BusinessMerchantEntityOther                       BusinessMerchantEntityType = "OTHER"
+)
+
+type BusinessMerchantContact struct {
+	Email          string `json:"email"`
+	LandlineNumber string `json:"landline_number"`
+	MobileNumber   string `json:"mobile_number"`
+}
+
+type BusinessMerchantOfficer struct {
+	Name           string `json:"name"`
+	Email          string `json:"email"`
+	LandlineNumber string `json:"landline_number"`
+	MobileNumber   string `json:"mobile_number"`
+}
+
+type BusinessMerchantCompliance struct {
+	EntityName       string                     `json:"entity_name"`
+	EntityType       BusinessMerchantEntityType `json:"entity_type"`
+	IsRegistered     bool                       `json:"is_registered"`
+	EntityTypeCustom string                     `json:"entity_type_custom"`
+	CustomerCare     BusinessMerchantContact    `json:"customer_care_details"`
+	GrievanceOfficer BusinessMerchantOfficer    `json:"grievance_officer_details"`
+}
+
 type BusinessAddress struct {
 	Street1     string `json:"street1,omitempty"`
 	Street2     string `json:"street2,omitempty"`
