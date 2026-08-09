@@ -42,6 +42,7 @@ type config struct {
 	OutputPath     string
 	MemProfilePath string
 	Variant        string
+	BusinessSmoke  bool
 	Total          int64
 	Timeout        time.Duration
 	Workload       workloadConfig
@@ -123,6 +124,7 @@ type result struct {
 	MediaUploads         int64                `json:"media_uploads"`
 	MediaUploadBytes     int64                `json:"media_upload_bytes"`
 	MediaUploadLatency   latencyStats         `json:"media_upload_latency"`
+	BusinessAppValidated bool                 `json:"business_app_validated"`
 }
 
 type runner struct {
@@ -140,6 +142,7 @@ type runner struct {
 	messageSequence atomic.Int64
 	mediaUploads    atomic.Int64
 	mediaBytes      atomic.Int64
+	businessValid   atomic.Bool
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -255,6 +258,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	businessSmoke, err := strconv.ParseBool(env("BENCH_BUSINESS_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_BUSINESS_SMOKE")
+	}
 	return config{
 		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
 		BarbackURL:     env("BARBACK_URL", "http://barback:8080"),
@@ -264,6 +271,7 @@ func loadConfig() (config, error) {
 		OutputPath:     env("RESULT_PATH", "/results/result.json"),
 		MemProfilePath: os.Getenv("MEM_PROFILE_PATH"),
 		Variant:        env("BENCH_VARIANT", "candidate"),
+		BusinessSmoke:  businessSmoke,
 		Total:          total,
 		Timeout:        timeout,
 		Workload: workloadConfig{
@@ -375,6 +383,15 @@ func (r *runner) run() (result, error) {
 		return r.snapshot(false), fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
+	if r.cfg.BusinessSmoke {
+		if !client.WaitForConnection(30 * time.Second) {
+			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready")
+		}
+		if err = validateBusinessApp(ctx, client); err != nil {
+			return r.snapshot(false), err
+		}
+		r.businessValid.Store(true)
+	}
 
 	select {
 	case <-r.done:
@@ -384,6 +401,53 @@ func (r *runner) run() (result, error) {
 	case <-ctx.Done():
 		return r.snapshot(false), fmt.Errorf("benchmark incomplete: %w", ctx.Err())
 	}
+}
+
+func validateBusinessApp(ctx context.Context, client *whatsmeow.Client) error {
+	business := types.NewJID("15551234567", types.DefaultUserServer)
+	catalog, err := client.GetCatalog(ctx, business, whatsmeow.GetCatalogParams{Limit: 50})
+	if err != nil {
+		return fmt.Errorf("business app catalog: %w", err)
+	}
+	if len(catalog.Products) != 2 || catalog.Products[0].ID != "p-tea" || catalog.Products[0].Price != "1250" || catalog.Products[0].Currency != "USD" {
+		return fmt.Errorf("business app catalog returned an unexpected fixture")
+	}
+	product, err := client.GetCatalogProduct(ctx, business, "p-tea")
+	if err != nil {
+		return fmt.Errorf("business app product: %w", err)
+	}
+	if product.ID != "p-tea" || product.RetailerID != "sku-tea-20" {
+		return fmt.Errorf("business app product returned an unexpected fixture")
+	}
+	collections, err := client.GetProductCollections(ctx, business, whatsmeow.GetCollectionsParams{})
+	if err != nil {
+		return fmt.Errorf("business app collections: %w", err)
+	}
+	if len(collections.Collections) != 1 || collections.Collections[0].ID != "c-seasonal" {
+		return fmt.Errorf("business app collections returned an unexpected fixture")
+	}
+	collection, err := client.GetProductCollection(ctx, business, "c-seasonal", whatsmeow.GetCatalogParams{Limit: 50})
+	if err != nil {
+		return fmt.Errorf("business app collection: %w", err)
+	}
+	if collection.ID != "c-seasonal" || len(collection.Products) != 2 {
+		return fmt.Errorf("business app collection returned an unexpected fixture")
+	}
+	products, err := client.GetCatalogProducts(ctx, business, []string{"p-coffee", "p-tea"})
+	if err != nil {
+		return fmt.Errorf("business app product list: %w", err)
+	}
+	if len(products) != 2 || products[0].ID != "p-coffee" || products[1].ID != "p-tea" {
+		return fmt.Errorf("business app product list returned an unexpected fixture")
+	}
+	order, err := client.GetOrderDetails(ctx, "o-100", "synthetic-token")
+	if err != nil {
+		return fmt.Errorf("business app order: %w", err)
+	}
+	if order.ID != "o-100" || order.Price.Total != 2650 || len(order.Products) != 2 {
+		return fmt.Errorf("business app order returned an unexpected fixture")
+	}
+	return nil
 }
 
 func (r *runner) stopMetricsSampler() {
@@ -594,6 +658,7 @@ func (r *runner) snapshot(completed bool) result {
 		MediaUploads:         r.mediaUploads.Load(),
 		MediaUploadBytes:     r.mediaBytes.Load(),
 		MediaUploadLatency:   r.uploadLatencySnapshot(),
+		BusinessAppValidated: r.businessValid.Load(),
 	}
 	r.metricsMu.Lock()
 	if r.sessionStarted {
