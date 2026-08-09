@@ -224,12 +224,22 @@ func TestBusinessCoverPhotoValidationAndNodes(t *testing.T) {
 	if setNode.Tag != "cover_photo" || attrs.String("op") != "update" || attrs.String("id") != "cover-100" || attrs.String("token") != "token" || attrs.String("ts") != "1" {
 		t.Fatalf("unexpected set node: %#v", setNode)
 	}
+	setDelta := buildBusinessProfileMutationNode(setNode)
+	setChildren := setDelta.GetChildren()
+	if setDelta.Tag != "business_profile" || setDelta.AttrGetter().String("mutation_type") != "delta" || len(setChildren) != 1 || setChildren[0].Tag != "cover_photo" {
+		t.Fatalf("unexpected set delta: %#v", setDelta)
+	}
 	deleteNode, err := buildBusinessCoverPhotoDeleteNode("cover-100")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if deleteNode.AttrGetter().String("op") != "delete" || deleteNode.AttrGetter().String("id") != "cover-100" {
 		t.Fatalf("unexpected delete node: %#v", deleteNode)
+	}
+	deleteDelta := buildBusinessProfileMutationNode(deleteNode)
+	deleteChildren := deleteDelta.GetChildren()
+	if deleteDelta.Tag != "business_profile" || len(deleteChildren) != 1 || deleteChildren[0].Tag != "cover_photo" {
+		t.Fatalf("unexpected delete delta: %#v", deleteDelta)
 	}
 	if _, err = buildBusinessCoverPhotoDeleteNode(""); err == nil {
 		t.Fatal("expected empty cover ID error")

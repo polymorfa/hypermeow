@@ -93,6 +93,10 @@ func buildBusinessProfileDelta(update types.BusinessProfileUpdate) (waBinary.Nod
 		children = append(children, hours)
 	}
 
+	return buildBusinessProfileMutationNode(children...), nil
+}
+
+func buildBusinessProfileMutationNode(children ...waBinary.Node) waBinary.Node {
 	return waBinary.Node{
 		Tag: "business_profile",
 		Attrs: waBinary.Attrs{
@@ -100,7 +104,7 @@ func buildBusinessProfileDelta(update types.BusinessProfileUpdate) (waBinary.Nod
 			"mutation_type": "delta",
 		},
 		Content: children,
-	}, nil
+	}
 }
 
 func buildBusinessHoursNode(update types.BusinessHoursUpdate) (waBinary.Node, error) {
@@ -272,7 +276,7 @@ func (cli *Client) SetBusinessCoverPhoto(ctx context.Context, image []byte) (str
 		Namespace: "w:biz",
 		Type:      iqSet,
 		To:        types.ServerJID,
-		Content:   []waBinary.Node{node},
+		Content:   []waBinary.Node{buildBusinessProfileMutationNode(node)},
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to set business cover photo: %w", err)
@@ -289,7 +293,7 @@ func (cli *Client) DeleteBusinessCoverPhoto(ctx context.Context, coverID string)
 		Namespace: "w:biz",
 		Type:      iqSet,
 		To:        types.ServerJID,
-		Content:   []waBinary.Node{node},
+		Content:   []waBinary.Node{buildBusinessProfileMutationNode(node)},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete business cover photo: %w", err)
