@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow/types"
 )
@@ -69,7 +70,7 @@ func (r *pnMigrationTestRows) Next(values []driver.Value) error {
 
 func TestNewSQLStoreDefersCaches(t *testing.T) {
 	store := NewSQLStore(nil, types.JID{User: "123", Server: types.DefaultUserServer})
-	if store.contactCache != nil || store.identityCache != nil || store.migratedPNSessionsCache != nil || store.migratingPNSessions != nil {
+	if store.contactCache != nil || store.identityCache != nil || store.migratedPNSessionsCache != nil || store.emptyPNMigrationCache != nil || store.migratingPNSessions != nil {
 		t.Fatal("SQL store allocated caches before use")
 	}
 }
@@ -114,7 +115,7 @@ func TestContactCacheIsBounded(t *testing.T) {
 	}
 }
 
-func TestMigratePNToLIDDoesNotCacheEmptyPreflight(t *testing.T) {
+func TestMigratePNToLIDCachesEmptyPreflightTemporarily(t *testing.T) {
 	state := &pnMigrationTestDB{}
 	db := sql.OpenDB(&pnMigrationTestConnector{state: state})
 	t.Cleanup(func() { _ = db.Close() })
@@ -132,8 +133,17 @@ func TestMigratePNToLIDDoesNotCacheEmptyPreflight(t *testing.T) {
 	if err := store.MigratePNToLID(context.Background(), pn, lid); err != nil {
 		t.Fatal(err)
 	}
-	if state.queries != 2 || state.begins != 0 {
+	if state.queries != 1 || state.begins != 0 {
 		t.Fatalf("unexpected database work: %d queries, %d transactions", state.queries, state.begins)
+	}
+	store.migratedPNSessionsCacheLock.Lock()
+	store.emptyPNMigrationCache[pn.SignalAddressUser()] = time.Now().Add(-time.Second)
+	store.migratedPNSessionsCacheLock.Unlock()
+	if err := store.MigratePNToLID(context.Background(), pn, lid); err != nil {
+		t.Fatal(err)
+	}
+	if state.queries != 2 {
+		t.Fatalf("expired empty migration cache suppressed a query: %d", state.queries)
 	}
 	for _, table := range []string{"whatsmeow_sessions", "whatsmeow_identity_keys", "whatsmeow_sender_keys"} {
 		if !strings.Contains(state.query, table) {

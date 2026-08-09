@@ -77,6 +77,7 @@ type SQLStore struct {
 	identityCacheLock sync.RWMutex
 
 	migratedPNSessionsCache     map[string]struct{}
+	emptyPNMigrationCache       map[string]time.Time
 	migratingPNSessions         map[string]struct{}
 	migratedPNSessionsCacheLock sync.Mutex
 }
@@ -90,6 +91,7 @@ const (
 	maxContactCacheEntries  = 256
 	maxIdentityCacheEntries = 2048
 	maxMigratedPNEntries    = 1024
+	emptyPNMigrationTTL     = time.Minute
 )
 
 func setBoundedCacheEntry[K comparable, V any](cache map[K]V, key K, value V, limit int) {
@@ -458,14 +460,19 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	s.migratedPNSessionsCacheLock.Lock()
 	_, migrated := s.migratedPNSessionsCache[pnSignal]
 	_, migrating := s.migratingPNSessions[pnSignal]
-	if !migrated && !migrating {
+	emptyUntil, empty := s.emptyPNMigrationCache[pnSignal]
+	if empty && !time.Now().Before(emptyUntil) {
+		delete(s.emptyPNMigrationCache, pnSignal)
+		empty = false
+	}
+	if !migrated && !migrating && !empty {
 		if s.migratingPNSessions == nil {
 			s.migratingPNSessions = make(map[string]struct{})
 		}
 		s.migratingPNSessions[pnSignal] = struct{}{}
 	}
 	s.migratedPNSessionsCacheLock.Unlock()
-	if migrated || migrating {
+	if migrated || migrating || empty {
 		return nil
 	}
 	var hasPNRows bool
@@ -473,7 +480,7 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	if err != nil {
 		s.log.Warnf("Failed to check for PN rows to migrate from %s: %v", pnSignal, err)
 	} else if !hasPNRows {
-		s.finishPNMigration(pnSignal, false)
+		s.finishEmptyPNMigration(pnSignal)
 		return nil
 	}
 	var sessionsUpdated, identityKeysUpdated, senderKeysUpdated int64
@@ -538,12 +545,23 @@ func (s *SQLStore) finishPNMigration(pnSignal string, markMigrated bool) {
 	s.migratedPNSessionsCacheLock.Lock()
 	defer s.migratedPNSessionsCacheLock.Unlock()
 	delete(s.migratingPNSessions, pnSignal)
+	delete(s.emptyPNMigrationCache, pnSignal)
 	if markMigrated {
 		if s.migratedPNSessionsCache == nil {
 			s.migratedPNSessionsCache = make(map[string]struct{})
 		}
 		setBoundedCacheEntry(s.migratedPNSessionsCache, pnSignal, struct{}{}, maxMigratedPNEntries)
 	}
+}
+
+func (s *SQLStore) finishEmptyPNMigration(pnSignal string) {
+	s.migratedPNSessionsCacheLock.Lock()
+	defer s.migratedPNSessionsCacheLock.Unlock()
+	delete(s.migratingPNSessions, pnSignal)
+	if s.emptyPNMigrationCache == nil {
+		s.emptyPNMigrationCache = make(map[string]time.Time)
+	}
+	setBoundedCacheEntry(s.emptyPNMigrationCache, pnSignal, time.Now().Add(emptyPNMigrationTTL), maxMigratedPNEntries)
 }
 
 const (
