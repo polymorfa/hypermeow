@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
@@ -146,6 +147,18 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 	if !validCurrency(params.CurrencyCode) || params.PriceAmount1000 < 0 || params.SalePriceAmount1000 < 0 {
 		return nil, errors.New("invalid business product price")
 	}
+	if params.SalePriceAmount1000 > 0 && params.PriceAmount1000 == 0 {
+		return nil, errors.New("business product sale price requires a base price")
+	}
+	if params.ProductImageCount > 10 {
+		return nil, errors.New("business product cannot contain more than 10 images")
+	}
+	if params.URL != "" {
+		parsed, err := url.ParseRequestURI(params.URL)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
+			return nil, errors.New("business product URL must be absolute HTTPS")
+		}
+	}
 	return &waE2E.Message{ProductMessage: &waE2E.ProductMessage{
 		Product: &waE2E.ProductMessage_ProductSnapshot{
 			ProductImage: params.ProductImage, ProductID: proto.String(params.ProductID), Title: proto.String(params.Title),
@@ -220,7 +233,7 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 }
 
 func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message, error) {
-	if !bounded(params.Title, 256) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 4096) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Footer, 256) {
+	if !bounded(params.Title, 60) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business list text")
 	}
 	if len(params.Sections) == 0 || len(params.Sections) > 10 {
@@ -230,12 +243,12 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 	seen := make(map[string]struct{})
 	rowCount := 0
 	for sectionIndex, section := range params.Sections {
-		if !bounded(section.Title, 256) || len(section.Rows) == 0 {
+		if !bounded(section.Title, 24) || len(section.Rows) == 0 {
 			return nil, fmt.Errorf("invalid business list section %d", sectionIndex)
 		}
 		rows := make([]*waE2E.ListMessage_Row, len(section.Rows))
 		for rowIndex, row := range section.Rows {
-			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 256) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 256) || !bounded(row.Description, 1024) {
+			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 256) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 24) || !bounded(row.Description, 72) {
 				return nil, fmt.Errorf("invalid business list row %d in section %d", rowIndex, sectionIndex)
 			}
 			if _, exists := seen[row.ID]; exists {

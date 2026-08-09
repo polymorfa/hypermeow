@@ -2,6 +2,7 @@ package whatsmeow
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -142,6 +143,18 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	if _, err := BuildBusinessProductMessage(BusinessProductMessageParams{ProductID: "p", Title: "Tea", CurrencyCode: "USD"}); err == nil {
 		t.Fatal("expected missing owner to fail")
 	}
+	owner := types.NewJID("15550001", types.DefaultUserServer)
+	for name, params := range map[string]BusinessProductMessageParams{
+		"non-HTTPS URL":      {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", CurrencyCode: "USD", URL: "http://synthetic.invalid/product"},
+		"sale without price": {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", CurrencyCode: "USD", SalePriceAmount1000: 1000},
+		"too many images":    {BusinessOwnerJID: owner, ProductID: "p", Title: "Tea", CurrencyCode: "USD", ProductImageCount: 11},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := BuildBusinessProductMessage(params); err == nil {
+				t.Fatal("expected product validation error")
+			}
+		})
+	}
 	if _, err := BuildBusinessProductListMessage(BusinessProductListMessageParams{
 		BusinessOwnerJID: types.NewJID("15550001", types.DefaultUserServer), Title: "Products", ButtonText: "View",
 		Sections: []BusinessProductSection{{Title: "Tea", ProductIDs: []string{"p", "p"}}},
@@ -164,6 +177,34 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 		Body: "Choose", Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: "not-json"}},
 	}); err == nil {
 		t.Fatal("expected malformed native-flow parameters to fail")
+	}
+}
+
+func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
+	valid := BusinessListMessageParams{
+		Title: "Menu", Description: "Choose one", ButtonText: "Choose", Footer: "Footer",
+		Sections: []BusinessListSection{{Title: "Section", Rows: []BusinessListRow{{ID: "one", Title: "One", Description: "Description"}}}},
+	}
+	mutations := map[string]func(*BusinessListMessageParams){
+		"header":        func(params *BusinessListMessageParams) { params.Title = strings.Repeat("h", 61) },
+		"body":          func(params *BusinessListMessageParams) { params.Description = strings.Repeat("b", 1025) },
+		"button":        func(params *BusinessListMessageParams) { params.ButtonText = strings.Repeat("c", 21) },
+		"footer":        func(params *BusinessListMessageParams) { params.Footer = strings.Repeat("f", 61) },
+		"section title": func(params *BusinessListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 25) },
+		"row title":     func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].Title = strings.Repeat("r", 25) },
+		"row description": func(params *BusinessListMessageParams) {
+			params.Sections[0].Rows[0].Description = strings.Repeat("d", 73)
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			params := valid
+			params.Sections = []BusinessListSection{{Title: valid.Sections[0].Title, Rows: append([]BusinessListRow(nil), valid.Sections[0].Rows...)}}
+			mutate(&params)
+			if _, err := BuildBusinessListMessage(params); err == nil {
+				t.Fatal("expected protocol limit error")
+			}
+		})
 	}
 }
 
