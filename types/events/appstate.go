@@ -175,6 +175,15 @@ type LabelAssociationMessage struct {
 	FromFullSync bool                                 // Whether the action is emitted because of a fullSync
 }
 
+// QuickReply is emitted when a quick reply is changed from any device.
+type QuickReply struct {
+	Timestamp time.Time
+	ID        string
+
+	Action       *waSyncAction.QuickReplyAction
+	FromFullSync bool
+}
+
 // AppState is emitted directly for new data received from app state syncing.
 // You should generally use the higher-level events like events.Contact and events.Mute.
 type AppState struct {

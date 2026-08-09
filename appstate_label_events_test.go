@@ -1,9 +1,15 @@
 package whatsmeow
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/proto/waServerSync"
+	"go.mau.fi/whatsmeow/proto/waSyncAction"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestSelectiveFullSyncLabelEvents(t *testing.T) {
@@ -25,5 +31,39 @@ func TestSelectiveFullSyncLabelEvents(t *testing.T) {
 	client.EmitAppStateEventsOnFullSync = true
 	if !client.shouldEmitFullSyncMutation([]string{appstate.IndexMute}) {
 		t.Fatal("full event mode did not emit non-label mutation")
+	}
+	client.EmitAppStateEventsOnFullSync = false
+	client.EmitQuickReplyEventsOnFullSync = true
+	if !client.shouldEmitFullSyncMutation([]string{appstate.IndexQuickReply}) {
+		t.Fatal("quick reply event mode did not emit quick reply mutation")
+	}
+	if client.shouldEmitFullSyncMutation([]string{appstate.IndexMute}) {
+		t.Fatal("quick reply event mode emitted unrelated mutation")
+	}
+}
+
+func TestQuickReplyAppStateEvent(t *testing.T) {
+	client := &Client{}
+	timestamp := int64(1700000000000)
+	got := client.dispatchAppState(context.Background(), appstate.WAPatchRegular, appstate.Mutation{
+		Operation: waServerSync.SyncdMutation_SET,
+		Index:     []string{appstate.IndexQuickReply, "1700000000"},
+		Action: &waSyncAction.SyncActionValue{
+			Timestamp: proto.Int64(timestamp),
+			QuickReplyAction: &waSyncAction.QuickReplyAction{
+				Shortcut: proto.String("hours"),
+				Message:  proto.String("We are open until 18:00."),
+			},
+		},
+	}, true)
+	event, ok := got.(*events.QuickReply)
+	if !ok {
+		t.Fatalf("event = %T, want *events.QuickReply", got)
+	}
+	if event.ID != "1700000000" || event.Timestamp != time.UnixMilli(timestamp) || !event.FromFullSync {
+		t.Fatalf("event = %#v", event)
+	}
+	if event.Action.GetShortcut() != "hours" || event.Action.GetMessage() != "We are open until 18:00." {
+		t.Fatalf("action = %#v", event.Action)
 	}
 }

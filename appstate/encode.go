@@ -228,6 +228,43 @@ func BuildLabelEdit(labelID string, labelName string, labelColor int32, deleted 
 	}
 }
 
+func newQuickReplyMutation(id, shortcut, message string, keywords []string, count int32, deleted bool) MutationInfo {
+	return MutationInfo{
+		Index:   []string{IndexQuickReply, id},
+		Version: 2,
+		Value: &waSyncAction.SyncActionValue{
+			QuickReplyAction: &waSyncAction.QuickReplyAction{
+				Shortcut:           proto.String(shortcut),
+				Message:            proto.String(message),
+				Keywords:           keywords,
+				Count:              proto.Int32(count),
+				Deleted:            proto.Bool(deleted),
+				AssociatedLabelIDs: []string{},
+			},
+		},
+	}
+}
+
+// BuildQuickReply builds an app state patch for adding or editing a quick reply.
+func BuildQuickReply(id, shortcut, message string, keywords []string, count int32) PatchInfo {
+	return PatchInfo{
+		Type: WAPatchRegular,
+		Mutations: []MutationInfo{
+			newQuickReplyMutation(id, shortcut, message, keywords, count, false),
+		},
+	}
+}
+
+// BuildQuickReplyDelete builds an app state tombstone for deleting a quick reply.
+func BuildQuickReplyDelete(id string) PatchInfo {
+	return PatchInfo{
+		Type: WAPatchRegular,
+		Mutations: []MutationInfo{
+			newQuickReplyMutation(id, "", "", []string{}, 0, true),
+		},
+	}
+}
+
 func newSettingPushNameMutation(pushName string) MutationInfo {
 	return MutationInfo{
 		Index:   []string{IndexSettingPushName},
