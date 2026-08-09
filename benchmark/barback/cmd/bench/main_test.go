@@ -367,6 +367,46 @@ func TestOptionalSmokesFinishBeforeMeasuredMetrics(t *testing.T) {
 	}
 }
 
+func TestSecurityCodeFailureIsSharedAcrossWorkers(t *testing.T) {
+	r := &runner{
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	sentinel := errors.New("security code failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	validate := func() error {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return sentinel
+	}
+
+	var workers sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			errs <- r.runSecurityCodeSmoke(validate)
+		}()
+	}
+	<-entered
+	close(release)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("worker error = %v, want %v", err, sentinel)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("validation calls = %d, want 1", calls.Load())
+	}
+}
+
 func TestLoadConfigRejectsInvalidMessageProfile(t *testing.T) {
 	t.Setenv("BENCH_MESSAGE_PROFILE", "production")
 	if _, err := loadConfig(); err == nil {
