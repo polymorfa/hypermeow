@@ -154,6 +154,12 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected negative total to fail")
 	}
+	if _, err := BuildBusinessOrderMessage(BusinessOrderMessageParams{
+		OrderID: "o", ItemCount: 1, Status: waE2E.OrderMessage_INQUIRY,
+		SellerJID: types.NewJID("15550001", types.DefaultUserServer), Token: " ", TotalCurrencyCode: "USD",
+	}); err == nil {
+		t.Fatal("expected blank order token to fail")
+	}
 	if _, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{
 		Body: "Choose", Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: "not-json"}},
 	}); err == nil {

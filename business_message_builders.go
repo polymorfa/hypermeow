@@ -202,7 +202,7 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 	if !validBusinessOwner(params.SellerJID) {
 		return nil, errors.New("invalid seller JID")
 	}
-	if strings.TrimSpace(params.OrderID) == "" || !bounded(params.OrderID, 256) || params.ItemCount < 1 || params.ItemCount > 100 {
+	if strings.TrimSpace(params.OrderID) == "" || !bounded(params.OrderID, 256) || strings.TrimSpace(params.Token) == "" || params.ItemCount < 1 || params.ItemCount > 100 {
 		return nil, errors.New("invalid business order identity")
 	}
 	if params.Status < waE2E.OrderMessage_INQUIRY || params.Status > waE2E.OrderMessage_DECLINED || params.TotalAmount1000 < 0 || !validCurrency(params.TotalCurrencyCode) {
