@@ -118,6 +118,7 @@ const (
 	mutationCreateNewsletter       = "6234210096708695"
 	mutationUnfollowNewsletter     = "6392786840836363"
 	mutationFollowNewsletter       = "9926858900719341"
+	mutationDeleteNewsletter       = "30062808666639665"
 
 	// desktop & mobile
 	queryFetchNewsletterDesktop        = "9779843322044422"
@@ -155,6 +156,8 @@ func convertQueryID(cli *Client, queryID string) string {
 			return mutationUnfollowNewsletterDesktop
 		case mutationFollowNewsletter:
 			return mutationFollowNewsletterDesktop
+		case mutationDeleteNewsletter:
+			return ""
 		default:
 			return queryID
 		}
@@ -168,6 +171,9 @@ func (cli *Client) sendMexIQ(ctx context.Context, queryID string, variables any)
 		return nil, fmt.Errorf("argo decoding is currently broken")
 	}
 	queryID = convertQueryID(cli, queryID)
+	if queryID == "" {
+		return nil, fmt.Errorf("MEX query is unsupported for this client platform")
+	}
 	payload, err := json.Marshal(map[string]any{
 		"variables": variables,
 	})
