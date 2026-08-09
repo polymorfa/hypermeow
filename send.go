@@ -996,10 +996,33 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return "buttons"
 	case msg.ListMessage != nil:
 		return "list"
+	case msg.InteractiveMessage != nil && msg.InteractiveMessage.GetNativeFlowMessage() != nil:
+		return "native_flow"
 	case msg.InteractiveResponseMessage != nil:
 		return "interactive_response"
 	default:
 		return ""
+	}
+}
+
+func buildNativeFlowBizNode(msg *waE2E.Message, nowUnix int64) waBinary.Node {
+	name := "mixed"
+	if interactive := msg.GetInteractiveMessage(); interactive != nil {
+		if buttons := interactive.GetNativeFlowMessage().GetButtons(); len(buttons) > 0 && buttons[0].GetName() != "" {
+			name = buttons[0].GetName()
+		}
+	}
+	return waBinary.Node{
+		Tag: "biz",
+		Attrs: waBinary.Attrs{
+			"actual_actors":   "2",
+			"host_storage":    "2",
+			"privacy_mode_ts": strconv.FormatInt(nowUnix, 10),
+		},
+		Content: []waBinary.Node{
+			{Tag: "interactive", Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"}, Content: []waBinary.Node{{Tag: "native_flow", Attrs: waBinary.Attrs{"name": name, "v": "9"}}}},
+			{Tag: "quality_control", Attrs: waBinary.Attrs{"source_type": "third_party"}},
+		},
 	}
 }
 
@@ -1142,13 +1165,17 @@ func (cli *Client) getMessageContent(
 	}
 
 	if buttonType := getButtonTypeFromMessage(message); buttonType != "" {
-		content = append(content, waBinary.Node{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag:   buttonType,
-				Attrs: getButtonAttributes(message),
-			}},
-		})
+		if buttonType == "native_flow" {
+			content = append(content, buildNativeFlowBizNode(message, time.Now().Unix()))
+		} else {
+			content = append(content, waBinary.Node{
+				Tag: "biz",
+				Content: []waBinary.Node{{
+					Tag:   buttonType,
+					Attrs: getButtonAttributes(message),
+				}},
+			})
+		}
 	}
 	return content
 }

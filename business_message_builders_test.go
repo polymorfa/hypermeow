@@ -1,6 +1,7 @@
 package whatsmeow
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -233,6 +234,52 @@ func TestBusinessListBuildersRejectOversizedSectionsBeforeAllocating(t *testing.
 	}
 }
 
+func TestBuildBusinessAddressMessageMatchesWebGenerator(t *testing.T) {
+	msg, err := BuildBusinessAddressMessage(BusinessAddressMessageParams{
+		Body: "Where should we deliver?", ButtonText: "Share address", Footer: "Synthetic checkout",
+		ContextInfo: &waE2E.ContextInfo{StanzaID: testPtr("quoted-message")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interactive := msg.GetInteractiveMessage()
+	flow := interactive.GetNativeFlowMessage()
+	if interactive.GetBody().GetText() != "Where should we deliver?" || interactive.GetFooter().GetText() != "Synthetic checkout" {
+		t.Fatalf("unexpected address envelope: %#v", interactive)
+	}
+	if len(flow.GetButtons()) != 1 || flow.GetButtons()[0].GetName() != "address_message" || flow.GetButtons()[0].GetButtonParamsJSON() != `{"display_text":"Share address"}` {
+		t.Fatalf("unexpected address native flow: %#v", flow)
+	}
+	if flow.GetMessageVersion() != 1 || interactive.GetContextInfo().GetStanzaID() != "quoted-message" {
+		t.Fatalf("unexpected address metadata: %#v", interactive)
+	}
+}
+
+func TestBuildBusinessFlowMessageMatchesWebGenerator(t *testing.T) {
+	msg, err := BuildBusinessFlowMessage(BusinessFlowMessageParams{
+		Body: "Book a visit", ButtonText: "Choose a time", FlowID: "flow-100", FlowToken: "synthetic-token",
+		FlowAction: "navigate", Screen: "APPOINTMENT", DataJSON: `{"location":"beirut"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := msg.GetInteractiveMessage().GetNativeFlowMessage()
+	if len(flow.GetButtons()) != 1 || flow.GetButtons()[0].GetName() != "galaxy_message" || flow.GetMessageVersion() != 1 {
+		t.Fatalf("unexpected galaxy flow: %#v", flow)
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(flow.GetButtons()[0].GetButtonParamsJSON()), &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["flow_message_version"] != "3" || params["flow_id"] != "flow-100" || params["flow_token"] != "synthetic-token" || params["flow_cta"] != "Choose a time" || params["flow_action"] != "navigate" {
+		t.Fatalf("unexpected flow params: %#v", params)
+	}
+	payload := params["flow_action_payload"].(map[string]any)
+	if payload["screen"] != "APPOINTMENT" || payload["data"].(map[string]any)["location"] != "beirut" {
+		t.Fatalf("unexpected action payload: %#v", payload)
+	}
+}
+
 func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	if _, err := BuildBusinessProductMessage(BusinessProductMessageParams{ProductID: "p", Title: "Tea", CurrencyCode: "USD"}); err == nil {
 		t.Fatal("expected missing owner to fail")
@@ -283,6 +330,14 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 		Body: "Choose", Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: "not-json"}},
 	}); err == nil {
 		t.Fatal("expected malformed native-flow parameters to fail")
+	}
+	if _, err := BuildBusinessAddressMessage(BusinessAddressMessageParams{Body: "Address", ButtonText: ""}); err == nil {
+		t.Fatal("expected empty address CTA to fail")
+	}
+	if _, err := BuildBusinessFlowMessage(BusinessFlowMessageParams{
+		Body: "Flow", ButtonText: "Open", FlowID: "flow", FlowToken: "token", FlowAction: "navigate", DataJSON: `[]`,
+	}); err == nil {
+		t.Fatal("expected non-object flow data to fail")
 	}
 }
 
