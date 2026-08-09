@@ -158,6 +158,7 @@ type runner struct {
 	startedAt  atomic.Int64
 	finishedAt atomic.Int64
 	done       chan struct{}
+	fatalErr   chan error
 	jobs       []chan *events.Message
 
 	latencyMu       sync.Mutex
@@ -196,6 +197,7 @@ func main() {
 	r := &runner{
 		cfg:            cfg,
 		done:           make(chan struct{}),
+		fatalErr:       make(chan error, 1),
 		jobs:           make([]chan *events.Message, workerCount),
 		latencies:      make([]float64, 0, cfg.Total),
 		messageTypes:   make(map[string]int64),
@@ -418,6 +420,11 @@ func (r *runner) run() (result, error) {
 
 	select {
 	case <-r.done:
+		select {
+		case err = <-r.fatalErr:
+			return r.snapshot(false), err
+		default:
+		}
 		time.Sleep(2 * time.Second)
 		res := r.snapshot(true)
 		return res, nil
@@ -572,8 +579,8 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 				r.failed.Add(1)
 				r.recordFailure(consentErr)
 				fmt.Fprintf(os.Stderr, "validate phone number consent: %v\n", consentErr)
-				r.checkDone()
-				continue
+				r.reportFatal(fmt.Errorf("validate phone number consent: %w", consentErr))
+				return
 			}
 			sequence := r.messageSequence.Add(1) - 1
 			outgoing, category, mediaBytes, uploadDuration, err := buildWorkloadMessage(ctx, client, string(msg.Info.ID), sequence, r.cfg.Workload.MessageProfile)
@@ -606,6 +613,16 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 			}
 			r.checkDone()
 		}
+	}
+}
+
+func (r *runner) reportFatal(err error) {
+	if err == nil || r.fatalErr == nil {
+		return
+	}
+	select {
+	case r.fatalErr <- err:
+	default:
 	}
 }
 

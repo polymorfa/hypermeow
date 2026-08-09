@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -75,6 +76,20 @@ func TestLoadConfigRejectsInvalidMode(t *testing.T) {
 	t.Setenv("BENCH_MODE", "broadcast")
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("expected invalid benchmark mode to fail")
+	}
+}
+
+func TestRunnerReportsFatalSmokeFailure(t *testing.T) {
+	r := &runner{fatalErr: make(chan error, 1)}
+	sentinel := errors.New("phone consent failed")
+	r.reportFatal(sentinel)
+	select {
+	case err := <-r.fatalErr:
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("fatal error = %v", err)
+		}
+	default:
+		t.Fatal("fatal smoke failure was not propagated")
 	}
 }
 
