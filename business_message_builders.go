@@ -25,6 +25,7 @@ type BusinessProductMessageParams struct {
 	ProductImage        *waE2E.ImageMessage
 	Body                string
 	Footer              string
+	ContextInfo         *waE2E.ContextInfo
 }
 
 type BusinessProductSection struct {
@@ -39,6 +40,7 @@ type BusinessProductListMessageParams struct {
 	ButtonText       string
 	Footer           string
 	Sections         []BusinessProductSection
+	ContextInfo      *waE2E.ContextInfo
 }
 
 type BusinessOrderMessageParams struct {
@@ -53,6 +55,7 @@ type BusinessOrderMessageParams struct {
 	TotalAmount1000   int64
 	TotalCurrencyCode string
 	CatalogType       string
+	ContextInfo       *waE2E.ContextInfo
 }
 
 type BusinessListRow struct {
@@ -72,6 +75,7 @@ type BusinessListMessageParams struct {
 	ButtonText  string
 	Footer      string
 	Sections    []BusinessListSection
+	ContextInfo *waE2E.ContextInfo
 }
 
 type BusinessNativeFlowButton struct {
@@ -80,10 +84,11 @@ type BusinessNativeFlowButton struct {
 }
 
 type BusinessNativeFlowButtonsMessageParams struct {
-	Title   string
-	Body    string
-	Footer  string
-	Buttons []BusinessNativeFlowButton
+	Title       string
+	Body        string
+	Footer      string
+	Buttons     []BusinessNativeFlowButton
+	ContextInfo *waE2E.ContextInfo
 }
 
 func validBusinessOwner(jid types.JID) bool {
@@ -147,7 +152,7 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 			PriceAmount1000: optionalPositiveInt64(params.PriceAmount1000), SalePriceAmount1000: optionalPositiveInt64(params.SalePriceAmount1000),
 			RetailerID: optionalString(params.RetailerID), URL: optionalString(params.URL), ProductImageCount: optionalPositiveUint32(params.ProductImageCount),
 		},
-		BusinessOwnerJID: proto.String(params.BusinessOwnerJID.String()), Body: optionalString(params.Body), Footer: optionalString(params.Footer),
+		BusinessOwnerJID: proto.String(params.BusinessOwnerJID.String()), Body: optionalString(params.Body), Footer: optionalString(params.Footer), ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
@@ -188,7 +193,7 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 	return &waE2E.Message{ListMessage: &waE2E.ListMessage{
 		Title: proto.String(params.Title), Description: optionalString(params.Description), ButtonText: proto.String(params.ButtonText),
 		ListType: waE2E.ListMessage_PRODUCT_LIST.Enum(), FooterText: optionalString(params.Footer),
-		ProductListInfo: &waE2E.ListMessage_ProductListInfo{ProductSections: sections, BusinessOwnerJID: proto.String(params.BusinessOwnerJID.String())},
+		ProductListInfo: &waE2E.ListMessage_ProductListInfo{ProductSections: sections, BusinessOwnerJID: proto.String(params.BusinessOwnerJID.String())}, ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
@@ -209,7 +214,7 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 		OrderID: proto.String(params.OrderID), Thumbnail: params.Thumbnail, ItemCount: proto.Int32(params.ItemCount),
 		Status: params.Status.Enum(), Surface: waE2E.OrderMessage_CATALOG.Enum(), Message: optionalString(params.Message),
 		OrderTitle: optionalString(params.OrderTitle), SellerJID: proto.String(params.SellerJID.String()), Token: optionalString(params.Token),
-		TotalAmount1000: proto.Int64(params.TotalAmount1000), TotalCurrencyCode: proto.String(params.TotalCurrencyCode), CatalogType: optionalString(params.CatalogType),
+		TotalAmount1000: proto.Int64(params.TotalAmount1000), TotalCurrencyCode: proto.String(params.TotalCurrencyCode), CatalogType: optionalString(params.CatalogType), ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
@@ -246,7 +251,7 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 	}
 	return &waE2E.Message{ListMessage: &waE2E.ListMessage{
 		Title: proto.String(params.Title), Description: optionalString(params.Description), ButtonText: proto.String(params.ButtonText),
-		ListType: waE2E.ListMessage_SINGLE_SELECT.Enum(), Sections: sections, FooterText: optionalString(params.Footer),
+		ListType: waE2E.ListMessage_SINGLE_SELECT.Enum(), Sections: sections, FooterText: optionalString(params.Footer), ContextInfo: params.ContextInfo,
 	}}, nil
 }
 
@@ -275,7 +280,7 @@ func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessa
 	}
 	headerType := waE2E.ButtonsMessage_EMPTY
 	message := &waE2E.ButtonsMessage{
-		ContentText: proto.String(params.Body), FooterText: optionalString(params.Footer), Buttons: buttons, HeaderType: headerType.Enum(),
+		ContentText: proto.String(params.Body), FooterText: optionalString(params.Footer), Buttons: buttons, HeaderType: headerType.Enum(), ContextInfo: params.ContextInfo,
 	}
 	if params.Title != "" {
 		headerType = waE2E.ButtonsMessage_TEXT

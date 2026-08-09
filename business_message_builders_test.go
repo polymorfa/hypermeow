@@ -15,12 +15,13 @@ func TestBuildBusinessProductMessageMatchesWebGenerator(t *testing.T) {
 		RetailerID: "sku-tea", URL: "https://synthetic.invalid/products/p-tea",
 		ProductImageCount: 1, ProductImage: &waE2E.ImageMessage{URL: testPtr("https://synthetic.invalid/media/tea")},
 		Body: "Our most popular tea", Footer: "Seasonal catalog",
+		ContextInfo: &waE2E.ContextInfo{MentionedJID: []string{"15550002@s.whatsapp.net"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	product := msg.GetProductMessage()
-	if product.GetBusinessOwnerJID() != "15550001@s.whatsapp.net" || product.GetBody() != "Our most popular tea" || product.GetFooter() != "Seasonal catalog" {
+	if product.GetBusinessOwnerJID() != "15550001@s.whatsapp.net" || product.GetBody() != "Our most popular tea" || product.GetFooter() != "Seasonal catalog" || len(product.GetContextInfo().GetMentionedJID()) != 1 {
 		t.Fatalf("unexpected envelope: %#v", product)
 	}
 	snapshot := product.GetProduct()
