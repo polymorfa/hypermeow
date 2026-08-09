@@ -28,7 +28,7 @@ func TestResolveLIDUsesCachedMapping(t *testing.T) {
 	lids := &cachedLIDStore{pn: pn.ToNonAD(), lid: lid}
 	client := NewClient(&store.Device{LIDs: lids}, waLog.Noop)
 
-	resolved, err := client.resolveLID(context.Background(), pn)
+	resolved, err := client.ResolveLID(context.Background(), pn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestResolveLIDUsesCachedMapping(t *testing.T) {
 
 func TestResolveLIDRejectsNonPhoneJID(t *testing.T) {
 	client := NewClient(&store.Device{LIDs: &store.NoopStore{}}, waLog.Noop)
-	if _, err := client.resolveLID(context.Background(), types.NewJID("100000011111111", types.HiddenUserServer)); err == nil {
+	if _, err := client.ResolveLID(context.Background(), types.NewJID("100000011111111", types.HiddenUserServer)); err == nil {
 		t.Fatal("expected non-PN JID to fail")
 	}
 }

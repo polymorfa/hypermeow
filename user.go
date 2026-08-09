@@ -397,7 +397,8 @@ func (cli *Client) ResolveUsername(ctx context.Context, username, key string) (t
 	return result, nil
 }
 
-func (cli *Client) resolveLID(ctx context.Context, phone types.JID) (types.JID, error) {
+// ResolveLID returns the stable LID for a phone-number JID.
+func (cli *Client) ResolveLID(ctx context.Context, phone types.JID) (types.JID, error) {
 	device := phone.Device
 	phone = phone.ToNonAD()
 	if phone.Server != types.DefaultUserServer {
