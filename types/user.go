@@ -99,6 +99,7 @@ type IsOnWhatsAppResponse struct {
 	IsIn  bool   // Whether the phone is registered or not.
 
 	PhoneNumber JID
+	Username    string
 
 	VerifiedName *VerifiedName // If the phone is a business, the verified business details.
 }

@@ -26,6 +26,16 @@ func TestParseUsernameResolution(t *testing.T) {
 	}
 }
 
+func TestParseUSyncUsernameFallsBackToContactAttribute(t *testing.T) {
+	user := waBinary.Node{Tag: "user", Content: []waBinary.Node{{
+		Tag:   "contact",
+		Attrs: waBinary.Attrs{"username": "example"},
+	}}}
+	if got := parseUSyncUsername(user); got != "example" {
+		t.Fatalf("username = %q", got)
+	}
+}
+
 func TestParseUsernameResolutionDetectsRequiredKey(t *testing.T) {
 	list := &waBinary.Node{Tag: "list", Content: []waBinary.Node{{
 		Tag: "user",

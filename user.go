@@ -189,6 +189,7 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 	}
 	output := make([]types.IsOnWhatsAppResponse, 0, len(jids))
 	lidEntries := make([]store.LIDMapping, 0, len(jids))
+	usernameEntries := make([]store.ContactUsernameEntry, 0, len(jids))
 	querySuffix := "@" + types.LegacyUserServer
 	for _, child := range list.GetChildren() {
 		ag := child.AttrGetter()
@@ -215,6 +216,10 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 		}
 		contactNode := child.GetChildByTag("contact")
 		info.IsIn = contactNode.AttrGetter().String("type") == "in"
+		info.Username = parseUSyncUsername(child)
+		if info.Username != "" && info.JID.Server == types.HiddenUserServer {
+			usernameEntries = append(usernameEntries, store.ContactUsernameEntry{JID: info.JID, Username: info.Username})
+		}
 		contactQuery, _ := contactNode.Content.([]byte)
 		info.Query = strings.TrimSuffix(string(contactQuery), querySuffix)
 		output = append(output, info)
@@ -225,7 +230,20 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 			return output, fmt.Errorf("failed to store LID mappings: %w", err)
 		}
 	}
+	if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && len(usernameEntries) > 0 {
+		if err = usernameStore.PutManyContactUsernames(ctx, usernameEntries); err != nil {
+			return output, fmt.Errorf("failed to store usernames: %w", err)
+		}
+	}
 	return output, nil
+}
+
+func parseUSyncUsername(user waBinary.Node) string {
+	if username, ok := user.GetChildByTag("username").Content.([]byte); ok && len(username) > 0 {
+		return string(username)
+	}
+	contact := user.GetChildByTag("contact")
+	return contact.AttrGetter().OptionalString("username")
 }
 
 // GetUserInfo gets basic user info (avatar, status, verified business name, device list).
@@ -245,6 +263,7 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 	}
 	respData := make(map[types.JID]types.UserInfo, len(jids))
 	mappings := make([]store.LIDMapping, 0, len(jids))
+	usernames := make([]store.ContactUsernameEntry, 0, len(jids))
 	for _, child := range list.GetChildren() {
 		jid, jidOK := child.Attrs["jid"].(types.JID)
 		if child.Tag != "user" || !jidOK {
@@ -262,8 +281,7 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 
 		lidTag := child.GetChildByTag("lid")
 		info.LID = lidTag.AttrGetter().OptionalJIDOrEmpty("val")
-		username, _ := child.GetChildByTag("username").Content.([]byte)
-		info.Username = string(username)
+		info.Username = parseUSyncUsername(child)
 
 		if !info.LID.IsEmpty() {
 			mappings = append(mappings, store.LIDMapping{PN: jid, LID: info.LID})
@@ -273,14 +291,12 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 			cli.updateBusinessName(ctx, jid, info.LID, nil, verifiedName.Details.GetVerifiedName())
 		}
 		respData[jid] = info
-		if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && info.Username != "" {
+		if info.Username != "" {
 			usernameJID := info.LID
 			if usernameJID.IsEmpty() {
 				usernameJID = jid
 			}
-			if err := usernameStore.PutContactUsername(ctx, usernameJID, info.Username); err != nil {
-				cli.Log.Warnf("Failed to store username for %s: %v", usernameJID, err)
-			}
+			usernames = append(usernames, store.ContactUsernameEntry{JID: usernameJID, Username: info.Username})
 		}
 	}
 
@@ -288,6 +304,11 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 	if err != nil {
 		// not worth returning on the error, instead just post a log
 		cli.Log.Errorf("Failed to place LID mappings from USync call")
+	}
+	if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && len(usernames) > 0 {
+		if err := usernameStore.PutManyContactUsernames(ctx, usernames); err != nil {
+			cli.Log.Errorf("Failed to store usernames from USync call: %v", err)
+		}
 	}
 
 	return respData, nil
