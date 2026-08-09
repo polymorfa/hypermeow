@@ -110,8 +110,8 @@ func buildBusinessHoursNode(update types.BusinessHoursUpdate) (waBinary.Node, er
 	if _, err := time.LoadLocation(update.TimeZone); err != nil {
 		return waBinary.Node{}, fmt.Errorf("business hours timezone is invalid: %w", err)
 	}
-	if len(update.Days) < 1 || len(update.Days) > 7 {
-		return waBinary.Node{}, fmt.Errorf("business hours must contain between 1 and 7 days")
+	if len(update.Days) > 7 {
+		return waBinary.Node{}, fmt.Errorf("business hours must contain at most 7 days")
 	}
 
 	seen := make(map[string]struct{}, len(update.Days))
@@ -213,6 +213,9 @@ func (cli *Client) uploadBusinessCoverPhoto(ctx context.Context, image []byte) (
 
 	httpResponse, err := cli.mediaHTTP.Do(request)
 	if err != nil {
+		if urlErr, ok := err.(*url.Error); ok {
+			err = urlErr.Err
+		}
 		return response, fmt.Errorf("failed to upload business cover photo: %w", err)
 	}
 	defer drainAndClose(httpResponse.Body)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,6 +76,18 @@ func TestBuildBusinessProfileDeltaClearsWebsites(t *testing.T) {
 	content, ok := websiteNodes[0].Content.([]byte)
 	if !ok || len(content) != 0 {
 		t.Fatalf("website removal content = %#v", websiteNodes[0].Content)
+	}
+}
+
+func TestBuildBusinessProfileDeltaClearsHours(t *testing.T) {
+	hours := types.BusinessHoursUpdate{TimeZone: "UTC"}
+	node, err := buildBusinessProfileDelta(types.BusinessProfileUpdate{Hours: &hours})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hoursNode := node.GetChildByTag("business_hours")
+	if hoursNode.AttrGetter().String("timezone") != "UTC" || len(hoursNode.GetChildren()) != 0 {
+		t.Fatalf("unexpected business hours removal node: %#v", hoursNode)
 	}
 }
 
@@ -167,6 +180,32 @@ func TestUploadBusinessCoverPhotoUsesPlaintextPPSPath(t *testing.T) {
 	}
 	if response.MetaHMAC != "cover-token" || response.FBID != "cover-100" || response.Timestamp != "1720000000" {
 		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+type businessCoverRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip businessCoverRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+func TestUploadBusinessCoverPhotoRedactsTransportURL(t *testing.T) {
+	sentinel := errors.New("synthetic transport failure")
+	client := &Client{
+		mediaHTTP: &http.Client{Transport: businessCoverRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, sentinel
+		})},
+		mediaConnCache: &MediaConn{
+			Auth: "sensitive-auth", TTL: 3600, FetchedAt: time.Now(), Hosts: []MediaConnHost{{Hostname: "upload.invalid"}},
+		},
+	}
+	image := append([]byte("\x89PNG\r\n\x1a\n"), []byte("synthetic-image")...)
+	_, err := client.uploadBusinessCoverPhoto(context.Background(), image)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("transport cause was not preserved: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive-auth") {
+		t.Fatalf("transport error exposed auth query: %v", err)
 	}
 }
 
