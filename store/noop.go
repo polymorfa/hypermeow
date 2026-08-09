@@ -61,6 +61,10 @@ func (n *NoopStore) IsTrustedIdentity(ctx context.Context, address string, key [
 	return false, n.Error
 }
 
+func (n *NoopStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, error) {
+	return nil, n.Error
+}
+
 func (n *NoopStore) GetSession(ctx context.Context, address string) ([]byte, error) {
 	return nil, n.Error
 }

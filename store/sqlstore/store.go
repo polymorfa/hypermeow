@@ -136,9 +136,11 @@ const (
 		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) VALUES ($1, $2, $3)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity
 	`
-	deleteAllIdentitiesQuery = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2`
-	deleteIdentityQuery      = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
-	getIdentityQuery         = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	deleteAllIdentitiesQuery     = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2`
+	deleteIdentityQuery          = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	getIdentityQuery             = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	getManyIdentityQueryPostgres = `SELECT their_id, identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id = ANY($2)`
+	getManyIdentityQueryGeneric  = `SELECT their_id, identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id IN (%s)`
 )
 
 func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte) error {
@@ -210,6 +212,81 @@ func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [3
 	existingKey := *(*[32]byte)(existingIdentity)
 	s.setCachedIdentityLocked(address, identityCacheEntry{Key: existingKey, Present: true})
 	return existingKey == key, nil
+}
+
+type addressIdentityTuple struct {
+	Address  string
+	Identity []byte
+}
+
+var identityScanner = dbutil.ConvertRowFn[addressIdentityTuple](func(row dbutil.Scannable) (out addressIdentityTuple, err error) {
+	err = row.Scan(&out.Address, &out.Identity)
+	return
+})
+
+func (s *SQLStore) queryManyIdentities(ctx context.Context, addresses []string) (dbutil.Rows, error) {
+	if wrapped, ok := wrapPostgresArray(s.db, addresses); ok {
+		return s.db.Query(ctx, getManyIdentityQueryPostgres, s.JID, wrapped)
+	}
+	args := make([]any, len(addresses)+1)
+	placeholders := make([]string, len(addresses))
+	args[0] = s.JID
+	for i, address := range addresses {
+		args[i+1] = address
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+	}
+	return s.db.Query(ctx, fmt.Sprintf(getManyIdentityQueryGeneric, strings.Join(placeholders, ",")), args...)
+}
+
+func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, error) {
+	if len(addresses) == 0 {
+		return nil, nil
+	}
+	result := make(map[string][32]byte, len(addresses))
+	missing := make([]string, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
+	s.identityCacheLock.RLock()
+	for _, address := range addresses {
+		if _, duplicate := seen[address]; duplicate {
+			continue
+		}
+		seen[address] = struct{}{}
+		if cached, ok := s.identityCache[address]; ok {
+			if cached.Present {
+				result[address] = cached.Key
+			}
+		} else {
+			missing = append(missing, address)
+		}
+	}
+	s.identityCacheLock.RUnlock()
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.queryManyIdentities(ctx, missing)
+	fetched := make(map[string]identityCacheEntry, len(missing))
+	for _, address := range missing {
+		fetched[address] = identityCacheEntry{}
+	}
+	err = identityScanner.NewRowIter(rows, err).Iter(func(tuple addressIdentityTuple) (bool, error) {
+		if len(tuple.Identity) != 32 {
+			return false, ErrInvalidLength
+		}
+		key := *(*[32]byte)(tuple.Identity)
+		fetched[tuple.Address] = identityCacheEntry{Key: key, Present: true}
+		result[tuple.Address] = key
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.identityCacheLock.Lock()
+	for address, entry := range fetched {
+		s.setCachedIdentityLocked(address, entry)
+	}
+	s.identityCacheLock.Unlock()
+	return result, nil
 }
 
 const (

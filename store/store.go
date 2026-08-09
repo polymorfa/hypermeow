@@ -28,6 +28,10 @@ type IdentityStore interface {
 	IsTrustedIdentity(ctx context.Context, address string, key [32]byte) (bool, error)
 }
 
+type IdentityKeyReader interface {
+	GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, error)
+}
+
 type SessionStore interface {
 	GetSession(ctx context.Context, address string) ([]byte, error)
 	HasSession(ctx context.Context, address string) (bool, error)
