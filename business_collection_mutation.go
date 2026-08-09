@@ -199,6 +199,18 @@ func decodeBusinessCatalogSuccess(data json.RawMessage, discriminator string) er
 	if !ok {
 		return fmt.Errorf("business catalog response is missing %s", discriminator)
 	}
+	if discriminator == "xfb_whatsapp_catalog_create" {
+		var response struct {
+			ProductCatalog *struct{} `json:"product_catalog"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return fmt.Errorf("decode %s response: %w", discriminator, err)
+		}
+		if response.ProductCatalog == nil {
+			return fmt.Errorf("%s response is missing product_catalog", discriminator)
+		}
+		return nil
+	}
 	var response struct {
 		Success *bool `json:"success"`
 	}

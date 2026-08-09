@@ -57,7 +57,6 @@ func TestRejectInvalidBusinessCommerceControlVariables(t *testing.T) {
 
 func TestDecodeBusinessCommerceControlResponses(t *testing.T) {
 	for _, discriminator := range []string{
-		"xfb_whatsapp_catalog_create",
 		"xfb_whatsapp_catalog_product_visibility_update",
 		"xfb_whatsapp_catalog_appeal_product",
 		"xfb_whatsapp_catalog_appeal_collection",
@@ -71,6 +70,12 @@ func TestDecodeBusinessCommerceControlResponses(t *testing.T) {
 		if err := decodeBusinessCatalogSuccess(json.RawMessage(`{}`), discriminator); err == nil {
 			t.Fatalf("%s missing response unexpectedly passed", discriminator)
 		}
+	}
+	if err := decodeBusinessCatalogSuccess(json.RawMessage(`{"xfb_whatsapp_catalog_create":{"product_catalog":{"id":"catalog-1"}}}`), "xfb_whatsapp_catalog_create"); err != nil {
+		t.Fatalf("catalog create response failed: %v", err)
+	}
+	if err := decodeBusinessCatalogSuccess(json.RawMessage(`{"xfb_whatsapp_catalog_create":{"success":true}}`), "xfb_whatsapp_catalog_create"); err == nil {
+		t.Fatal("catalog create response without product_catalog unexpectedly passed")
 	}
 	if err := decodeBusinessCartEnabled(json.RawMessage(`{"xfb_whatsapp_smb_commerce_settings":{"cart_enabled":false}}`), false); err != nil {
 		t.Fatal(err)
