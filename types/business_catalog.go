@@ -156,3 +156,20 @@ type BusinessCollectionStatus struct {
 	CommerceURL  string `json:"commerce_url,omitempty"`
 	RejectReason string `json:"reject_reason,omitempty"`
 }
+
+type BusinessCollectionUpdate struct {
+	Name             *string  `json:"name,omitempty"`
+	AddProductIDs    []string `json:"add_product_ids,omitempty"`
+	RemoveProductIDs []string `json:"remove_product_ids,omitempty"`
+}
+
+type BusinessCollectionMutationResult struct {
+	ID           string `json:"id"`
+	ReviewStatus string `json:"review_status"`
+}
+
+type BusinessCollectionMove struct {
+	CollectionID string `json:"collection_id"`
+	FromIndex    int    `json:"from_index"`
+	ToIndex      int    `json:"to_index"`
+}
