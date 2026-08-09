@@ -1,6 +1,7 @@
 package binary
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -109,7 +110,10 @@ func (r *binaryDecoder) readPacked8(tag int) (string, error) {
 	}
 
 	ret := build.String()
-	if startByte>>7 != 0 && len(ret) > 0 {
+	if startByte>>7 != 0 {
+		if len(ret) == 0 {
+			return "", errors.New("packed string has odd flag without data")
+		}
 		ret = ret[:len(ret)-1]
 	}
 	return ret, nil

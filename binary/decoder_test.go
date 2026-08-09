@@ -36,12 +36,13 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 
 func TestUnmarshalRejectsMalformedStringTokens(t *testing.T) {
 	tests := map[string][]byte{
-		"nil node tag":     {248, 1, 0},
-		"empty packed tag": {248, 1, 255, 128},
-		"JID user list":    {248, 2, 252, 1, 97, 250, 248, 0, 252, 1, 115},
-		"JID server list":  {248, 2, 252, 1, 97, 250, 0, 248, 0},
-		"AD JID user list": {248, 2, 252, 1, 97, 247, 1, 1, 248, 0},
-		"FB JID user list": {248, 2, 252, 1, 97, 246, 248, 0, 0, 0, 252, 4, 109, 115, 103, 114},
+		"nil node tag":           {248, 1, 0},
+		"empty packed tag":       {248, 1, 255, 128},
+		"empty packed attribute": {248, 3, 252, 1, 97, 255, 128, 252, 1, 120},
+		"JID user list":          {248, 2, 252, 1, 97, 250, 248, 0, 252, 1, 115},
+		"JID server list":        {248, 2, 252, 1, 97, 250, 0, 248, 0},
+		"AD JID user list":       {248, 2, 252, 1, 97, 247, 1, 1, 248, 0},
+		"FB JID user list":       {248, 2, 252, 1, 97, 246, 248, 0, 0, 0, 252, 4, 109, 115, 103, 114},
 		"interop user list": {248, 2, 252, 1, 97, 245, 248, 0, 0, 0, 0, 0, 252, 7,
 			105, 110, 116, 101, 114, 111, 112},
 	}
