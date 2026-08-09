@@ -1,11 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"strconv"
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestLoadConfigWorkload(t *testing.T) {
@@ -21,6 +25,7 @@ func TestLoadConfigWorkload(t *testing.T) {
 	t.Setenv("HISTORY_CONVERSATIONS", "10")
 	t.Setenv("HISTORY_MESSAGES", "5")
 	t.Setenv("BENCH_BUSINESS_SMOKE", "1")
+	t.Setenv("BENCH_PHONE_CONSENT_SMOKE", "1")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -37,6 +42,9 @@ func TestLoadConfigWorkload(t *testing.T) {
 	}
 	if !cfg.BusinessSmoke {
 		t.Fatal("business smoke validation was not enabled")
+	}
+	if !cfg.PhoneConsentSmoke {
+		t.Fatal("phone consent smoke validation was not enabled")
 	}
 }
 
@@ -110,5 +118,27 @@ func TestJobShardDistributesChats(t *testing.T) {
 	}
 	if len(seen) < 32 {
 		t.Fatalf("chat sharding is too concentrated: %d shards", len(seen))
+	}
+}
+
+func TestContainsRequestPhoneNumberCapture(t *testing.T) {
+	payload, err := proto.Marshal(whatsmeow.BuildRequestPhoneNumberMessage(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	captures := []capturedMessage{{PlaintextBase64: base64.StdEncoding.EncodeToString(payload)}}
+	if !containsRequestPhoneNumberCapture(captures) {
+		t.Fatal("request phone number message was not detected")
+	}
+}
+
+func TestPhoneConsentTargetPrefersSenderLID(t *testing.T) {
+	message := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{
+		Chat:      types.NewJID("15550001111", types.DefaultUserServer),
+		Sender:    types.NewJID("15550001111", types.DefaultUserServer),
+		SenderAlt: types.NewJID("100000011111111", types.HiddenUserServer),
+	}}}
+	if got := phoneConsentTarget(message); got.String() != "100000011111111@lid" {
+		t.Fatalf("target = %s", got)
 	}
 }

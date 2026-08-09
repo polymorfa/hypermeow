@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,27 +27,30 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
 
 var revision = "working-tree"
 
 type config struct {
-	DatabaseURL    string
-	BarbackURL     string
-	BarbackWS      string
-	TLSCAPath      string
-	TLSServerName  string
-	OutputPath     string
-	MemProfilePath string
-	Variant        string
-	BusinessSmoke  bool
-	Total          int64
-	Timeout        time.Duration
-	Workload       workloadConfig
+	DatabaseURL       string
+	BarbackURL        string
+	BarbackWS         string
+	TLSCAPath         string
+	TLSServerName     string
+	OutputPath        string
+	MemProfilePath    string
+	Variant           string
+	BusinessSmoke     bool
+	PhoneConsentSmoke bool
+	Total             int64
+	Timeout           time.Duration
+	Workload          workloadConfig
 }
 
 type workloadConfig struct {
@@ -98,34 +102,35 @@ type runtimeStats struct {
 }
 
 type result struct {
-	Variant              string               `json:"variant"`
-	Revision             string               `json:"revision"`
-	StartedAt            time.Time            `json:"started_at"`
-	Completed            bool                 `json:"completed"`
-	Error                string               `json:"error,omitempty"`
-	TargetMessages       int64                `json:"target_messages"`
-	Workload             workloadConfig       `json:"workload"`
-	MessagesReceived     int64                `json:"messages_received"`
-	MessagesSent         int64                `json:"messages_sent"`
-	SendFailures         int64                `json:"send_failures"`
-	FailureReasons       map[string]int64     `json:"failure_reasons,omitempty"`
-	QueueOverflows       int64                `json:"queue_overflows"`
-	HistorySyncs         int64                `json:"history_syncs"`
-	HistoryConversations int64                `json:"history_conversations"`
-	HistoryMessages      int64                `json:"history_messages"`
-	DurationMS           float64              `json:"duration_ms"`
-	ThroughputPerSec     float64              `json:"throughput_per_sec"`
-	SendLatency          latencyStats         `json:"send_latency"`
-	Database             databaseStats        `json:"database"`
-	Runtime              runtimeStats         `json:"runtime"`
-	WorkloadRuntime      workloadRuntimeStats `json:"workload_runtime"`
-	SessionRuntime       workloadRuntimeStats `json:"session_runtime"`
-	Resources            resourceStats        `json:"resources"`
-	MessageTypes         map[string]int64     `json:"message_types"`
-	MediaUploads         int64                `json:"media_uploads"`
-	MediaUploadBytes     int64                `json:"media_upload_bytes"`
-	MediaUploadLatency   latencyStats         `json:"media_upload_latency"`
-	BusinessAppValidated bool                 `json:"business_app_validated"`
+	Variant               string               `json:"variant"`
+	Revision              string               `json:"revision"`
+	StartedAt             time.Time            `json:"started_at"`
+	Completed             bool                 `json:"completed"`
+	Error                 string               `json:"error,omitempty"`
+	TargetMessages        int64                `json:"target_messages"`
+	Workload              workloadConfig       `json:"workload"`
+	MessagesReceived      int64                `json:"messages_received"`
+	MessagesSent          int64                `json:"messages_sent"`
+	SendFailures          int64                `json:"send_failures"`
+	FailureReasons        map[string]int64     `json:"failure_reasons,omitempty"`
+	QueueOverflows        int64                `json:"queue_overflows"`
+	HistorySyncs          int64                `json:"history_syncs"`
+	HistoryConversations  int64                `json:"history_conversations"`
+	HistoryMessages       int64                `json:"history_messages"`
+	DurationMS            float64              `json:"duration_ms"`
+	ThroughputPerSec      float64              `json:"throughput_per_sec"`
+	SendLatency           latencyStats         `json:"send_latency"`
+	Database              databaseStats        `json:"database"`
+	Runtime               runtimeStats         `json:"runtime"`
+	WorkloadRuntime       workloadRuntimeStats `json:"workload_runtime"`
+	SessionRuntime        workloadRuntimeStats `json:"session_runtime"`
+	Resources             resourceStats        `json:"resources"`
+	MessageTypes          map[string]int64     `json:"message_types"`
+	MediaUploads          int64                `json:"media_uploads"`
+	MediaUploadBytes      int64                `json:"media_upload_bytes"`
+	MediaUploadLatency    latencyStats         `json:"media_upload_latency"`
+	BusinessAppValidated  bool                 `json:"business_app_validated"`
+	PhoneConsentValidated bool                 `json:"phone_consent_validated"`
 }
 
 type runner struct {
@@ -133,17 +138,19 @@ type runner struct {
 	db         *sql.DB
 	httpClient *http.Client
 
-	received        atomic.Int64
-	sent            atomic.Int64
-	failed          atomic.Int64
-	overflows       atomic.Int64
-	historySyncs    atomic.Int64
-	historyConvs    atomic.Int64
-	historyMessages atomic.Int64
-	messageSequence atomic.Int64
-	mediaUploads    atomic.Int64
-	mediaBytes      atomic.Int64
-	businessValid   atomic.Bool
+	received          atomic.Int64
+	sent              atomic.Int64
+	failed            atomic.Int64
+	overflows         atomic.Int64
+	historySyncs      atomic.Int64
+	historyConvs      atomic.Int64
+	historyMessages   atomic.Int64
+	messageSequence   atomic.Int64
+	mediaUploads      atomic.Int64
+	mediaBytes        atomic.Int64
+	businessValid     atomic.Bool
+	phoneConsentValid atomic.Bool
+	phoneConsentOnce  sync.Once
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -266,18 +273,23 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("invalid BENCH_BUSINESS_SMOKE")
 	}
+	phoneConsentSmoke, err := strconv.ParseBool(env("BENCH_PHONE_CONSENT_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_PHONE_CONSENT_SMOKE")
+	}
 	return config{
-		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
-		BarbackURL:     env("BARBACK_URL", "http://barback:8080"),
-		BarbackWS:      env("BARBACK_WS", "ws://barback:8080/ws/chat"),
-		TLSCAPath:      os.Getenv("BARBACK_TLS_CA"),
-		TLSServerName:  env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
-		OutputPath:     env("RESULT_PATH", "/results/result.json"),
-		MemProfilePath: os.Getenv("MEM_PROFILE_PATH"),
-		Variant:        env("BENCH_VARIANT", "candidate"),
-		BusinessSmoke:  businessSmoke,
-		Total:          total,
-		Timeout:        timeout,
+		DatabaseURL:       env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
+		BarbackURL:        env("BARBACK_URL", "http://barback:8080"),
+		BarbackWS:         env("BARBACK_WS", "ws://barback:8080/ws/chat"),
+		TLSCAPath:         os.Getenv("BARBACK_TLS_CA"),
+		TLSServerName:     env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
+		OutputPath:        env("RESULT_PATH", "/results/result.json"),
+		MemProfilePath:    os.Getenv("MEM_PROFILE_PATH"),
+		Variant:           env("BENCH_VARIANT", "candidate"),
+		BusinessSmoke:     businessSmoke,
+		PhoneConsentSmoke: phoneConsentSmoke,
+		Total:             total,
+		Timeout:           timeout,
 		Workload: workloadConfig{
 			Scenario:             env("BENCH_SCENARIO", "custom"),
 			Mode:                 mode,
@@ -546,6 +558,22 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 		case <-ctx.Done():
 			return
 		case msg := <-jobs:
+			var consentErr error
+			if r.cfg.PhoneConsentSmoke {
+				r.phoneConsentOnce.Do(func() {
+					consentErr = r.validatePhoneNumberConsent(ctx, client, phoneConsentTarget(msg))
+					if consentErr == nil {
+						r.phoneConsentValid.Store(true)
+					}
+				})
+			}
+			if consentErr != nil {
+				r.failed.Add(1)
+				r.recordFailure(consentErr)
+				fmt.Fprintf(os.Stderr, "validate phone number consent: %v\n", consentErr)
+				r.checkDone()
+				continue
+			}
 			sequence := r.messageSequence.Add(1) - 1
 			outgoing, category, mediaBytes, uploadDuration, err := buildWorkloadMessage(ctx, client, string(msg.Info.ID), sequence, r.cfg.Workload.MessageProfile)
 			if uploadDuration > 0 {
@@ -580,6 +608,70 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 	}
 }
 
+func phoneConsentTarget(message *events.Message) types.JID {
+	if message.Info.SenderAlt.Server == types.HiddenUserServer {
+		return message.Info.SenderAlt.ToNonAD()
+	}
+	if message.Info.Sender.Server == types.HiddenUserServer {
+		return message.Info.Sender.ToNonAD()
+	}
+	return message.Info.Chat.ToNonAD()
+}
+
+type capturedMessage struct {
+	PlaintextBase64 string `json:"plaintext_base64"`
+}
+
+func containsRequestPhoneNumberCapture(captures []capturedMessage) bool {
+	for _, capture := range captures {
+		plaintext, err := base64.StdEncoding.DecodeString(capture.PlaintextBase64)
+		if err != nil {
+			continue
+		}
+		var message waE2E.Message
+		if proto.Unmarshal(plaintext, &message) == nil && message.GetRequestPhoneNumberMessage() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsmeow.Client, chat types.JID) error {
+	if chat.Server != types.HiddenUserServer {
+		return fmt.Errorf("synthetic phone consent target is not a LID")
+	}
+	if _, err := client.SendMessage(ctx, chat, whatsmeow.BuildRequestPhoneNumberMessage(nil)); err != nil {
+		return fmt.Errorf("send request phone number message: %w", err)
+	}
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.cfg.BarbackURL+"/admin/mock-phone/captured-messages", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := r.httpClient.Do(req)
+		if err == nil {
+			var captures []capturedMessage
+			decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&captures)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && decodeErr == nil && containsRequestPhoneNumberCapture(captures) {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("Barback did not capture request phone number message")
+		case <-ticker.C:
+		}
+	}
+}
+
 func (r *runner) checkDone() {
 	if r.sent.Load()+r.failed.Load() >= r.cfg.Total {
 		r.doneOnce.Do(func() {
@@ -605,28 +697,29 @@ func (r *runner) snapshot(completed bool) result {
 	}
 	runtimeNow := runtimeSnapshot()
 	res := result{
-		Variant:              r.cfg.Variant,
-		Revision:             revision,
-		StartedAt:            startedTime,
-		Completed:            completed && r.failed.Load() == 0 && r.sent.Load() == r.cfg.Total,
-		TargetMessages:       r.cfg.Total,
-		Workload:             r.cfg.Workload,
-		MessagesReceived:     r.received.Load(),
-		MessagesSent:         r.sent.Load(),
-		SendFailures:         r.failed.Load(),
-		FailureReasons:       r.failureReasonSnapshot(),
-		QueueOverflows:       r.overflows.Load(),
-		HistorySyncs:         r.historySyncs.Load(),
-		HistoryConversations: r.historyConvs.Load(),
-		HistoryMessages:      r.historyMessages.Load(),
-		DurationMS:           float64(duration) / float64(time.Millisecond),
-		SendLatency:          r.latencySnapshot(),
-		Runtime:              runtimeNow,
-		MessageTypes:         r.messageTypeSnapshot(),
-		MediaUploads:         r.mediaUploads.Load(),
-		MediaUploadBytes:     r.mediaBytes.Load(),
-		MediaUploadLatency:   r.uploadLatencySnapshot(),
-		BusinessAppValidated: r.businessValid.Load(),
+		Variant:               r.cfg.Variant,
+		Revision:              revision,
+		StartedAt:             startedTime,
+		Completed:             completed && r.failed.Load() == 0 && r.sent.Load() == r.cfg.Total,
+		TargetMessages:        r.cfg.Total,
+		Workload:              r.cfg.Workload,
+		MessagesReceived:      r.received.Load(),
+		MessagesSent:          r.sent.Load(),
+		SendFailures:          r.failed.Load(),
+		FailureReasons:        r.failureReasonSnapshot(),
+		QueueOverflows:        r.overflows.Load(),
+		HistorySyncs:          r.historySyncs.Load(),
+		HistoryConversations:  r.historyConvs.Load(),
+		HistoryMessages:       r.historyMessages.Load(),
+		DurationMS:            float64(duration) / float64(time.Millisecond),
+		SendLatency:           r.latencySnapshot(),
+		Runtime:               runtimeNow,
+		MessageTypes:          r.messageTypeSnapshot(),
+		MediaUploads:          r.mediaUploads.Load(),
+		MediaUploadBytes:      r.mediaBytes.Load(),
+		MediaUploadLatency:    r.uploadLatencySnapshot(),
+		BusinessAppValidated:  r.businessValid.Load(),
+		PhoneConsentValidated: r.phoneConsentValid.Load(),
 	}
 	r.metricsMu.Lock()
 	if r.sessionStarted {

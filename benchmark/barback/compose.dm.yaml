@@ -22,3 +22,5 @@ services:
       - ${HISTORY_CONVERSATIONS:-100}
       - --history-sync-messages
       - ${HISTORY_MESSAGES:-20}
+      - --capture-messages
+      - ${BARBACK_CAPTURE_MESSAGES:-0}
