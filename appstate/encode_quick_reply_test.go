@@ -23,6 +23,25 @@ func TestBuildQuickReply(t *testing.T) {
 	}
 }
 
+func TestBuildQuickReplyPreservesAssociatedLabels(t *testing.T) {
+	build := reflect.ValueOf(BuildQuickReply)
+	if !build.Type().IsVariadic() {
+		t.Fatal("BuildQuickReply does not accept associated label IDs")
+	}
+	result := build.CallSlice([]reflect.Value{
+		reflect.ValueOf("1700000000"),
+		reflect.ValueOf("hours"),
+		reflect.ValueOf("We are open until 18:00."),
+		reflect.ValueOf([]string{"open", "hours"}),
+		reflect.ValueOf(int32(7)),
+		reflect.ValueOf([]string{"label-1", "label-2"}),
+	})[0].Interface().(PatchInfo)
+	action := result.Mutations[0].Value.GetQuickReplyAction()
+	if !reflect.DeepEqual(action.GetAssociatedLabelIDs(), []string{"label-1", "label-2"}) {
+		t.Fatalf("associated labels = %#v", action.GetAssociatedLabelIDs())
+	}
+}
+
 func TestBuildQuickReplyDeleteUsesTombstone(t *testing.T) {
 	patch := BuildQuickReplyDelete("1700000000")
 	if patch.Type != WAPatchRegular || len(patch.Mutations) != 1 {
