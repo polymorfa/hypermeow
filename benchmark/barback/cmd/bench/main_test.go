@@ -122,14 +122,22 @@ func TestJobShardDistributesChats(t *testing.T) {
 	}
 }
 
-func TestContainsRequestPhoneNumberCapture(t *testing.T) {
-	payload, err := proto.Marshal(whatsmeow.BuildRequestPhoneNumberMessage(nil))
+func TestContainsPhoneNumberConsentCaptures(t *testing.T) {
+	requestPayload, err := proto.Marshal(whatsmeow.BuildRequestPhoneNumberMessage(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	captures := []capturedMessage{{PlaintextBase64: base64.StdEncoding.EncodeToString(payload)}}
-	if !containsRequestPhoneNumberCapture(captures) {
-		t.Fatal("request phone number message was not detected")
+	sharePayload, err := proto.Marshal(whatsmeow.BuildSharePhoneNumberMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	captures := []capturedMessage{{PlaintextBase64: base64.StdEncoding.EncodeToString(requestPayload)}}
+	if containsPhoneNumberConsentCaptures(captures) {
+		t.Fatal("request-only capture passed phone consent validation")
+	}
+	captures = append(captures, capturedMessage{PlaintextBase64: base64.StdEncoding.EncodeToString(sharePayload)})
+	if !containsPhoneNumberConsentCaptures(captures) {
+		t.Fatal("request and share messages were not detected")
 	}
 }
 

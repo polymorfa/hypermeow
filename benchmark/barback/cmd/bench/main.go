@@ -623,18 +623,21 @@ type capturedMessage struct {
 	PlaintextBase64 string `json:"plaintext_base64"`
 }
 
-func containsRequestPhoneNumberCapture(captures []capturedMessage) bool {
+func containsPhoneNumberConsentCaptures(captures []capturedMessage) bool {
+	var requestFound, shareFound bool
 	for _, capture := range captures {
 		plaintext, err := base64.StdEncoding.DecodeString(capture.PlaintextBase64)
 		if err != nil {
 			continue
 		}
 		var message waE2E.Message
-		if proto.Unmarshal(plaintext, &message) == nil && message.GetRequestPhoneNumberMessage() != nil {
-			return true
+		if proto.Unmarshal(plaintext, &message) != nil {
+			continue
 		}
+		requestFound = requestFound || message.GetRequestPhoneNumberMessage() != nil
+		shareFound = shareFound || message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_SHARE_PHONE_NUMBER
 	}
-	return false
+	return requestFound && shareFound
 }
 
 func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsmeow.Client, chat types.JID) error {
@@ -643,6 +646,9 @@ func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsme
 	}
 	if _, err := client.SendMessage(ctx, chat, whatsmeow.BuildRequestPhoneNumberMessage(nil)); err != nil {
 		return fmt.Errorf("send request phone number message: %w", err)
+	}
+	if _, err := client.SendMessage(ctx, chat, whatsmeow.BuildSharePhoneNumberMessage()); err != nil {
+		return fmt.Errorf("send share phone number message: %w", err)
 	}
 
 	deadline := time.NewTimer(5 * time.Second)
@@ -659,7 +665,7 @@ func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsme
 			var captures []capturedMessage
 			decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&captures)
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK && decodeErr == nil && containsRequestPhoneNumberCapture(captures) {
+			if resp.StatusCode == http.StatusOK && decodeErr == nil && containsPhoneNumberConsentCaptures(captures) {
 				return nil
 			}
 		}
@@ -667,7 +673,7 @@ func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsme
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("Barback did not capture request phone number message")
+			return fmt.Errorf("Barback did not capture request and share phone number messages")
 		case <-ticker.C:
 		}
 	}
