@@ -651,6 +651,11 @@ func (cli *Client) decryptGroupMsg(ctx context.Context, child *waBinary.Node, fr
 
 const checkPadding = true
 
+type historySyncNotification struct {
+	messageID    types.MessageID
+	notification *waE2E.HistorySyncNotification
+}
+
 func isValidPadding(plaintext []byte) bool {
 	lastByte := plaintext[len(plaintext)-1]
 	expectedPadding := bytes.Repeat([]byte{lastByte}, int(lastByte))
@@ -713,13 +718,13 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 	ctx := cli.BackgroundEventCtx
 	for {
 		select {
-		case notif := <-cli.historySyncNotifications:
-			blob, err := cli.DownloadHistorySync(ctx, notif, false)
+		case queued := <-cli.historySyncNotifications:
+			blob, err := cli.DownloadHistorySync(ctx, queued.notification, false)
 			if err != nil {
 				cli.Log.Errorf("Failed to download history sync: %v", err)
 			} else {
-				cli.dispatchEvent(&events.HistorySync{Data: blob, Notification: notif})
-				err = cli.DeleteMedia(ctx, MediaHistory, notif.GetDirectPath(), notif.GetFileEncSHA256(), notif.GetEncHandle())
+				cli.dispatchEvent(&events.HistorySync{Data: blob, Notification: queued.notification, MessageID: queued.messageID})
+				err = cli.DeleteMedia(ctx, MediaHistory, queued.notification.GetDirectPath(), queued.notification.GetFileEncSHA256(), queued.notification.GetEncHandle())
 				if err != nil {
 					cli.Log.Warnf("Failed to delete history sync media from server: %v", err)
 				}
@@ -877,12 +882,12 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 
 	if protoMsg.GetHistorySyncNotification() != nil {
 		if !cli.ManualHistorySyncDownload {
-			cli.historySyncNotifications <- protoMsg.HistorySyncNotification
+			cli.historySyncNotifications <- historySyncNotification{messageID: info.ID, notification: protoMsg.HistorySyncNotification}
 			if cli.historySyncHandlerStarted.CompareAndSwap(false, true) {
 				go cli.handleHistorySyncNotificationLoop()
 			}
 		}
-		if !(cli.ManualHistorySyncDownload && cli.DisableManualHistorySyncReceipt) {
+		if cli.shouldSendHistorySyncReceipt() {
 			go func() {
 				err := cli.SendProtocolMessageReceipt(ctx, info.ID, types.ReceiptTypeHistorySync)
 				if err != nil {
@@ -919,6 +924,10 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		}()
 	}
 	return
+}
+
+func (cli *Client) shouldSendHistorySyncReceipt() bool {
+	return !cli.DisableHistorySyncReceipt && !(cli.ManualHistorySyncDownload && cli.DisableManualHistorySyncReceipt)
 }
 
 func (cli *Client) processProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {

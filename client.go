@@ -135,10 +135,11 @@ type Client struct {
 	appStateProc     *appstate.Processor
 	appStateSyncLock sync.Mutex
 
-	historySyncNotifications        chan *waE2E.HistorySyncNotification
+	historySyncNotifications        chan historySyncNotification
 	historySyncHandlerStarted       atomic.Bool
 	ManualHistorySyncDownload       bool
 	DisableManualHistorySyncReceipt bool
+	DisableHistorySyncReceipt       bool
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time
@@ -324,7 +325,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		socketWait:         make(chan struct{}),
 		expectedDisconnect: exsync.NewEvent(),
 
-		historySyncNotifications: make(chan *waE2E.HistorySyncNotification, 32),
+		historySyncNotifications: make(chan historySyncNotification, 32),
 
 		GetMessageForRetry: func(requester, to types.JID, id types.MessageID) *waE2E.Message { return nil },
 
