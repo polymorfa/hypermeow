@@ -390,6 +390,15 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	}
 	address, _ := profileNode.GetChildByTag("address").Content.([]byte)
 	email, _ := profileNode.GetChildByTag("email").Content.([]byte)
+	description, _ := profileNode.GetChildByTag("description").Content.([]byte)
+	websiteNodes := profileNode.GetChildrenByTag("website")
+	websites := make([]string, 0, len(websiteNodes))
+	for _, websiteNode := range websiteNodes {
+		website, _ := websiteNode.Content.([]byte)
+		websites = append(websites, string(website))
+	}
+	coverPhoto := profileNode.GetChildByTag("cover_photo")
+	coverPhotoID := coverPhoto.AttrGetter().String("id")
 	businessHour := profileNode.GetChildByTag("business_hours")
 	businessHourTimezone := businessHour.AttrGetter().String("timezone")
 	businessHoursConfigs := businessHour.GetChildren()
@@ -433,6 +442,9 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 		JID:                   jid,
 		Email:                 string(email),
 		Address:               string(address),
+		Description:           string(description),
+		Websites:              websites,
+		CoverPhotoID:          coverPhotoID,
 		Categories:            categories,
 		ProfileOptions:        profileOptions,
 		BusinessHoursTimeZone: businessHourTimezone,
