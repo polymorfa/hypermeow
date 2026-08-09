@@ -162,6 +162,19 @@ func BuildLabelChat(target types.JID, labelID string, labeled bool) PatchInfo {
 	}
 }
 
+type LabelChatChange struct {
+	LabelID string
+	Labeled bool
+}
+
+func BuildLabelChatChanges(target types.JID, changes []LabelChatChange) PatchInfo {
+	mutations := make([]MutationInfo, len(changes))
+	for index, change := range changes {
+		mutations[index] = newLabelChatMutation(target, change.LabelID, change.Labeled)
+	}
+	return PatchInfo{Type: WAPatchRegular, Mutations: mutations}
+}
+
 func newLabelMessageMutation(target types.JID, labelID, messageID string, labeled bool) MutationInfo {
 	return MutationInfo{
 		Index:   []string{IndexLabelAssociationMessage, labelID, target.String(), messageID, "0", "0"},
