@@ -30,6 +30,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waFingerprint"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -51,6 +52,7 @@ type config struct {
 	Variant           string
 	BusinessSmoke     bool
 	PhoneConsentSmoke bool
+	SecurityCodeSmoke bool
 	Total             int64
 	Timeout           time.Duration
 	Workload          workloadConfig
@@ -134,6 +136,7 @@ type result struct {
 	MediaUploadLatency    latencyStats         `json:"media_upload_latency"`
 	BusinessAppValidated  bool                 `json:"business_app_validated"`
 	PhoneConsentValidated bool                 `json:"phone_consent_validated"`
+	SecurityCodeValidated bool                 `json:"security_code_validated"`
 }
 
 type runner struct {
@@ -158,6 +161,11 @@ type runner struct {
 	phoneConsentValidator  func(context.Context, *whatsmeow.Client, types.JID) error
 	statementStatsReset    func(context.Context) error
 	statementStatsSnapshot func() databaseStats
+	securityCodeValid      atomic.Bool
+	securityCodeOnce       sync.Once
+	securityCodeErr        error
+	preflightOnce          sync.Once
+	preflightErr           error
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -289,6 +297,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("invalid BENCH_PHONE_CONSENT_SMOKE")
 	}
+	securityCodeSmoke, err := strconv.ParseBool(env("BENCH_SECURITY_CODE_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_SECURITY_CODE_SMOKE")
+	}
 	return config{
 		DatabaseURL:       env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
 		BarbackURL:        env("BARBACK_URL", "http://barback:8080"),
@@ -300,6 +312,7 @@ func loadConfig() (config, error) {
 		Variant:           env("BENCH_VARIANT", "candidate"),
 		BusinessSmoke:     businessSmoke,
 		PhoneConsentSmoke: phoneConsentSmoke,
+		SecurityCodeSmoke: securityCodeSmoke,
 		Total:             total,
 		Timeout:           timeout,
 		Workload: workloadConfig{
@@ -492,28 +505,19 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 			if event.Message.GetConversation() != "ping" {
 				return
 			}
-			if !r.beforeBenchmarkMessage(func() error {
-				preflightDatabase := r.snapshotStatementStats()
-				r.metricsMu.Lock()
-				r.preflightDatabase = preflightDatabase
-				r.preflightCaptured = true
-				r.metricsMu.Unlock()
-				validate := r.phoneConsentValidator
-				if validate == nil {
-					validate = r.validatePhoneNumberConsent
-				}
-				validationErr := validate(ctx, client, phoneConsentTarget(event))
-				resetErr := r.resetStatementStats(ctx)
-				r.metricsMu.Lock()
-				r.postConsentClean = resetErr == nil
-				r.metricsMu.Unlock()
-				if validationErr != nil {
-					return validationErr
-				}
-				if resetErr != nil {
-					return fmt.Errorf("reset workload statement stats: %w", resetErr)
-				}
-				return nil
+			validatePhoneConsent := r.phoneConsentValidator
+			if validatePhoneConsent == nil {
+				validatePhoneConsent = r.validatePhoneNumberConsent
+			}
+			if !r.runBenchmarkPreflight(ctx, func() bool {
+				return r.beforeBenchmarkMessage(
+					func() error {
+						return validatePhoneConsent(ctx, client, phoneConsentTarget(event))
+					},
+					func() error {
+						return validateIdentityVerificationCodes(ctx, client, phoneConsentTarget(event))
+					},
+				)
 			}) {
 				return
 			}
@@ -668,11 +672,48 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 	}
 }
 
-func (r *runner) beforeBenchmarkMessage(validate func() error) bool {
-	if !r.cfg.PhoneConsentSmoke {
+func (r *runner) runBenchmarkPreflight(ctx context.Context, validate func() bool) bool {
+	if !r.cfg.PhoneConsentSmoke && !r.cfg.SecurityCodeSmoke {
 		return true
 	}
-	return r.runPhoneConsentSmoke(validate) == nil
+	r.preflightOnce.Do(func() {
+		preflightDatabase := r.snapshotStatementStats()
+		r.metricsMu.Lock()
+		r.preflightDatabase = preflightDatabase
+		r.preflightCaptured = true
+		r.metricsMu.Unlock()
+		valid := validate()
+		resetErr := r.resetStatementStats(ctx)
+		r.metricsMu.Lock()
+		r.postConsentClean = resetErr == nil
+		r.metricsMu.Unlock()
+		if !valid {
+			r.preflightErr = errors.New("benchmark smoke validation failed")
+		}
+		if resetErr != nil {
+			r.recordFailure(resetErr)
+			if r.preflightErr == nil {
+				r.preflightErr = fmt.Errorf("reset workload statement stats: %w", resetErr)
+			}
+			r.reportFatal(fmt.Errorf("reset workload statement stats: %w", resetErr))
+		}
+	})
+	return r.preflightErr == nil
+}
+
+func (r *runner) beforeBenchmarkMessage(validatePhoneConsent func() error, validateSecurityCodes ...func() error) bool {
+	if r.cfg.PhoneConsentSmoke && r.runPhoneConsentSmoke(validatePhoneConsent) != nil {
+		return false
+	}
+	if r.cfg.SecurityCodeSmoke {
+		if len(validateSecurityCodes) == 0 {
+			return false
+		}
+		if r.runSecurityCodeSmoke(validateSecurityCodes[0]) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *runner) runPhoneConsentSmoke(validate func() error) error {
@@ -689,6 +730,21 @@ func (r *runner) runPhoneConsentSmoke(validate func() error) error {
 	return r.phoneConsentErr
 }
 
+func (r *runner) runSecurityCodeSmoke(validate func() error) error {
+	r.securityCodeOnce.Do(func() {
+		r.securityCodeErr = validate()
+		if r.securityCodeErr == nil {
+			r.securityCodeValid.Store(true)
+			return
+		}
+		r.failed.Add(1)
+		r.recordFailure(r.securityCodeErr)
+		fmt.Fprintf(os.Stderr, "validate identity verification code: %v\n", r.securityCodeErr)
+		r.reportFatal(fmt.Errorf("validate identity verification code: %w", r.securityCodeErr))
+	})
+	return r.securityCodeErr
+}
+
 func (r *runner) reportFatal(err error) {
 	if err == nil || r.fatalErr == nil {
 		return
@@ -697,6 +753,38 @@ func (r *runner) reportFatal(err error) {
 	case r.fatalErr <- err:
 	default:
 	}
+}
+
+func validateIdentityVerificationCodes(ctx context.Context, client *whatsmeow.Client, userID types.JID) error {
+	if userID.Server != types.HiddenUserServer {
+		return whatsmeow.ErrIdentityVerificationRequiresLID
+	}
+	codes, err := client.GetIdentityVerificationCodes(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("generate identity verification codes: %w", err)
+	}
+	if codes.UserID != userID || len(codes.NumericCode) != 60 {
+		return errors.New("identity verification result has an invalid LID or numeric code")
+	}
+	for _, digit := range codes.NumericCode {
+		if digit < '0' || digit > '9' {
+			return errors.New("identity verification numeric code contains non-digits")
+		}
+	}
+	var display, verification waFingerprint.CombinedFingerprint
+	if err = proto.Unmarshal(codes.DisplayQRCode, &display); err != nil {
+		return fmt.Errorf("decode display QR: %w", err)
+	}
+	if err = proto.Unmarshal(codes.VerificationQRCode, &verification); err != nil {
+		return fmt.Errorf("decode verification QR: %w", err)
+	}
+	if len(display.GetLocalFingerprint().GetPublicKey()) != 0 || len(display.GetRemoteFingerprint().GetPublicKey()) != 0 {
+		return errors.New("display QR exposed unhashed identity keys")
+	}
+	if len(verification.GetLocalFingerprint().GetPublicKey()) == 0 || len(verification.GetRemoteFingerprint().GetPublicKey()) == 0 {
+		return errors.New("verification QR omitted identity keys")
+	}
+	return nil
 }
 
 func phoneConsentTarget(message *events.Message) types.JID {
@@ -824,6 +912,7 @@ func (r *runner) snapshot(completed bool) result {
 		MediaUploadLatency:    r.uploadLatencySnapshot(),
 		BusinessAppValidated:  r.businessValid.Load(),
 		PhoneConsentValidated: r.phoneConsentValid.Load(),
+		SecurityCodeValidated: r.securityCodeValid.Load(),
 	}
 	r.metricsMu.Lock()
 	if r.sessionStarted {

@@ -32,6 +32,7 @@ func TestLoadConfigWorkload(t *testing.T) {
 	t.Setenv("HISTORY_MESSAGES", "5")
 	t.Setenv("BENCH_BUSINESS_SMOKE", "1")
 	t.Setenv("BENCH_PHONE_CONSENT_SMOKE", "1")
+	t.Setenv("BENCH_SECURITY_CODE_SMOKE", "1")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -51,6 +52,9 @@ func TestLoadConfigWorkload(t *testing.T) {
 	}
 	if !cfg.PhoneConsentSmoke {
 		t.Fatal("phone consent smoke validation was not enabled")
+	}
+	if !cfg.SecurityCodeSmoke {
+		t.Fatal("security code smoke validation was not enabled")
 	}
 }
 
@@ -160,7 +164,7 @@ func TestPhoneConsentSmokeRunsBeforeMeasuredMetrics(t *testing.T) {
 			t.Fatal("workload metrics started before phone consent validation")
 		}
 		return nil
-	}) {
+	}, nil) {
 		t.Fatal("phone consent validation failed")
 	}
 	r.startOnce.Do(r.startMetrics)
@@ -176,7 +180,7 @@ func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
 		fatalErr:       make(chan error, 1),
 		failureReasons: make(map[string]int64),
 	}
-	if r.beforeBenchmarkMessage(func() error { return errors.New("failed") }) {
+	if r.beforeBenchmarkMessage(func() error { return errors.New("failed") }, nil) {
 		t.Fatal("failed phone consent validation allowed the workload to start")
 	}
 	if r.startedAt.Load() != 0 {
@@ -330,6 +334,36 @@ func TestHandlerUsesRunContextForPhoneConsent(t *testing.T) {
 		}
 	default:
 		t.Fatal("canceled run context was not propagated to phone consent validation")
+	}
+}
+
+func TestOptionalSmokesFinishBeforeMeasuredMetrics(t *testing.T) {
+	r := &runner{
+		cfg: config{
+			PhoneConsentSmoke: true,
+			SecurityCodeSmoke: true,
+		},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	var order []string
+	if !r.beforeBenchmarkMessage(
+		func() error {
+			order = append(order, "phone")
+			return nil
+		},
+		func() error {
+			if r.startedAt.Load() != 0 {
+				t.Fatal("workload metrics started before security code validation")
+			}
+			order = append(order, "security")
+			return nil
+		},
+	) {
+		t.Fatal("preflight validation failed")
+	}
+	if len(order) != 2 || order[0] != "phone" || order[1] != "security" {
+		t.Fatalf("validation order = %v", order)
 	}
 }
 
