@@ -990,6 +990,8 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return getButtonTypeFromMessage(msg.ViewOnceMessage.Message)
 	case msg.ViewOnceMessageV2 != nil:
 		return getButtonTypeFromMessage(msg.ViewOnceMessageV2.Message)
+	case msg.ViewOnceMessageV2Extension != nil:
+		return getButtonTypeFromMessage(msg.ViewOnceMessageV2Extension.Message)
 	case msg.EphemeralMessage != nil:
 		return getButtonTypeFromMessage(msg.EphemeralMessage.Message)
 	case msg.ButtonsMessage != nil:
@@ -1013,6 +1015,8 @@ func buildNativeFlowBizNode(msg *waE2E.Message, nowUnix int64) waBinary.Node {
 			msg = msg.ViewOnceMessage.Message
 		case msg.ViewOnceMessageV2 != nil:
 			msg = msg.ViewOnceMessageV2.Message
+		case msg.ViewOnceMessageV2Extension != nil:
+			msg = msg.ViewOnceMessageV2Extension.Message
 		case msg.EphemeralMessage != nil:
 			msg = msg.EphemeralMessage.Message
 		default:

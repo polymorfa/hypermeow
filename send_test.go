@@ -60,12 +60,16 @@ func TestNativeFlowBusinessMetadataUnwrapsMessages(t *testing.T) {
 		}},
 	}}
 	wrappers := map[string]*waE2E.Message{
-		"view once":    {ViewOnceMessage: &waE2E.FutureProofMessage{Message: inner}},
-		"view once v2": {ViewOnceMessageV2: &waE2E.FutureProofMessage{Message: inner}},
-		"ephemeral":    {EphemeralMessage: &waE2E.FutureProofMessage{Message: inner}},
+		"view once":              {ViewOnceMessage: &waE2E.FutureProofMessage{Message: inner}},
+		"view once v2":           {ViewOnceMessageV2: &waE2E.FutureProofMessage{Message: inner}},
+		"view once v2 extension": {ViewOnceMessageV2Extension: &waE2E.FutureProofMessage{Message: inner}},
+		"ephemeral":              {EphemeralMessage: &waE2E.FutureProofMessage{Message: inner}},
 	}
 	for name, message := range wrappers {
 		t.Run(name, func(t *testing.T) {
+			if got := getButtonTypeFromMessage(message); got != "native_flow" {
+				t.Fatalf("button type = %q", got)
+			}
 			biz := buildNativeFlowBizNode(message, 1_700_000_000)
 			flow := biz.Content.([]waBinary.Node)[0].Content.([]waBinary.Node)[0]
 			if flow.Attrs["name"] != "galaxy_message" {
