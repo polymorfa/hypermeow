@@ -130,7 +130,7 @@ func validateBusinessProductInput(input types.BusinessProductInput) error {
 			return fmt.Errorf("business product currency and sale price require a price")
 		}
 	} else {
-		if len(input.Currency) != 3 || input.Currency != strings.ToUpper(input.Currency) {
+		if !isUppercaseCurrency(input.Currency) {
 			return fmt.Errorf("business product currency must be a three-letter uppercase code")
 		}
 		if !isUnsignedDecimal(input.Price) {
@@ -162,6 +162,18 @@ func isUnsignedDecimal(value string) bool {
 	}
 	for _, char := range value {
 		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isUppercaseCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for _, char := range value {
+		if char < 'A' || char > 'Z' {
 			return false
 		}
 	}
@@ -681,6 +693,9 @@ func (cli *Client) UploadBusinessProductImage(ctx context.Context, image []byte)
 	uploadURL := url.URL{Scheme: "https", Host: mediaConn.Hosts[0].Hostname, Path: "/product/image/" + token, RawQuery: query.Encode()}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL.String(), bytes.NewReader(image))
 	if err != nil {
+		if urlErr, ok := err.(*url.Error); ok {
+			err = urlErr.Err
+		}
 		return "", fmt.Errorf("prepare business product image upload: %w", err)
 	}
 	request.ContentLength = int64(len(image))

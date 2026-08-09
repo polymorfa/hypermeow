@@ -82,6 +82,7 @@ func TestBuildBusinessProductMutationVariablesRejectsUnsafeInput(t *testing.T) {
 		{Name: "Tea", ImageURLs: []string{"http://mmg.whatsapp.net/product/tea"}},
 		{Name: "Tea", ImageURLs: []string{"https://example.test/product/tea"}},
 		{Name: "Tea", ImageURLs: []string{"https://mmg.whatsapp.net/product/tea"}, Currency: "US", Price: "1250"},
+		{Name: "Tea", ImageURLs: []string{"https://mmg.whatsapp.net/product/tea"}, Currency: "123", Price: "1250"},
 		{Name: "Tea", ImageURLs: []string{"https://mmg.whatsapp.net/product/tea"}, Currency: "USD", Price: "12.50"},
 		{Name: strings.Repeat("n", 257), ImageURLs: []string{"https://mmg.whatsapp.net/product/tea"}},
 	}
@@ -318,5 +319,21 @@ func TestUploadBusinessProductImageRedactsTransportURL(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "sensitive-auth") {
 		t.Fatalf("transport error exposed auth query: %v", err)
+	}
+}
+
+func TestUploadBusinessProductImageRedactsRequestConstructionURL(t *testing.T) {
+	client := &Client{
+		mediaConnCache: &MediaConn{
+			Auth: "sensitive-auth", TTL: 3600, FetchedAt: time.Now(), Hosts: []MediaConnHost{{Hostname: "[invalid"}},
+		},
+	}
+	image := append([]byte("\x89PNG\r\n\x1a\n"), []byte("synthetic-product-image")...)
+	_, err := client.UploadBusinessProductImage(context.Background(), image)
+	if err == nil {
+		t.Fatal("malformed upload host unexpectedly passed")
+	}
+	if strings.Contains(err.Error(), "sensitive-auth") {
+		t.Fatalf("request construction error exposed auth query: %v", err)
 	}
 }
