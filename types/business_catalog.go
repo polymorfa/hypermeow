@@ -129,6 +129,8 @@ type BusinessCollectionPage struct {
 type BusinessCollection struct {
 	ID       string                   `json:"id"`
 	Name     string                   `json:"name"`
+	Next     string                   `json:"next,omitempty"`
+	Previous string                   `json:"previous,omitempty"`
 	Products []BusinessProduct        `json:"products"`
 	Status   BusinessCollectionStatus `json:"status_info"`
 }

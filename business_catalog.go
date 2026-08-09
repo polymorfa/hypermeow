@@ -90,7 +90,7 @@ func buildCatalogVariables(jid types.JID, params GetCatalogParams) (map[string]a
 }
 
 func validateBusinessJID(jid types.JID) error {
-	if jid.IsEmpty() {
+	if jid.IsEmpty() || jid.User == "" {
 		return fmt.Errorf("business JID is empty")
 	}
 	if jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer {
@@ -297,6 +297,10 @@ func decodeSingleCollection(data json.RawMessage) (*types.BusinessCollection, er
 	var response struct {
 		Result *struct {
 			Collection *types.BusinessCollection `json:"collection"`
+			Paging     *struct {
+				After  string `json:"after"`
+				Before string `json:"before"`
+			} `json:"paging"`
 		} `json:"xwa_product_catalog_get_single_collection"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
@@ -307,6 +311,10 @@ func decodeSingleCollection(data json.RawMessage) (*types.BusinessCollection, er
 	}
 	if response.Result.Collection.Products == nil {
 		response.Result.Collection.Products = []types.BusinessProduct{}
+	}
+	if response.Result.Paging != nil {
+		response.Result.Collection.Next = response.Result.Paging.After
+		response.Result.Collection.Previous = response.Result.Paging.Before
 	}
 	return response.Result.Collection, nil
 }

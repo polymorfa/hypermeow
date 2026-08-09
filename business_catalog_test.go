@@ -16,6 +16,8 @@ func TestBuildCatalogVariablesRejectsInvalidInput(t *testing.T) {
 		p    GetCatalogParams
 	}{
 		{"empty jid", types.EmptyJID, GetCatalogParams{}},
+		{"server jid", types.ServerJID, GetCatalogParams{}},
+		{"empty user jid", types.NewJID("", types.DefaultUserServer), GetCatalogParams{}},
 		{"group jid", types.NewJID("123", types.GroupServer), GetCatalogParams{}},
 		{"limit too large", types.NewJID("123", types.DefaultUserServer), GetCatalogParams{Limit: 101}},
 		{"negative width", types.NewJID("123", types.DefaultUserServer), GetCatalogParams{Width: -1}},
@@ -123,9 +125,9 @@ func TestBuildSingleCollectionAndDecode(t *testing.T) {
 	if collectionRequest["biz_jid"] != jid.String() || collectionRequest["id"] != "c-summer" || collectionRequest["limit"] != "10" {
 		t.Fatalf("unexpected variables: %#v", variables)
 	}
-	raw := json.RawMessage(`{"xwa_product_catalog_get_single_collection":{"collection":{"id":"c-summer","name":"Summer","products":[]}}}`)
+	raw := json.RawMessage(`{"xwa_product_catalog_get_single_collection":{"collection":{"id":"c-summer","name":"Summer","products":[]},"paging":{"after":"next","before":"previous"}}}`)
 	collection, err := decodeSingleCollection(raw)
-	if err != nil || collection.ID != "c-summer" {
+	if err != nil || collection.ID != "c-summer" || collection.Next != "next" || collection.Previous != "previous" {
 		t.Fatalf("collection = %#v, error = %v", collection, err)
 	}
 }
