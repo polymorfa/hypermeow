@@ -153,6 +153,7 @@ type Client struct {
 
 	responseWaiters     map[string]chan<- *waBinary.Node
 	responseWaitersLock sync.Mutex
+	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
 	handlerQueue      chan *waBinary.Node
 	eventHandlers     []wrappedEventHandler
