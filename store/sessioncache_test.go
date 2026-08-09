@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/polymorfa/libsignal-protocol-go/protocol"
+
 	"go.mau.fi/whatsmeow/types"
 )
 

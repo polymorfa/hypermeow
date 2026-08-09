@@ -24,6 +24,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"

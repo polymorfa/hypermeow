@@ -9,11 +9,11 @@ index 313970d..17a33c3 100644
 +	SocketConfig    *SocketConfig
  	RefreshCAT      func(context.Context) error
  }
- 
+
 @@ -221,6 +222,13 @@ type MessengerConfig struct {
  	WebsocketURL string
  }
- 
+
 +// SocketConfig overrides the WebSocket endpoint or Noise certificate authority.
 +type SocketConfig struct {
 +	URL                       string
@@ -56,11 +56,11 @@ index 8badf1a..8f9d86c 100644
 +	if err = verifyServerCert(certDecrypted, staticDecrypted, certAuthority); err != nil {
  		return fmt.Errorf("failed to verify server cert: %w", err)
  	}
- 
+
 @@ -140,7 +145,7 @@ func checkCertValidity(cert *waCert.CertChain_NoiseCertificate_Details) error {
  	return nil
  }
- 
+
 -func verifyServerCert(certDecrypted, staticDecrypted []byte) error {
 +func verifyServerCert(certDecrypted, staticDecrypted []byte, certAuthority [32]byte) error {
  	var certChain waCert.CertChain
