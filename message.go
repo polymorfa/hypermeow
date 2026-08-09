@@ -790,8 +790,12 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 	cli.Log.Debugf("Received history sync (type %s, chunk %d, progress %d)", historySync.GetSyncType(), historySync.GetChunkOrder(), historySync.GetProgress())
+	storageCtx := ctx
+	if !synchronousStorage {
+		storageCtx = context.WithoutCancel(ctx)
+	}
 	if historySync.CompanionMetaNonce != nil && cli.shouldStoreHistorySyncNonce() {
-		cli.storeCompanionMetaNonce(ctx, historySync.GetCompanionMetaNonce())
+		cli.storeCompanionMetaNonce(storageCtx, historySync.GetCompanionMetaNonce())
 	}
 	doStorage := func(ctx context.Context) {
 		if err := cli.storeNCTSalt(ctx, historySync.GetNctSalt()); err != nil {
@@ -812,9 +816,9 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 	if !cli.shouldStoreHistorySync() {
 		return &historySync, nil
 	} else if synchronousStorage {
-		doStorage(ctx)
+		doStorage(storageCtx)
 	} else {
-		go doStorage(context.WithoutCancel(ctx))
+		go doStorage(storageCtx)
 	}
 	return &historySync, nil
 }

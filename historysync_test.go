@@ -1,6 +1,29 @@
 package whatsmeow
 
-import "testing"
+import (
+	"bytes"
+	"compress/zlib"
+	"context"
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
+	waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/store"
+	waLog "go.mau.fi/whatsmeow/util/log"
+)
+
+type historySyncDeviceContainer struct {
+	putContextErr chan error
+}
+
+func (container *historySyncDeviceContainer) PutDevice(ctx context.Context, _ *store.Device) error {
+	container.putContextErr <- ctx.Err()
+	return nil
+}
+
+func (*historySyncDeviceContainer) DeleteDevice(context.Context, *store.Device) error { return nil }
 
 func TestHistorySyncReceiptPolicy(t *testing.T) {
 	for _, test := range []struct {
@@ -47,5 +70,42 @@ func TestHistorySyncDeletionKeepsCompanionNonce(t *testing.T) {
 	client.DisableHistorySyncMediaDelete = true
 	if client.shouldStoreHistorySyncNonce() {
 		t.Fatal("nonce storage remained enabled without storage or deletion")
+	}
+}
+
+func TestAsyncHistorySyncNoncePersistenceIgnoresCallerCancellation(t *testing.T) {
+	syncType := waHistorySync.HistorySync_INITIAL_BOOTSTRAP
+	historyBytes, err := proto.Marshal(&waHistorySync.HistorySync{
+		SyncType:           &syncType,
+		CompanionMetaNonce: proto.String("fresh"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compressed bytes.Buffer
+	writer := zlib.NewWriter(&compressed)
+	if _, err = writer.Write(historyBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	container := &historySyncDeviceContainer{putContextErr: make(chan error, 1)}
+	client := &Client{
+		DisableHistorySyncStorage: true,
+		Log:                       waLog.Noop,
+		Store:                     &store.Device{Container: container},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.DownloadHistorySync(ctx, &waE2E.HistorySyncNotification{
+		InitialHistBootstrapInlinePayload: compressed.Bytes(),
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = <-container.putContextErr; err != nil {
+		t.Fatalf("nonce persistence inherited caller cancellation: %v", err)
 	}
 }
