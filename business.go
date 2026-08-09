@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"
@@ -18,6 +19,9 @@ import (
 // GetOrderDetails fetches the details of a specific order using its ID and token.
 // Both token and orderID are found in the OrderMessage.
 func (cli *Client) GetOrderDetails(ctx context.Context, orderID, tokenBase64 string) (*types.OrderDetails, error) {
+	if err := validateOrderLookup(orderID, tokenBase64); err != nil {
+		return nil, err
+	}
 	resp, err := cli.sendIQ(ctx, infoQuery{
 		Namespace: "fb:thrift_iq",
 		Type:      iqGet,
@@ -50,7 +54,37 @@ func (cli *Client) GetOrderDetails(ctx context.Context, orderID, tokenBase64 str
 		return nil, &ElementMissingError{Tag: "order", In: "response to order query"}
 	}
 
-	return parseOrderDetailsNode(orderNode)
+	details, err := parseOrderDetailsNode(orderNode)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateOrderResponseID(orderID, details.ID); err != nil {
+		return nil, err
+	}
+	return details, nil
+}
+
+func validateOrderLookup(orderID, token string) error {
+	if strings.TrimSpace(orderID) == "" {
+		return fmt.Errorf("order ID is empty")
+	}
+	if len(orderID) > 256 {
+		return fmt.Errorf("order ID exceeds 256 bytes")
+	}
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("order token is empty")
+	}
+	if len(token) > 8192 {
+		return fmt.Errorf("order token exceeds 8192 bytes")
+	}
+	return nil
+}
+
+func validateOrderResponseID(requested, returned string) error {
+	if returned != requested {
+		return fmt.Errorf("order response ID %q does not match requested ID %q", returned, requested)
+	}
+	return nil
 }
 
 // Helper to get the string content of a child node.
@@ -73,11 +107,16 @@ func parseOrderDetailsNode(orderNode waBinary.Node) (*types.OrderDetails, error)
 		return nil, err
 	}
 
-	// Parse Price
 	priceNode, ok := orderNode.GetOptionalChildByTag("price")
 	if ok {
-		subtotal, _ := strconv.ParseInt(getStringChild(priceNode, "subtotal"), 10, 64)
-		total, _ := strconv.ParseInt(getStringChild(priceNode, "total"), 10, 64)
+		subtotal, err := parseInt64Child(priceNode, "subtotal")
+		if err != nil {
+			return nil, err
+		}
+		total, err := parseInt64Child(priceNode, "total")
+		if err != nil {
+			return nil, err
+		}
 		details.Price = types.OrderPrice{
 			Subtotal:    subtotal,
 			Total:       total,
@@ -86,16 +125,20 @@ func parseOrderDetailsNode(orderNode waBinary.Node) (*types.OrderDetails, error)
 		}
 	}
 
-	// Parse Catalog ID
 	catalogNode, ok := orderNode.GetOptionalChildByTag("catalog")
 	if ok {
 		details.CatalogID = getStringChild(catalogNode, "id")
 	}
 
-	// Parse Products
 	for _, productNode := range orderNode.GetChildrenByTag("product") {
-		price, _ := strconv.ParseInt(getStringChild(productNode, "price"), 10, 64)
-		quantity, _ := strconv.Atoi(getStringChild(productNode, "quantity"))
+		price, err := parseInt64Child(productNode, "price")
+		if err != nil {
+			return nil, err
+		}
+		quantity, err := parseIntChild(productNode, "quantity")
+		if err != nil {
+			return nil, err
+		}
 
 		product := types.OrderProduct{
 			ID:       getStringChild(productNode, "id"),
@@ -105,13 +148,11 @@ func parseOrderDetailsNode(orderNode waBinary.Node) (*types.OrderDetails, error)
 			Quantity: quantity,
 		}
 
-		// Parse Product Image
 		if imageNode, ok := productNode.GetOptionalChildByTag("image"); ok {
 			product.ImageID = getStringChild(imageNode, "id")
 			product.ImageURL = getStringChild(imageNode, "url")
 		}
 
-		// Parse Variant Info
 		if variantNode, ok := productNode.GetOptionalChildByTag("variant_info"); ok {
 			product.VariantInfo.Properties = getStringChild(variantNode, "properties")
 		}
@@ -120,4 +161,22 @@ func parseOrderDetailsNode(orderNode waBinary.Node) (*types.OrderDetails, error)
 	}
 
 	return details, nil
+}
+
+func parseInt64Child(node waBinary.Node, tag string) (int64, error) {
+	raw := getStringChild(node, tag)
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s value %q: %w", tag, raw, err)
+	}
+	return value, nil
+}
+
+func parseIntChild(node waBinary.Node, tag string) (int, error) {
+	raw := getStringChild(node, tag)
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s value %q: %w", tag, raw, err)
+	}
+	return value, nil
 }

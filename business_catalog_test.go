@@ -2,8 +2,10 @@ package whatsmeow
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -140,6 +142,47 @@ func TestProductListRejectsDuplicatesAndPreservesRequestedOrder(t *testing.T) {
 	}
 	if len(products) != 2 || products[0].ID != "p-tea" || products[1].ID != "p-coffee" {
 		t.Fatalf("unexpected product order: %#v", products)
+	}
+}
+
+func TestParseOrderDetailsRejectsMalformedMoney(t *testing.T) {
+	node := waBinary.Node{
+		Tag:   "order",
+		Attrs: waBinary.Attrs{"id": "o-100", "creation_ts": "1"},
+		Content: []waBinary.Node{{
+			Tag: "price",
+			Content: []waBinary.Node{
+				{Tag: "subtotal", Content: []byte("1250")},
+				{Tag: "total", Content: []byte("not-a-number")},
+				{Tag: "currency", Content: []byte("USD")},
+			},
+		}},
+	}
+	if _, err := parseOrderDetailsNode(node); err == nil {
+		t.Fatal("expected malformed total error")
+	}
+}
+
+func TestValidateOrderLookupBounds(t *testing.T) {
+	tests := []struct {
+		orderID string
+		token   string
+	}{
+		{"", "token"},
+		{"o-100", ""},
+		{strings.Repeat("o", 257), "token"},
+		{"o-100", strings.Repeat("x", 8193)},
+	}
+	for _, tc := range tests {
+		if err := validateOrderLookup(tc.orderID, tc.token); err == nil {
+			t.Fatalf("validateOrderLookup(%d-byte ID, %d-byte token) unexpectedly passed", len(tc.orderID), len(tc.token))
+		}
+	}
+}
+
+func TestValidateOrderResponseIDRejectsDifferentOrder(t *testing.T) {
+	if err := validateOrderResponseID("o-100", "o-101"); err == nil {
+		t.Fatal("expected mismatched order ID error")
 	}
 }
 
