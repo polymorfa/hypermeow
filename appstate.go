@@ -67,7 +67,7 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	wantSnapshot := fullSync
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if fullSync && !cli.EmitAppStateEventsOnFullSync {
+	if fullSync && !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	for hasMore {
@@ -108,7 +108,7 @@ func (cli *Client) handleAppStateRecovery(
 	}
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if !cli.EmitAppStateEventsOnFullSync {
+	if !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	snapshot, err := appstate.ParseRecovery(result[0].GetSyncdSnapshotFatalRecoveryResponse())
@@ -186,15 +186,31 @@ func (cli *Client) collectEventsToDispatch(
 		}
 	}
 	for _, mutation := range mutations {
-		if eventsToDispatch != nil && mutation.Operation == waServerSync.SyncdMutation_SET {
+		emitMutation := eventsToDispatch != nil && (!fullSync || cli.shouldEmitFullSyncMutation(mutation.Index))
+		if emitMutation && mutation.Operation == waServerSync.SyncdMutation_SET {
 			*eventsToDispatch = append(*eventsToDispatch, &events.AppState{Index: mutation.Index, SyncActionValue: mutation.Action})
 		}
 		evt := cli.dispatchAppState(ctx, name, mutation, fullSync)
-		if eventsToDispatch != nil && evt != nil {
+		if emitMutation && evt != nil {
 			*eventsToDispatch = append(*eventsToDispatch, evt)
 		}
 	}
 	return nil
+}
+
+func (cli *Client) shouldEmitFullSyncMutation(index []string) bool {
+	if cli.EmitAppStateEventsOnFullSync {
+		return true
+	}
+	if !cli.EmitLabelEventsOnFullSync || len(index) == 0 {
+		return false
+	}
+	switch index[0] {
+	case appstate.IndexLabelEdit, appstate.IndexLabelAssociationChat, appstate.IndexLabelAssociationMessage:
+		return true
+	default:
+		return false
+	}
 }
 
 func (cli *Client) filterContacts(mutations []appstate.Mutation) ([]appstate.Mutation, []store.ContactEntry) {
