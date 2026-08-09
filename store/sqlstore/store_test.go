@@ -1,8 +1,12 @@
 package sqlstore
 
 import (
+	"context"
 	"fmt"
+	"regexp"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 
 	"go.mau.fi/whatsmeow/types"
 )
@@ -51,5 +55,37 @@ func TestContactCacheIsBounded(t *testing.T) {
 	}
 	if _, ok := store.contactCache[newJID]; !ok {
 		t.Fatal("new contact was not cached")
+	}
+}
+
+func TestMigratePNToLIDSkipsTransactionWhenNoPNRowsExist(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := NewSQLStore(
+		NewWithDB(db, "postgres", nil),
+		types.NewJID("15550000000", types.DefaultUserServer),
+	)
+	pn := types.NewJID("15551234567", types.DefaultUserServer)
+	lid := types.NewJID("123456789012345", types.HiddenUserServer)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id>=$2 AND their_id<$3)
+			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id>=$2 AND their_id<$3)
+			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id>=$2 AND sender_id<$3)
+	`)).
+		WithArgs(store.JID, "15551234567:", "15551234567;").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	if err = store.MigratePNToLID(context.Background(), pn, lid); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.MigratePNToLID(context.Background(), pn, lid); err != nil {
+		t.Fatal(err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

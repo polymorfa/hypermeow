@@ -1,4 +1,4 @@
--- v0 -> v15 (compatible with v8+): Latest schema
+-- v0 -> v16 (compatible with v8+): Latest schema
 CREATE TABLE whatsmeow_device (
 	jid TEXT PRIMARY KEY,
 	lid TEXT,
@@ -66,6 +66,7 @@ CREATE TABLE whatsmeow_sender_keys (
 	PRIMARY KEY (our_jid, chat_id, sender_id),
 	FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
 );
+CREATE INDEX whatsmeow_sender_keys_sender_idx ON whatsmeow_sender_keys (our_jid, sender_id);
 
 CREATE TABLE whatsmeow_app_state_sync_keys (
 	jid         TEXT,

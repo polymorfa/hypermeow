@@ -253,6 +253,11 @@ const (
 		WHERE our_jid=$1 AND sender_id LIKE $2 || ':%'
 		ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key
 	`
+	hasPNRowsToMigrateQuery = `
+		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id>=$2 AND their_id<$3)
+			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id>=$2 AND their_id<$3)
+			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id>=$2 AND sender_id<$3)
+	`
 )
 
 func (s *SQLStore) GetSession(ctx context.Context, address string) (session []byte, err error) {
@@ -463,9 +468,17 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	if migrated || migrating {
 		return nil
 	}
+	var hasPNRows bool
+	err := s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, pnSignal+":", pnSignal+";").Scan(&hasPNRows)
+	if err != nil {
+		s.log.Warnf("Failed to check for PN rows to migrate from %s: %v", pnSignal, err)
+	} else if !hasPNRows {
+		s.finishPNMigration(pnSignal, nil)
+		return nil
+	}
 	var sessionsUpdated, identityKeysUpdated, senderKeysUpdated int64
 	lidSignal := lid.SignalAddressUser()
-	err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
+	err = s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
 		res, err := s.db.Exec(ctx, migratePNToLIDSessionsQuery, s.JID, pnSignal, lidSignal)
 		if err != nil {
 			return fmt.Errorf("failed to migrate sessions: %w", err)
@@ -506,15 +519,7 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 		}
 		return nil
 	})
-	s.migratedPNSessionsCacheLock.Lock()
-	delete(s.migratingPNSessions, pnSignal)
-	if err == nil {
-		if s.migratedPNSessionsCache == nil {
-			s.migratedPNSessionsCache = make(map[string]struct{})
-		}
-		setBoundedCacheEntry(s.migratedPNSessionsCache, pnSignal, struct{}{}, maxMigratedPNEntries)
-	}
-	s.migratedPNSessionsCacheLock.Unlock()
+	s.finishPNMigration(pnSignal, err)
 	if err != nil {
 		return err
 	}
@@ -527,6 +532,18 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 		s.log.Debugf("No sessions or sender keys found to migrate from %s to %s", pnSignal, lidSignal)
 	}
 	return nil
+}
+
+func (s *SQLStore) finishPNMigration(pnSignal string, migrationErr error) {
+	s.migratedPNSessionsCacheLock.Lock()
+	defer s.migratedPNSessionsCacheLock.Unlock()
+	delete(s.migratingPNSessions, pnSignal)
+	if migrationErr == nil {
+		if s.migratedPNSessionsCache == nil {
+			s.migratedPNSessionsCache = make(map[string]struct{})
+		}
+		setBoundedCacheEntry(s.migratedPNSessionsCache, pnSignal, struct{}{}, maxMigratedPNEntries)
+	}
 }
 
 const (
