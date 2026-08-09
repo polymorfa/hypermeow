@@ -559,6 +559,7 @@ func (cli *Client) GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, err
 	infos := make([]*types.GroupInfo, 0, len(children))
 	var allLIDPairs []store.LIDMapping
 	var allRedactedPhones []store.RedactedPhoneEntry
+	var allUsernames []store.ContactUsernameEntry
 	for _, child := range children {
 		if child.Tag != "group" {
 			cli.Log.Debugf("Unexpected child in group list response: %s", &child)
@@ -571,6 +572,7 @@ func (cli *Client) GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, err
 		lidPairs, redactedPhones := cli.cacheGroupInfo(parsed, true)
 		allLIDPairs = append(allLIDPairs, lidPairs...)
 		allRedactedPhones = append(allRedactedPhones, redactedPhones...)
+		allUsernames = append(allUsernames, groupContactUsernames(parsed)...)
 		infos = append(infos, parsed)
 	}
 	err = cli.Store.LIDs.PutManyLIDMappings(ctx, allLIDPairs)
@@ -580,6 +582,9 @@ func (cli *Client) GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, err
 	err = cli.Store.Contacts.PutManyRedactedPhones(ctx, allRedactedPhones)
 	if err != nil {
 		cli.Log.Warnf("Failed to store redacted phones from joined groups: %v", err)
+	}
+	if err = putContactUsernames(ctx, cli.Store.Contacts, allUsernames); err != nil {
+		cli.Log.Warnf("Failed to store usernames from joined groups: %v", err)
 	}
 	return infos, nil
 }
@@ -663,6 +668,23 @@ func (cli *Client) cacheGroupInfo(groupInfo *types.GroupInfo, lock bool) ([]stor
 	return lidPairs, redactedPhones
 }
 
+func groupContactUsernames(groupInfo *types.GroupInfo) []store.ContactUsernameEntry {
+	entries := make([]store.ContactUsernameEntry, 0, len(groupInfo.Participants))
+	for _, participant := range groupInfo.Participants {
+		if participant.Username == "" {
+			continue
+		}
+		lid := participant.LID.ToNonAD()
+		if lid.IsEmpty() && participant.JID.Server == types.HiddenUserServer {
+			lid = participant.JID.ToNonAD()
+		}
+		if !lid.IsEmpty() {
+			entries = append(entries, store.ContactUsernameEntry{JID: lid, Username: participant.Username})
+		}
+	}
+	return entries
+}
+
 func (cli *Client) getGroupInfo(ctx context.Context, jid types.JID, lockParticipantCache bool) (*types.GroupInfo, error) {
 	res, err := cli.sendGroupIQ(ctx, iqGet, jid, waBinary.Node{
 		Tag:   "query",
@@ -692,6 +714,9 @@ func (cli *Client) getGroupInfo(ctx context.Context, jid types.JID, lockParticip
 	err = cli.Store.Contacts.PutManyRedactedPhones(ctx, redactedPhones)
 	if err != nil {
 		cli.Log.Warnf("Failed to store redacted phones for members of %s: %v", jid, err)
+	}
+	if err = putContactUsernames(ctx, cli.Store.Contacts, groupContactUsernames(groupInfo)); err != nil {
+		cli.Log.Warnf("Failed to store usernames for members of %s: %v", jid, err)
 	}
 	return groupInfo, nil
 }

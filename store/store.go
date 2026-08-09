@@ -114,6 +114,9 @@ type ContactStore interface {
 
 type ContactUsernameStore interface {
 	PutContactUsername(ctx context.Context, user types.JID, username string) error
+}
+
+type ContactUsernameBatchStore interface {
 	PutManyContactUsernames(ctx context.Context, entries []ContactUsernameEntry) error
 }
 

@@ -230,12 +230,29 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 			return output, fmt.Errorf("failed to store LID mappings: %w", err)
 		}
 	}
-	if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && len(usernameEntries) > 0 {
-		if err = usernameStore.PutManyContactUsernames(ctx, usernameEntries); err != nil {
-			return output, fmt.Errorf("failed to store usernames: %w", err)
-		}
+	if err = putContactUsernames(ctx, cli.Store.Contacts, usernameEntries); err != nil {
+		return output, fmt.Errorf("failed to store usernames: %w", err)
 	}
 	return output, nil
+}
+
+func putContactUsernames(ctx context.Context, contacts store.ContactStore, entries []store.ContactUsernameEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if batch, ok := contacts.(store.ContactUsernameBatchStore); ok {
+		return batch.PutManyContactUsernames(ctx, entries)
+	}
+	single, ok := contacts.(store.ContactUsernameStore)
+	if !ok {
+		return nil
+	}
+	for _, entry := range entries {
+		if err := single.PutContactUsername(ctx, entry.JID, entry.Username); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func parseUSyncUsername(user waBinary.Node) string {
@@ -305,10 +322,8 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 		// not worth returning on the error, instead just post a log
 		cli.Log.Errorf("Failed to place LID mappings from USync call")
 	}
-	if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && len(usernames) > 0 {
-		if err := usernameStore.PutManyContactUsernames(ctx, usernames); err != nil {
-			cli.Log.Errorf("Failed to store usernames from USync call: %v", err)
-		}
+	if err := putContactUsernames(ctx, cli.Store.Contacts, usernames); err != nil {
+		cli.Log.Errorf("Failed to store usernames from USync call: %v", err)
 	}
 
 	return respData, nil
