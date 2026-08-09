@@ -168,9 +168,16 @@ type LabelChatChange struct {
 }
 
 func BuildLabelChatChanges(target types.JID, changes []LabelChatChange) PatchInfo {
-	mutations := make([]MutationInfo, len(changes))
-	for index, change := range changes {
-		mutations[index] = newLabelChatMutation(target, change.LabelID, change.Labeled)
+	mutations := make([]MutationInfo, 0, len(changes))
+	mutationIndexes := make(map[string]int, len(changes))
+	for _, change := range changes {
+		mutation := newLabelChatMutation(target, change.LabelID, change.Labeled)
+		if index, exists := mutationIndexes[change.LabelID]; exists {
+			mutations[index] = mutation
+		} else {
+			mutationIndexes[change.LabelID] = len(mutations)
+			mutations = append(mutations, mutation)
+		}
 	}
 	return PatchInfo{Type: WAPatchRegular, Mutations: mutations}
 }
