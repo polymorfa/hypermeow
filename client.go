@@ -140,6 +140,8 @@ type Client struct {
 	ManualHistorySyncDownload       bool
 	DisableManualHistorySyncReceipt bool
 	DisableHistorySyncReceipt       bool
+	DisableHistorySyncStorage       bool
+	DisableHistorySyncMediaDelete   bool
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time

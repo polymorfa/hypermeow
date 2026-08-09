@@ -28,3 +28,13 @@ func TestHistorySyncReceiptPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestHistorySyncSideEffectsCanBeDisabledIndependently(t *testing.T) {
+	client := &Client{DisableHistorySyncReceipt: true, DisableHistorySyncStorage: true, DisableHistorySyncMediaDelete: true}
+	if client.shouldSendHistorySyncReceipt() {
+		t.Fatal("receipt was enabled")
+	}
+	if client.shouldStoreHistorySync() || client.shouldDeleteHistorySyncMedia() {
+		t.Fatal("history side effect was enabled")
+	}
+}

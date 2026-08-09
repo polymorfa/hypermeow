@@ -724,9 +724,11 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 				cli.Log.Errorf("Failed to download history sync: %v", err)
 			} else {
 				cli.dispatchEvent(&events.HistorySync{Data: blob, Notification: queued.notification, MessageID: queued.messageID})
-				err = cli.DeleteMedia(ctx, MediaHistory, queued.notification.GetDirectPath(), queued.notification.GetFileEncSHA256(), queued.notification.GetEncHandle())
-				if err != nil {
-					cli.Log.Warnf("Failed to delete history sync media from server: %v", err)
+				if cli.shouldDeleteHistorySyncMedia() {
+					err = cli.DeleteMedia(ctx, MediaHistory, queued.notification.GetDirectPath(), queued.notification.GetFileEncSHA256(), queued.notification.GetEncHandle())
+					if err != nil {
+						cli.Log.Warnf("Failed to delete history sync media from server: %v", err)
+					}
 				}
 			}
 		case <-time.After(1 * time.Minute):
@@ -807,7 +809,9 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 			cli.storeCompanionMetaNonce(ctx, historySync.GetCompanionMetaNonce())
 		}
 	}
-	if synchronousStorage {
+	if !cli.shouldStoreHistorySync() {
+		return &historySync, nil
+	} else if synchronousStorage {
 		doStorage(ctx)
 	} else {
 		go doStorage(context.WithoutCancel(ctx))
@@ -928,6 +932,14 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 
 func (cli *Client) shouldSendHistorySyncReceipt() bool {
 	return !cli.DisableHistorySyncReceipt && !(cli.ManualHistorySyncDownload && cli.DisableManualHistorySyncReceipt)
+}
+
+func (cli *Client) shouldStoreHistorySync() bool {
+	return !cli.DisableHistorySyncStorage
+}
+
+func (cli *Client) shouldDeleteHistorySyncMedia() bool {
+	return !cli.DisableHistorySyncMediaDelete
 }
 
 func (cli *Client) processProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
