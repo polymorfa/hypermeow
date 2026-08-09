@@ -152,6 +152,7 @@ type runner struct {
 	businessValid     atomic.Bool
 	phoneConsentValid atomic.Bool
 	phoneConsentOnce  sync.Once
+	phoneConsentErr   error
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -577,18 +578,11 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 		case msg := <-jobs:
 			var consentErr error
 			if r.cfg.PhoneConsentSmoke {
-				r.phoneConsentOnce.Do(func() {
-					consentErr = r.validatePhoneNumberConsent(ctx, client, phoneConsentTarget(msg))
-					if consentErr == nil {
-						r.phoneConsentValid.Store(true)
-					}
+				consentErr = r.runPhoneConsentSmoke(func() error {
+					return r.validatePhoneNumberConsent(ctx, client, phoneConsentTarget(msg))
 				})
 			}
 			if consentErr != nil {
-				r.failed.Add(1)
-				r.recordFailure(consentErr)
-				fmt.Fprintf(os.Stderr, "validate phone number consent: %v\n", consentErr)
-				r.reportFatal(fmt.Errorf("validate phone number consent: %w", consentErr))
 				return
 			}
 			sequence := r.messageSequence.Add(1) - 1
@@ -623,6 +617,21 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 			r.checkDone()
 		}
 	}
+}
+
+func (r *runner) runPhoneConsentSmoke(validate func() error) error {
+	r.phoneConsentOnce.Do(func() {
+		r.phoneConsentErr = validate()
+		if r.phoneConsentErr == nil {
+			r.phoneConsentValid.Store(true)
+			return
+		}
+		r.failed.Add(1)
+		r.recordFailure(r.phoneConsentErr)
+		fmt.Fprintf(os.Stderr, "validate phone number consent: %v\n", r.phoneConsentErr)
+		r.reportFatal(fmt.Errorf("validate phone number consent: %w", r.phoneConsentErr))
+	})
+	return r.phoneConsentErr
 }
 
 func (r *runner) reportFatal(err error) {

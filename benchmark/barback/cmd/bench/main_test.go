@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,6 +105,46 @@ func TestWaitForRunCompletionWakesOnFatalSmokeFailure(t *testing.T) {
 	defer cancel()
 	if err := r.waitForRunCompletion(ctx); !errors.Is(err, sentinel) {
 		t.Fatalf("completion error = %v, want %v", err, sentinel)
+	}
+}
+
+func TestPhoneConsentFailureIsSharedAcrossWorkers(t *testing.T) {
+	r := &runner{
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	sentinel := errors.New("phone consent failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	validate := func() error {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return sentinel
+	}
+
+	var workers sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			errs <- r.runPhoneConsentSmoke(validate)
+		}()
+	}
+	<-entered
+	close(release)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("worker error = %v, want %v", err, sentinel)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("validation calls = %d, want 1", calls.Load())
 	}
 }
 
