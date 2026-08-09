@@ -716,6 +716,7 @@ func parseParticipant(childAG *waBinary.AttrUtility, child *waBinary.Node) types
 		IsSuperAdmin: pcpType == "superadmin",
 		JID:          childAG.JID("jid"),
 		DisplayName:  childAG.OptionalString("display_name"),
+		Username:     childAG.OptionalString("username"),
 	}
 	if participant.JID.Server == types.HiddenUserServer {
 		participant.LID = participant.JID
