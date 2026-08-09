@@ -3,9 +3,10 @@ package whatsmeow
 import (
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	waBinary "go.mau.fi/whatsmeow/binary"
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestButtonAndListResponsesDoNotRequestBusinessMetadata(t *testing.T) {
