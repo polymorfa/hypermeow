@@ -174,7 +174,7 @@ func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([
 	if stored == nil {
 		stored = make(map[string][32]byte, len(addresses))
 	}
-	missing := make([]types.JID, 0, len(addresses)-len(stored))
+	missing := make([]types.JID, 0, len(addresses))
 	for _, address := range addresses {
 		if _, exists := stored[address]; !exists {
 			missing = append(missing, deviceByAddress[address])

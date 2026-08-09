@@ -16,7 +16,8 @@ import (
 )
 
 type identityReaderStore struct {
-	keys map[string][32]byte
+	keys       map[string][32]byte
+	includeAll bool
 }
 
 func (*identityReaderStore) PutIdentity(context.Context, string, [32]byte) error { return nil }
@@ -27,12 +28,35 @@ func (*identityReaderStore) IsTrustedIdentity(context.Context, string, [32]byte)
 }
 func (irs *identityReaderStore) GetManyIdentities(_ context.Context, addresses []string) (map[string][32]byte, error) {
 	result := make(map[string][32]byte, len(addresses))
+	if irs.includeAll {
+		for address, key := range irs.keys {
+			result[address] = key
+		}
+		return result, nil
+	}
 	for _, address := range addresses {
 		if key, ok := irs.keys[address]; ok {
 			result[address] = key
 		}
 	}
 	return result, nil
+}
+
+func TestReadIdentityKeysIgnoresUnrequestedReaderEntries(t *testing.T) {
+	device := types.NewADJID("100000000000001", types.LIDDomain, 1)
+	want := [32]byte{1}
+	identities := &identityReaderStore{includeAll: true, keys: map[string][32]byte{
+		device.SignalAddress().String(): want,
+		"unrequested:1":                 {2},
+	}}
+	client := &Client{Store: &store.Device{Identities: identities}}
+	keys, err := client.readIdentityKeys(context.Background(), []types.JID{device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0] != want {
+		t.Fatalf("identity keys = %x, want %x", keys, want)
+	}
 }
 
 var _ store.IdentityKeyReader = (*identityReaderStore)(nil)
