@@ -1007,6 +1007,19 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 
 func buildNativeFlowBizNode(msg *waE2E.Message, nowUnix int64) waBinary.Node {
 	name := "mixed"
+	for msg != nil {
+		switch {
+		case msg.ViewOnceMessage != nil:
+			msg = msg.ViewOnceMessage.Message
+		case msg.ViewOnceMessageV2 != nil:
+			msg = msg.ViewOnceMessageV2.Message
+		case msg.EphemeralMessage != nil:
+			msg = msg.EphemeralMessage.Message
+		default:
+			goto unwrapped
+		}
+	}
+unwrapped:
 	if interactive := msg.GetInteractiveMessage(); interactive != nil {
 		if buttons := interactive.GetNativeFlowMessage().GetButtons(); len(buttons) > 0 && buttons[0].GetName() != "" {
 			name = buttons[0].GetName()

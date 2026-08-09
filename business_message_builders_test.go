@@ -258,7 +258,7 @@ func TestBuildBusinessAddressMessageMatchesWebGenerator(t *testing.T) {
 func TestBuildBusinessFlowMessageMatchesWebGenerator(t *testing.T) {
 	msg, err := BuildBusinessFlowMessage(BusinessFlowMessageParams{
 		Body: "Book a visit", ButtonText: "Choose a time", FlowID: "flow-100", FlowToken: "synthetic-token",
-		FlowAction: "navigate", Screen: "APPOINTMENT", DataJSON: `{"location":"beirut"}`,
+		FlowAction: "navigate", Screen: "APPOINTMENT", DataJSON: `{"location":"beirut","order_id":9007199254740993}`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -277,6 +277,17 @@ func TestBuildBusinessFlowMessageMatchesWebGenerator(t *testing.T) {
 	payload := params["flow_action_payload"].(map[string]any)
 	if payload["screen"] != "APPOINTMENT" || payload["data"].(map[string]any)["location"] != "beirut" {
 		t.Fatalf("unexpected action payload: %#v", payload)
+	}
+	var exact struct {
+		ActionPayload struct {
+			Data map[string]json.RawMessage `json:"data"`
+		} `json:"flow_action_payload"`
+	}
+	if err := json.Unmarshal([]byte(flow.GetButtons()[0].GetButtonParamsJSON()), &exact); err != nil {
+		t.Fatal(err)
+	}
+	if string(exact.ActionPayload.Data["order_id"]) != "9007199254740993" {
+		t.Fatalf("order ID lost precision: %s", exact.ActionPayload.Data["order_id"])
 	}
 }
 

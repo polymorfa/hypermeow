@@ -53,6 +53,28 @@ func TestInteractiveNativeFlowsRequestNamedBusinessMetadata(t *testing.T) {
 	}
 }
 
+func TestNativeFlowBusinessMetadataUnwrapsMessages(t *testing.T) {
+	inner := &waE2E.Message{InteractiveMessage: &waE2E.InteractiveMessage{
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			Buttons: []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{{Name: proto.String("galaxy_message")}},
+		}},
+	}}
+	wrappers := map[string]*waE2E.Message{
+		"view once":    {ViewOnceMessage: &waE2E.FutureProofMessage{Message: inner}},
+		"view once v2": {ViewOnceMessageV2: &waE2E.FutureProofMessage{Message: inner}},
+		"ephemeral":    {EphemeralMessage: &waE2E.FutureProofMessage{Message: inner}},
+	}
+	for name, message := range wrappers {
+		t.Run(name, func(t *testing.T) {
+			biz := buildNativeFlowBizNode(message, 1_700_000_000)
+			flow := biz.Content.([]waBinary.Node)[0].Content.([]waBinary.Node)[0]
+			if flow.Attrs["name"] != "galaxy_message" {
+				t.Fatalf("native-flow name = %q", flow.Attrs["name"])
+			}
+		})
+	}
+}
+
 func TestSetParticipantHashMismatch(t *testing.T) {
 	tests := []struct {
 		name string
