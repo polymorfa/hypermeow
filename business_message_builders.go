@@ -354,19 +354,19 @@ func BuildBusinessFlowMessage(params BusinessFlowMessageParams) (*waE2E.Message,
 	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !utf8.ValidString(params.ButtonText) || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business flow message text")
 	}
-	if strings.TrimSpace(params.FlowID) == "" || !bounded(params.FlowID, 256) || strings.TrimSpace(params.FlowToken) == "" || !bounded(params.FlowToken, 8192) {
+	if strings.TrimSpace(params.FlowID) == "" || !utf8.ValidString(params.FlowID) || !bounded(params.FlowID, 256) || strings.TrimSpace(params.FlowToken) == "" || !utf8.ValidString(params.FlowToken) || !bounded(params.FlowToken, 8192) {
 		return nil, errors.New("invalid business flow identity")
 	}
 	if params.FlowAction != "navigate" && params.FlowAction != "data_exchange" {
 		return nil, errors.New("invalid business flow action")
 	}
-	if !bounded(params.Screen, 256) || (params.FlowAction == "navigate" && strings.TrimSpace(params.Screen) == "") {
+	if !utf8.ValidString(params.Screen) || !bounded(params.Screen, 256) || (params.FlowAction == "navigate" && strings.TrimSpace(params.Screen) == "") {
 		return nil, errors.New("invalid business flow screen")
 	}
 	if params.FlowAction == "data_exchange" && (params.Screen != "" || params.DataJSON != "") {
 		return nil, errors.New("data-exchange flow messages cannot include an action payload")
 	}
-	if !bounded(params.DataJSON, 16*1024) {
+	if !utf8.ValidString(params.DataJSON) || !bounded(params.DataJSON, 16*1024) {
 		return nil, errors.New("business flow data is too large")
 	}
 	var data map[string]json.RawMessage

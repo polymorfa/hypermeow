@@ -304,6 +304,30 @@ func TestBusinessFlowMessageEnforcesInteractiveTextLimits(t *testing.T) {
 	}
 }
 
+func TestBusinessFlowMessageRejectsInvalidUTF8PayloadFields(t *testing.T) {
+	valid := BusinessFlowMessageParams{
+		Body: "Book a visit", ButtonText: "Choose a time", FlowID: "flow-100", FlowToken: "synthetic-token",
+		FlowAction: "navigate", Screen: "APPOINTMENT", DataJSON: `{"location":"beirut"}`,
+	}
+	tests := map[string]func(*BusinessFlowMessageParams){
+		"flow-id":    func(params *BusinessFlowMessageParams) { params.FlowID = string([]byte{0xff}) },
+		"flow-token": func(params *BusinessFlowMessageParams) { params.FlowToken = string([]byte{0xff}) },
+		"screen":     func(params *BusinessFlowMessageParams) { params.Screen = string([]byte{0xff}) },
+		"data": func(params *BusinessFlowMessageParams) {
+			params.DataJSON = "{\"key\":\"" + string([]byte{0xff}) + "\"}"
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			params := valid
+			mutate(&params)
+			if _, err := BuildBusinessFlowMessage(params); err == nil {
+				t.Fatal("expected invalid UTF-8 error")
+			}
+		})
+	}
+}
+
 func TestBuildBusinessFlowMessageMatchesWebGenerator(t *testing.T) {
 	msg, err := BuildBusinessFlowMessage(BusinessFlowMessageParams{
 		Body: "Book a visit", ButtonText: "Choose a time", FlowID: "flow-100", FlowToken: "synthetic-token",
