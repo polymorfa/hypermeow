@@ -624,7 +624,7 @@ func (cli *Client) GetLinkedGroupsParticipants(ctx context.Context, community ty
 	if !ok {
 		return nil, &ElementMissingError{Tag: "linked_groups_participants", In: "response to community participants query"}
 	}
-	members, lidPairs := parseParticipantList(&participants)
+	members, lidPairs, _ := parseParticipantList(&participants)
 	if len(lidPairs) > 0 {
 		err = cli.Store.LIDs.PutManyLIDMappings(ctx, lidPairs)
 		if err != nil {
@@ -867,7 +867,7 @@ func parseGroupLinkTargetNode(groupNode *waBinary.Node) (types.GroupLinkTarget, 
 	}, ag.Error()
 }
 
-func parseParticipantList(node *waBinary.Node) (participants []types.JID, lidPairs []store.LIDMapping) {
+func parseParticipantList(node *waBinary.Node) (participants []types.JID, lidPairs []store.LIDMapping, usernames []store.ContactUsernameEntry) {
 	children := node.GetChildren()
 	participants = make([]types.JID, 0, len(children))
 	for _, child := range children {
@@ -876,6 +876,8 @@ func parseParticipantList(node *waBinary.Node) (participants []types.JID, lidPai
 			continue
 		}
 		participants = append(participants, jid)
+		participant := parseParticipant(child.AttrGetter(), &child)
+		usernames = append(usernames, groupParticipantUsernames([]types.GroupParticipant{participant})...)
 		if jid.Server == types.HiddenUserServer {
 			phoneNumber, ok := child.Attrs["phone_number"].(types.JID)
 			if ok && !phoneNumber.IsEmpty() {
@@ -923,7 +925,7 @@ func (cli *Client) parseGroupCreate(parentNode, node *waBinary.Node) (*events.Jo
 	return &evt, lidPairs, redactedPhones, nil
 }
 
-func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []store.LIDMapping, error) {
+func (cli *Client) parseGroupChangeWithUsernames(node *waBinary.Node) (*events.GroupInfo, []store.LIDMapping, []store.ContactUsernameEntry, error) {
 	var evt events.GroupInfo
 	ag := node.AttrGetter()
 	evt.JID = ag.JID("from")
@@ -932,10 +934,11 @@ func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []s
 	evt.SenderPN = ag.OptionalJID("participant_pn")
 	evt.Timestamp = ag.UnixTime("t")
 	if !ag.OK() {
-		return nil, nil, fmt.Errorf("group change doesn't contain required attributes: %w", ag.Error())
+		return nil, nil, nil, fmt.Errorf("group change doesn't contain required attributes: %w", ag.Error())
 	}
 
 	var lidPairs []store.LIDMapping
+	var usernames []store.ContactUsernameEntry
 	for _, child := range node.GetChildren() {
 		cag := child.AttrGetter()
 		if child.Tag == "add" || child.Tag == "remove" || child.Tag == "promote" || child.Tag == "demote" {
@@ -945,13 +948,25 @@ func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []s
 		switch child.Tag {
 		case "add":
 			evt.JoinReason = cag.OptionalString("reason")
-			evt.Join, lidPairs = parseParticipantList(&child)
+			participants, pairs, names := parseParticipantList(&child)
+			evt.Join = participants
+			lidPairs = append(lidPairs, pairs...)
+			usernames = append(usernames, names...)
 		case "remove":
-			evt.Leave, lidPairs = parseParticipantList(&child)
+			participants, pairs, names := parseParticipantList(&child)
+			evt.Leave = participants
+			lidPairs = append(lidPairs, pairs...)
+			usernames = append(usernames, names...)
 		case "promote":
-			evt.Promote, lidPairs = parseParticipantList(&child)
+			participants, pairs, names := parseParticipantList(&child)
+			evt.Promote = participants
+			lidPairs = append(lidPairs, pairs...)
+			usernames = append(usernames, names...)
 		case "demote":
-			evt.Demote, lidPairs = parseParticipantList(&child)
+			participants, pairs, names := parseParticipantList(&child)
+			evt.Demote = participants
+			lidPairs = append(lidPairs, pairs...)
+			usernames = append(usernames, names...)
 		case "locked":
 			evt.Locked = &types.GroupLocked{IsLocked: true}
 		case "unlocked":
@@ -972,7 +987,7 @@ func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []s
 				topicChild := child.GetChildByTag("body")
 				topicBytes, ok := topicChild.Content.([]byte)
 				if !ok {
-					return nil, nil, fmt.Errorf("group change description has unexpected body: %s", &topicChild)
+					return nil, nil, nil, fmt.Errorf("group change description has unexpected body: %s", &topicChild)
 				}
 				topicStr = string(topicBytes)
 			}
@@ -1014,12 +1029,12 @@ func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []s
 			}
 			groupNode, ok := child.GetOptionalChildByTag("group")
 			if !ok {
-				return nil, nil, &ElementMissingError{Tag: "group", In: "group link"}
+				return nil, nil, nil, &ElementMissingError{Tag: "group", In: "group link"}
 			}
 			var err error
 			evt.Link.Group, err = parseGroupLinkTargetNode(&groupNode)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to parse group link node in group change: %w", err)
+				return nil, nil, nil, fmt.Errorf("failed to parse group link node in group change: %w", err)
 			}
 		case "unlink":
 			evt.Unlink = &types.GroupLinkChange{
@@ -1028,12 +1043,12 @@ func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []s
 			}
 			groupNode, ok := child.GetOptionalChildByTag("group")
 			if !ok {
-				return nil, nil, &ElementMissingError{Tag: "group", In: "group unlink"}
+				return nil, nil, nil, &ElementMissingError{Tag: "group", In: "group unlink"}
 			}
 			var err error
 			evt.Unlink.Group, err = parseGroupLinkTargetNode(&groupNode)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to parse group unlink node in group change: %w", err)
+				return nil, nil, nil, fmt.Errorf("failed to parse group unlink node in group change: %w", err)
 			}
 		case "membership_approval_mode":
 			evt.MembershipApprovalMode = &types.GroupMembershipApprovalMode{
@@ -1047,10 +1062,15 @@ func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []s
 			evt.UnknownChanges = append(evt.UnknownChanges, &child)
 		}
 		if !cag.OK() {
-			return nil, nil, fmt.Errorf("group change %s element doesn't contain required attributes: %w", child.Tag, cag.Error())
+			return nil, nil, nil, fmt.Errorf("group change %s element doesn't contain required attributes: %w", child.Tag, cag.Error())
 		}
 	}
-	return &evt, lidPairs, nil
+	return &evt, lidPairs, usernames, nil
+}
+
+func (cli *Client) parseGroupChange(node *waBinary.Node) (*events.GroupInfo, []store.LIDMapping, error) {
+	event, lidPairs, _, err := cli.parseGroupChangeWithUsernames(node)
+	return event, lidPairs, err
 }
 
 func (cli *Client) updateGroupParticipantCache(evt *events.GroupInfo) {
@@ -1084,18 +1104,27 @@ Outer:
 	}
 }
 
-func (cli *Client) parseGroupNotification(node *waBinary.Node) (any, []store.LIDMapping, []store.RedactedPhoneEntry, error) {
+func (cli *Client) parseGroupNotificationWithUsernames(node *waBinary.Node) (any, []store.LIDMapping, []store.RedactedPhoneEntry, []store.ContactUsernameEntry, error) {
 	children := node.GetChildren()
 	if len(children) == 1 && children[0].Tag == "create" {
-		return cli.parseGroupCreate(node, &children[0])
-	} else {
-		groupChange, lidPairs, err := cli.parseGroupChange(node)
+		event, lidPairs, redactedPhones, err := cli.parseGroupCreate(node, &children[0])
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
+		}
+		return event, lidPairs, redactedPhones, groupContactUsernames(&event.GroupInfo), nil
+	} else {
+		groupChange, lidPairs, usernames, err := cli.parseGroupChangeWithUsernames(node)
+		if err != nil {
+			return nil, nil, nil, nil, err
 		}
 		cli.updateGroupParticipantCache(groupChange)
-		return groupChange, lidPairs, nil, nil
+		return groupChange, lidPairs, nil, usernames, nil
 	}
+}
+
+func (cli *Client) parseGroupNotification(node *waBinary.Node) (any, []store.LIDMapping, []store.RedactedPhoneEntry, error) {
+	event, lidPairs, redactedPhones, _, err := cli.parseGroupNotificationWithUsernames(node)
+	return event, lidPairs, redactedPhones, err
 }
 
 // SetGroupJoinApprovalMode sets the group join approval mode to 'on' or 'off'.

@@ -476,7 +476,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "fbid:devices":
 		cli.handleFBDeviceNotification(ctx, node)
 	case "w:gp2":
-		evt, lidPairs, redactedPhones, err := cli.parseGroupNotification(node)
+		evt, lidPairs, redactedPhones, usernames, err := cli.parseGroupNotificationWithUsernames(node)
 		if err != nil {
 			cli.Log.Errorf("Failed to parse group notification: %v", err)
 		} else {
@@ -488,9 +488,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 			if err != nil {
 				cli.Log.Warnf("Failed to store redacted phones from group notification: %v", err)
 			}
-			if joined, ok := evt.(*events.JoinedGroup); ok {
-				cli.storeContactUsernamesBestEffort(ctx, groupContactUsernames(&joined.GroupInfo))
-			}
+			cli.storeContactUsernamesBestEffort(ctx, usernames)
 			cancelled = cli.dispatchEvent(evt)
 		}
 	case "picture":

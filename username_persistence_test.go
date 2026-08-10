@@ -140,3 +140,25 @@ func TestParseGroupResponsePersistsParticipantUsernames(t *testing.T) {
 		t.Fatalf("stored username = %#v", contacts.entries[0])
 	}
 }
+
+func TestParseGroupChangeReturnsParticipantUsernames(t *testing.T) {
+	lid := types.NewJID("100000011111111", types.HiddenUserServer)
+	node := &waBinary.Node{
+		Tag:   "notification",
+		Attrs: waBinary.Attrs{"from": types.NewJID("120363000000000000", types.GroupServer), "t": "1"},
+		Content: []waBinary.Node{{
+			Tag: "add",
+			Content: []waBinary.Node{{
+				Tag:   "participant",
+				Attrs: waBinary.Attrs{"jid": lid, "username": "example"},
+			}},
+		}},
+	}
+	_, _, usernames, err := (&Client{}).parseGroupChangeWithUsernames(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usernames) != 1 || usernames[0].JID != lid || usernames[0].Username != "example" {
+		t.Fatalf("group-change usernames = %#v", usernames)
+	}
+}
