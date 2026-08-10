@@ -10,6 +10,7 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 		Tag:   "business_profile",
 		Attrs: Attrs{"auth": "media-secret", "token": "upload-secret"},
 		Content: []Node{
+			{Tag: "access_token", Content: []byte("catalog-token")},
 			{Tag: "address", Content: []byte("12 Private Street")},
 			{Tag: "email", Content: []byte("owner@example.test")},
 			{Tag: "description", Content: []byte("Private description")},
@@ -18,6 +19,7 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 			{Tag: "email", Content: "other@example.test"},
 			{Tag: "description", Content: "Other private description"},
 			{Tag: "website", Content: "https://other-private.example.test"},
+			{Tag: "access_token", Content: "other-catalog-token"},
 		},
 	}
 
@@ -25,6 +27,7 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 	for _, sensitive := range []string{
 		"media-secret",
 		"upload-secret",
+		"catalog-token",
 		"12 Private Street",
 		"owner@example.test",
 		"Private description",
@@ -33,12 +36,13 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 		"other@example.test",
 		"Other private description",
 		"https://other-private.example.test",
+		"other-catalog-token",
 	} {
 		if strings.Contains(logged, sensitive) {
 			t.Fatalf("logged sensitive value %q: %s", sensitive, logged)
 		}
 	}
-	if strings.Count(logged, "[redacted]") != 10 {
+	if strings.Count(logged, "[redacted]") != 12 {
 		t.Fatalf("unexpected redacted node: %s", logged)
 	}
 }
