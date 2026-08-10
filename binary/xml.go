@@ -79,16 +79,15 @@ func printable(data []byte) string {
 
 func (n *Node) contentString() []string {
 	split := make([]string, 0)
+	if n.Content != nil && sensitiveXMLNodeContent(n.Tag) {
+		return append(split, "[redacted]")
+	}
 	switch content := n.Content.(type) {
 	case []Node:
 		for _, item := range content {
 			split = append(split, strings.Split(item.String(), "\n")...)
 		}
 	case []byte:
-		if sensitiveXMLNodeContent(n.Tag) {
-			split = append(split, "[redacted]")
-			break
-		}
 		if strContent := printable(content); len(strContent) > 0 {
 			if IndentXML {
 				split = append(split, strings.Split(string(content), "\n")...)

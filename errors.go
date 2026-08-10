@@ -247,7 +247,7 @@ func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
 	if len(node.Attrs) > 0 {
 		normalized.Attrs = make(waBinary.Attrs, len(node.Attrs))
 		for key, value := range node.Attrs {
-			value = normalizeIQErrorAttribute(value)
+			value = normalizeIQErrorScalar(value)
 			if value != nil && value != "" {
 				normalized.Attrs[key] = value
 			}
@@ -268,11 +268,13 @@ func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
 			}
 			normalized.Content = normalizedChildren
 		}
+	} else {
+		normalized.Content = normalizeIQErrorScalar(node.Content)
 	}
 	return &normalized
 }
 
-func normalizeIQErrorAttribute(value any) any {
+func normalizeIQErrorScalar(value any) any {
 	switch typedValue := value.(type) {
 	case int:
 		return strconv.Itoa(typedValue)
