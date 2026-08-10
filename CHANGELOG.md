@@ -1,6 +1,6 @@
 # Changelog
 
-All notable HyperMeow changes are documented here. HyperMeow follows semantic versioning for its own module beginning with `v0.1.0`.
+All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-versions from its reviewed `main` branch.
 
 ## [Unreleased]
 
@@ -9,10 +9,11 @@ All notable HyperMeow changes are documented here. HyperMeow follows semantic ve
 - Added an evidence-backed comparison with upstream WhatsMeow.
 - Consolidated the root white-box test suite into themed files without removing tests or changing coverage.
 - Moved committed benchmark reports and heap profiles into `benchmark/barback/testdata/results`; fresh run output remains under the ignored `benchmark/barback/results` workspace.
+- Retracted the accidental `v0.1.0` tag and its correction carrier; `@latest` selects `main`.
 
-## [0.1.0] - 2026-08-10
+## First public release - 2026-08-10
 
-The first tagged HyperMeow release combines the reviewed `dev` train with upstream WhatsMeow protocol updates through protobuf revision `v1044834443`.
+The first HyperMeow release combines the reviewed `dev` train with upstream WhatsMeow protocol updates through protobuf revision `v1044834443`.
 
 ### Added
 
@@ -73,6 +74,3 @@ See the [system comparison](benchmark/barback/testdata/results/system-comparison
 - Applications must migrate imports from `go.mau.fi/whatsmeow` to `github.com/polymorfa/hypermeow`.
 - A single binary must not link both modules because they register identical generated protobuf descriptors.
 - The Polymorfa Signal dependency changes exported Signal parameter types relative to upstream; other exported differences in this release are additive.
-
-[Unreleased]: https://github.com/polymorfa/hypermeow/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/polymorfa/hypermeow/releases/tag/v0.1.0

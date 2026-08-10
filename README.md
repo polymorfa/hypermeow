@@ -2,7 +2,6 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/polymorfa/hypermeow.svg)](https://pkg.go.dev/github.com/polymorfa/hypermeow)
 [![Go](https://github.com/polymorfa/hypermeow/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/polymorfa/hypermeow/actions/workflows/go.yml)
-[![Release](https://img.shields.io/github/v/release/polymorfa/hypermeow)](https://github.com/polymorfa/hypermeow/releases/latest)
 
 HyperMeow is Polymorfa's production-focused fork of [tulir/whatsmeow](https://github.com/tulir/whatsmeow). It keeps the upstream Go package names and protocol foundation while adding the business-app surface, LID-first identity model, bounded state, PostgreSQL efficiency, and reliability controls needed for large multi-session deployments.
 
@@ -44,7 +43,7 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 
 ## Install
 
-HyperMeow is published as its own Go module:
+HyperMeow uses commit pseudo-versions from its reviewed `main` branch:
 
 ```sh
 go get github.com/polymorfa/hypermeow@latest
@@ -56,8 +55,6 @@ The root package remains named `whatsmeow`, so use an explicit import alias:
 import whatsmeow "github.com/polymorfa/hypermeow"
 ```
 
-Keeping upstream's package names means existing identifiers such as `whatsmeow.Client` and `whatsmeow.NewClient` do not change during migration. Subpackages retain their corresponding package names.
-
 ## Migrating from WhatsMeow
 
 Replace `go.mau.fi/whatsmeow` imports with `github.com/polymorfa/hypermeow` and remove any old module replacement:
@@ -67,19 +64,6 @@ go mod edit -dropreplace=go.mau.fi/whatsmeow
 go get github.com/polymorfa/hypermeow@latest
 go mod tidy
 ```
-
-### Only one whatsmeow implementation may be linked
-
-HyperMeow keeps upstream's generated protobuf descriptor paths and symbol namespaces. Linking HyperMeow and `go.mau.fi/whatsmeow` into the same binary causes a process-start panic because both modules register the same descriptors.
-
-Check the complete build graph, including tests:
-
-```sh
-deps="$(go list -deps -test ./...)" || exit 1
-case "$deps" in *go.mau.fi/whatsmeow*) exit 1 ;; esac
-```
-
-Exit zero means the upstream module is not linked. The `-test` flag matters because a test-only dependency can still register the duplicate descriptors.
 
 ## Core compatibility
 
@@ -91,7 +75,7 @@ HyperMeow retains upstream's core support for:
 - app-state synchronization;
 - retry receipts and message decryption recovery.
 
-HyperMeow is not a drop-in second copy inside an existing binary because of the module constraint above. New exported functionality is additive unless called out in the [changelog](CHANGELOG.md).
+New exported functionality is additive unless called out in the [changelog](CHANGELOG.md).
 
 ## Tests and repository layout
 
