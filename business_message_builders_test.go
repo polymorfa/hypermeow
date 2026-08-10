@@ -271,6 +271,34 @@ func TestBusinessAddressMessageEnforcesInteractiveTextLimits(t *testing.T) {
 	}
 }
 
+func TestBusinessFlowMessageEnforcesInteractiveTextLimits(t *testing.T) {
+	valid := BusinessFlowMessageParams{
+		Body: "Book a visit", ButtonText: "Choose a time", Footer: "Appointments",
+		FlowID: "flow-100", FlowToken: "synthetic-token", FlowAction: "navigate", Screen: "APPOINTMENT",
+	}
+	tests := map[string]BusinessFlowMessageParams{
+		"body": {
+			Body: strings.Repeat("b", 1025), ButtonText: valid.ButtonText, Footer: valid.Footer,
+			FlowID: valid.FlowID, FlowToken: valid.FlowToken, FlowAction: valid.FlowAction, Screen: valid.Screen,
+		},
+		"button": {
+			Body: valid.Body, ButtonText: strings.Repeat("c", 21), Footer: valid.Footer,
+			FlowID: valid.FlowID, FlowToken: valid.FlowToken, FlowAction: valid.FlowAction, Screen: valid.Screen,
+		},
+		"footer": {
+			Body: valid.Body, ButtonText: valid.ButtonText, Footer: strings.Repeat("f", 61),
+			FlowID: valid.FlowID, FlowToken: valid.FlowToken, FlowAction: valid.FlowAction, Screen: valid.Screen,
+		},
+	}
+	for name, params := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := BuildBusinessFlowMessage(params); err == nil {
+				t.Fatal("expected flow text limit error")
+			}
+		})
+	}
+}
+
 func TestBuildBusinessFlowMessageMatchesWebGenerator(t *testing.T) {
 	msg, err := BuildBusinessFlowMessage(BusinessFlowMessageParams{
 		Body: "Book a visit", ButtonText: "Choose a time", FlowID: "flow-100", FlowToken: "synthetic-token",
