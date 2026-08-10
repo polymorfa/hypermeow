@@ -27,7 +27,7 @@ func sensitiveXMLAttribute(key string) bool {
 
 func sensitiveXMLNodeContent(tag string) bool {
 	switch tag {
-	case "access_token", "address", "description", "email", "website":
+	case "access_token", "address", "description", "email", "session_cookies", "website":
 		return true
 	default:
 		return false
