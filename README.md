@@ -79,18 +79,42 @@ HyperMeow retains upstream's core support for:
 
 New exported functionality is additive unless called out in the [changelog](CHANGELOG.md).
 
-## Tests and repository layout
+## Discord
 
-Go `_test.go` files stay beside the package they test. Most HyperMeow tests intentionally exercise unexported concurrency, cache, parser, and persistence behavior; moving them into a separate directory would stop Go from treating them as the same package.
+Join the [WhatsApp Web ecosystem Discord](https://whiskey.so/discord) and visit
+`#hypermeow` for project discussion.
 
-To keep the repository root navigable, the white-box suite is consolidated into five themed files—business, identity, app state/history, messaging, and client runtime—plus the external client contract suite. Consolidation changes file layout only; the complete test inventory and coverage remain intact.
+## Get support
 
-The handwritten business-app API is consolidated in `business.go`; generated protocol bindings remain separate.
+If you'd like business to enterprise-level support from Rajeh, you can book a video
+chat. Book a 1 hour time slot by contacting him on Discord or pre-ordering
+[here](https://purpshell.dev/book). The earlier you pre-order the better, as his
+time slots usually fill up very quickly.
 
-Versioned benchmark reports and heap profiles live under `benchmark/barback/testdata/results/`. Fresh local runs write to the ignored `benchmark/barback/results/` workspace.
+If you are a business, we encourage you to contribute back to the development costs
+of the project. You can do so by booking meetings or sponsoring below. All support
+is welcome from businesses of all sizes.
 
-## Documentation and discussion
+## Sponsor
 
-- [Go API reference](https://pkg.go.dev/github.com/polymorfa/hypermeow)
-- [Changelog](CHANGELOG.md)
-- Discord: [whiskey.so/discord](https://whiskey.so/discord), `#hypermeow`
+If you'd like to financially support this project, you can do so
+[here](https://purpshell.dev/sponsor).
+
+## Disclaimer
+
+> [!CAUTION]
+> This project is not affiliated, associated, authorized, endorsed by, or in any way
+> officially connected with WhatsApp or any of its subsidiaries or its affiliates.
+> The official WhatsApp website can be found at whatsapp.com. "WhatsApp" as well as
+> related names, marks, emblems and images are registered trademarks of their
+> respective owners.
+>
+> The maintainers do not condone using this project in practices that violate the
+> Terms of Service of WhatsApp, and call upon users to use it fairly.
+
+## License
+
+Copyright (c) 2025 Tulir Asokan<br>
+Copyright (c) 2026 Rajeh Taher
+
+Licensed under the Mozilla Public License 2.0. See [LICENSE](LICENSE) for the full text.
