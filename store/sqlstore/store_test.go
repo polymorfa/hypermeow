@@ -160,3 +160,25 @@ func TestMigratePNToLIDCachesEmptyPreflightTemporarily(t *testing.T) {
 		}
 	}
 }
+
+func TestMigratePNToLIDUsesSQLitePrefixRange(t *testing.T) {
+	state := &pnMigrationTestDB{}
+	db := sql.OpenDB(&pnMigrationTestConnector{state: state})
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewSQLStore(NewWithDB(db, "sqlite3", nil), types.NewJID("15550000000", types.DefaultUserServer))
+	pn := types.NewJID("15551234567", types.DefaultUserServer)
+	lid := types.NewJID("123456789012345", types.HiddenUserServer)
+
+	if err := store.MigratePNToLID(context.Background(), pn, lid); err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{store.JID, "15551234567:", "15551234567;"}
+	if len(state.args) != len(wantArgs) {
+		t.Fatalf("SQLite preflight argument count = %d, want %d", len(state.args), len(wantArgs))
+	}
+	for index, want := range wantArgs {
+		if got := fmt.Sprint(state.args[index].Value); got != want {
+			t.Fatalf("SQLite preflight argument %d = %q, want %q", index, got, want)
+		}
+	}
+}

@@ -260,6 +260,11 @@ const (
 			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2)
 			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2)
 	`
+	hasPNRowsToMigrateSQLiteQuery = `
+		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3)
+			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3)
+			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id >= $2 AND sender_id < $3)
+	`
 )
 
 func (s *SQLStore) GetSession(ctx context.Context, address string) (session []byte, err error) {
@@ -476,7 +481,12 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 		return nil
 	}
 	var hasPNRows bool
-	err := s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, pnSignal+":%").Scan(&hasPNRows)
+	var err error
+	if s.db.Dialect == dbutil.SQLite {
+		err = s.db.QueryRow(ctx, hasPNRowsToMigrateSQLiteQuery, s.JID, pnSignal+":", pnSignal+";").Scan(&hasPNRows)
+	} else {
+		err = s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, pnSignal+":%").Scan(&hasPNRows)
+	}
 	if err != nil {
 		s.log.Warnf("Failed to check for PN rows to migrate from %s: %v", pnSignal, err)
 	} else if !hasPNRows {
