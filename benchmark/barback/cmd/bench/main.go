@@ -180,6 +180,8 @@ type runner struct {
 	metricsStarted    bool
 	sessionStarted    bool
 	preflightDatabase databaseStats
+	preflightCaptured bool
+	postConsentClean  bool
 	tempStop          chan struct{}
 	tempPeakBytes     atomic.Int64
 	tempPeakFiles     atomic.Int64
@@ -397,6 +399,9 @@ func (r *runner) run() (result, error) {
 		NoiseCertificateAuthority: &root,
 	}
 	client.EnableAutoReconnect = true
+	if r.cfg.PhoneConsentSmoke {
+		enablePhoneConsentReceiveBarrier(client)
+	}
 	client.AddEventHandler(r.handler(ctx, client))
 
 	workerCtx, stopWorkers := context.WithCancel(ctx)
@@ -489,19 +494,25 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 			}
 			if !r.beforeBenchmarkMessage(func() error {
 				preflightDatabase := r.snapshotStatementStats()
+				r.metricsMu.Lock()
+				r.preflightDatabase = preflightDatabase
+				r.preflightCaptured = true
+				r.metricsMu.Unlock()
 				validate := r.phoneConsentValidator
 				if validate == nil {
 					validate = r.validatePhoneNumberConsent
 				}
-				if err := validate(ctx, client, phoneConsentTarget(event)); err != nil {
-					return err
-				}
-				if err := r.resetStatementStats(ctx); err != nil {
-					return fmt.Errorf("reset workload statement stats: %w", err)
-				}
+				validationErr := validate(ctx, client, phoneConsentTarget(event))
+				resetErr := r.resetStatementStats(ctx)
 				r.metricsMu.Lock()
-				r.preflightDatabase = preflightDatabase
+				r.postConsentClean = resetErr == nil
 				r.metricsMu.Unlock()
+				if validationErr != nil {
+					return validationErr
+				}
+				if resetErr != nil {
+					return fmt.Errorf("reset workload statement stats: %w", resetErr)
+				}
 				return nil
 			}) {
 				return
@@ -836,8 +847,14 @@ func (r *runner) snapshot(completed bool) result {
 	if r.db != nil || r.statementStatsSnapshot != nil {
 		r.metricsMu.Lock()
 		preflightDatabase := r.preflightDatabase
+		preflightCaptured := r.preflightCaptured
+		postConsentClean := r.postConsentClean
 		r.metricsMu.Unlock()
-		res.Database = mergeDatabaseStats(preflightDatabase, r.snapshotStatementStats())
+		if preflightCaptured && !postConsentClean {
+			res.Database = preflightDatabase
+		} else {
+			res.Database = mergeDatabaseStats(preflightDatabase, r.snapshotStatementStats())
+		}
 	}
 	return res
 }
@@ -924,8 +941,7 @@ func databaseSnapshot(db *sql.DB) databaseStats {
 		FROM pg_stat_statements
 		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 		  AND query ILIKE '%whatsmeow_%'
-		ORDER BY calls DESC, total_exec_time DESC
-		LIMIT 30`)
+		ORDER BY calls DESC, total_exec_time DESC`)
 	if err != nil {
 		return stats
 	}

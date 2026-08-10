@@ -261,6 +261,53 @@ func TestPhoneConsentPreservesTriggeringPingDatabaseStats(t *testing.T) {
 	}
 }
 
+func TestPhoneConsentFailureExcludesValidationDatabaseStats(t *testing.T) {
+	phase := 0
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+		phoneConsentValidator: func(context.Context, *whatsmeow.Client, types.JID) error {
+			if phase != 1 {
+				t.Fatalf("validation at phase %d", phase)
+			}
+			phase = 2
+			return errors.New("capture failed")
+		},
+	}
+	r.statementStatsSnapshot = func() databaseStats {
+		switch phase {
+		case 0:
+			phase = 1
+			return databaseStats{Calls: 3, Queries: []queryStat{{Query: "SELECT whatsmeow_session", Calls: 3}}}
+		case 3:
+			phase = 4
+			return databaseStats{}
+		default:
+			t.Fatalf("statement stats snapshot at phase %d", phase)
+			return databaseStats{}
+		}
+	}
+	r.statementStatsReset = func(context.Context) error {
+		if phase != 2 {
+			t.Fatalf("reset at phase %d", phase)
+		}
+		phase = 3
+		return nil
+	}
+	r.handler(context.Background(), &whatsmeow.Client{})(&events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("100000011111111", types.HiddenUserServer)}},
+		Message: &waE2E.Message{Conversation: proto.String("ping")},
+	})
+	result := r.snapshot(false)
+	if phase != 4 || result.Database.Calls != 3 || len(result.Database.Queries) != 1 {
+		t.Fatalf("failed consent polluted database stats at phase %d: %+v", phase, result.Database)
+	}
+	if r.failed.Load() != 0 {
+		t.Fatalf("failed consent changed workload failures to %d", r.failed.Load())
+	}
+}
+
 func TestHandlerUsesRunContextForPhoneConsent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -357,5 +404,33 @@ func TestPhoneConsentTargetPrefersSenderLID(t *testing.T) {
 	}}}
 	if got := phoneConsentTarget(message); got.String() != "100000011111111@lid" {
 		t.Fatalf("target = %s", got)
+	}
+}
+
+func TestMergeDatabaseStatsRanksAfterCombiningAllQueries(t *testing.T) {
+	preflight := databaseStats{Queries: make([]queryStat, 31)}
+	workload := databaseStats{Queries: make([]queryStat, 31)}
+	for index := range 30 {
+		preflight.Queries[index] = queryStat{Query: "preflight-" + strconv.Itoa(index), Calls: 2}
+		workload.Queries[index] = queryStat{Query: "workload-" + strconv.Itoa(index), Calls: 2}
+	}
+	preflight.Queries[30] = queryStat{Query: "combined", Calls: 1}
+	workload.Queries[30] = queryStat{Query: "combined", Calls: 1}
+
+	merged := mergeDatabaseStats(preflight, workload)
+	if len(merged.Queries) != 30 {
+		t.Fatalf("merged query count = %d, want 30", len(merged.Queries))
+	}
+	found := false
+	for _, query := range merged.Queries {
+		if query.Query == "combined" {
+			found = true
+			if query.Calls != 2 {
+				t.Fatalf("combined calls = %d, want 2", query.Calls)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("combined phase-local tail query was dropped before final ranking")
 	}
 }
