@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/types"
+	whatsmeow "github.com/polymorfa/hypermeow"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func businessAppSmokeSupported() bool {

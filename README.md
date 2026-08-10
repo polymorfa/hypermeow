@@ -1,9 +1,21 @@
 # HyperMeow
-[![Go Reference](https://pkg.go.dev/badge/github.com/polymorfa/whatsmeow.svg)](https://pkg.go.dev/github.com/polymorfa/whatsmeow)
+[![Go Reference](https://pkg.go.dev/badge/github.com/polymorfa/hypermeow.svg)](https://pkg.go.dev/github.com/polymorfa/hypermeow)
 
 HyperMeow is a library used at Polymorfa to ship WhatsApp at scale. We forked from tulir's project since these performance changes are somewhat experimental and diverge from tulir's minimalist philosophy. For Polymorfa to succeed, we needed all the WhatsApp Web functions in one place, meanwhile tulir prefers the core functionalities / messaging be the scope of whatsmeow.
 
-The module path and package names remain `go.mau.fi/whatsmeow` for compatibility. Consumers can test HyperMeow with a Go module `replace` directive while the fork is validated against upstream behavior.
+HyperMeow is its own Go module, imported directly as `github.com/polymorfa/hypermeow`. It no longer requires a `replace` directive:
+
+```go
+import whatsmeow "github.com/polymorfa/hypermeow"
+```
+
+```sh
+go get github.com/polymorfa/hypermeow
+```
+
+Package names are unchanged from upstream (the root package is still `whatsmeow`), so only import paths differ. Import the root package under its package name, as above, when your tooling expects the path's last element to match.
+
+Migrating from the previous `replace go.mau.fi/whatsmeow => github.com/polymorfa/hypermeow` setup: drop the `replace` line, add a normal `require` on `github.com/polymorfa/hypermeow`, and rewrite `go.mau.fi/whatsmeow` import paths to `github.com/polymorfa/hypermeow`. A `replace` directive is only honoured in the main module, so the previous arrangement did not carry to anything that depended on your module in turn; a direct requirement does.
 
 The reproducible Barback and PostgreSQL benchmark is documented in [`benchmark/barback`](benchmark/barback/README.md).
 
@@ -13,8 +25,8 @@ Discord server (#hypermeow channel): https://whiskey.so/discord
 
 ## Usage
 
-The [godoc](https://pkg.go.dev/github.com/polymorfa/whatsmeow) includes docs for all methods and event types.
-There's also a [simple example](https://pkg.go.dev/github.com/polymorfa/whatsmeow#example-package) at the top.
+The [godoc](https://pkg.go.dev/github.com/polymorfa/hypermeow) includes docs for all methods and event types.
+There's also a [simple example](https://pkg.go.dev/github.com/polymorfa/hypermeow#example-package) at the top.
 
 ## Features
 

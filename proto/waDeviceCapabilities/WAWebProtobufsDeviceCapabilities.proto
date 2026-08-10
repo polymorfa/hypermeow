@@ -1,6 +1,6 @@
 syntax = "proto2";
 package WAWebProtobufsDeviceCapabilities;
-option go_package = "go.mau.fi/whatsmeow/proto/waDeviceCapabilities";
+option go_package = "github.com/polymorfa/hypermeow/proto/waDeviceCapabilities";
 
 message DeviceCapabilities {
 	enum MemberNameTagPrimarySupport {

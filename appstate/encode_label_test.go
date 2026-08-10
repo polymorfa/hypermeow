@@ -3,7 +3,7 @@ package appstate
 import (
 	"testing"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestBuildLabelChatChangesUsesOnePatch(t *testing.T) {

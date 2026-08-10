@@ -2,7 +2,7 @@
 
 package main
 
-import "go.mau.fi/whatsmeow"
+import whatsmeow "github.com/polymorfa/hypermeow"
 
 func enablePhoneConsentReceiveBarrier(client *whatsmeow.Client) {
 	client.DangerousInternals().SetSynchronousMessageNameUpdates(true)

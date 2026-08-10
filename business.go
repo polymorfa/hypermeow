@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/types"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 // GetOrderDetails fetches the details of a specific order using its ID and token.

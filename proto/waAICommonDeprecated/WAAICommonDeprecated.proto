@@ -1,6 +1,6 @@
 syntax = "proto2";
 package WAAICommonDeprecated;
-option go_package = "go.mau.fi/whatsmeow/proto/waAICommonDeprecated";
+option go_package = "github.com/polymorfa/hypermeow/proto/waAICommonDeprecated";
 
 enum AIRichResponseMessageType {
 	AI_RICH_RESPONSE_TYPE_UNKNOWN = 0;

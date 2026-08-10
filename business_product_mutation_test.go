@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/types"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func syntheticProductInput() types.BusinessProductInput {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type cachedLIDStore struct {

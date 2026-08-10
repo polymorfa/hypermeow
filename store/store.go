@@ -15,10 +15,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"go.mau.fi/whatsmeow/proto/waAdv"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/util/keys"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	"github.com/polymorfa/hypermeow/proto/waAdv"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/util/keys"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type IdentityStore interface {

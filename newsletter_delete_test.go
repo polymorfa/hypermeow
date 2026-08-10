@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"go.mau.fi/whatsmeow/proto/waWa6"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/proto/waWa6"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestBuildDeleteNewsletterVariablesRejectsNonNewsletterJID(t *testing.T) {

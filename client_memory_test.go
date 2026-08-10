@@ -6,9 +6,9 @@ import (
 	"runtime"
 	"testing"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/store"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/store"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 func TestNewClientDefersSparseState(t *testing.T) {

@@ -1,6 +1,6 @@
 syntax = "proto2";
 package WAWebLabyrinthWaWasm;
-option go_package = "go.mau.fi/whatsmeow/proto/waWebLabyrinthWaWasm";
+option go_package = "github.com/polymorfa/hypermeow/proto/waWebLabyrinthWaWasm";
 
 message CreateBackupInput {
 	required string recoveryCode = 1;

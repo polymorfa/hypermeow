@@ -6,7 +6,7 @@ toolchain go1.26.5
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	go.mau.fi/whatsmeow v0.0.0
+	github.com/polymorfa/hypermeow v0.0.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -31,4 +31,4 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 )
 
-replace go.mau.fi/whatsmeow => ../..
+replace github.com/polymorfa/hypermeow => ../..

@@ -2,6 +2,6 @@
 
 package main
 
-import "go.mau.fi/whatsmeow"
+import whatsmeow "github.com/polymorfa/hypermeow"
 
 func enablePhoneConsentReceiveBarrier(_ *whatsmeow.Client) {}

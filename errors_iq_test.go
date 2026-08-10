@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
+	waBinary "github.com/polymorfa/hypermeow/binary"
 )
 
 func TestIQErrorIsDistinguishesSensitiveAttributes(t *testing.T) {

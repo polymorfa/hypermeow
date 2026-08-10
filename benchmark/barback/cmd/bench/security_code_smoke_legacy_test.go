@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestLegacySecurityCodeValidationIsSkipped(t *testing.T) {

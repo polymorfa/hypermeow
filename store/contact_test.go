@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestContactEntryMassInsertIncludesUsername(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	waE2E "github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
 func TestButtonAndListResponsesDoNotRequestBusinessMetadata(t *testing.T) {

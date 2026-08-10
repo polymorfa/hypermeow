@@ -10,10 +10,10 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
-	waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"
-	"go.mau.fi/whatsmeow/store"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	waE2E "github.com/polymorfa/hypermeow/proto/waE2E"
+	waHistorySync "github.com/polymorfa/hypermeow/proto/waHistorySync"
+	"github.com/polymorfa/hypermeow/store"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type historySyncDeviceContainer struct {
