@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type singleUsernameStore struct {

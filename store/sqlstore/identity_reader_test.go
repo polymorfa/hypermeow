@@ -9,7 +9,7 @@ import (
 	"io"
 	"testing"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 type identityReaderState struct {

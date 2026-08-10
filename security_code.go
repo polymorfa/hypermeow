@@ -10,9 +10,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/whatsmeow/proto/waFingerprint"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/proto/waFingerprint"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 const securityCodeIterations = 5200

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestBuildBusinessCommerceControlVariables(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 const (

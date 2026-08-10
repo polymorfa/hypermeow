@@ -20,8 +20,8 @@ import (
 	"go.mau.fi/util/dbutil"
 	"go.mau.fi/util/exslices"
 
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 type CachedLIDMap struct {

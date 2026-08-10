@@ -1,4 +1,4 @@
-module go.mau.fi/whatsmeow
+module github.com/polymorfa/hypermeow
 
 go 1.25.0
 

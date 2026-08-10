@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"go.mau.fi/whatsmeow/binary/token"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/binary/token"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 type binaryDecoder struct {

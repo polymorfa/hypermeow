@@ -5,7 +5,7 @@ package main
 import (
 	"context"
 
-	"go.mau.fi/whatsmeow"
+	whatsmeow "github.com/polymorfa/hypermeow"
 )
 
 func businessAppSmokeSupported() bool {

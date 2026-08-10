@@ -1,6 +1,6 @@
 package whatsmeow
 
-import "go.mau.fi/whatsmeow/proto/waE2E"
+import "github.com/polymorfa/hypermeow/proto/waE2E"
 
 func BuildRequestPhoneNumberMessage(contextInfo *waE2E.ContextInfo) *waE2E.Message {
 	return &waE2E.Message{

@@ -5,8 +5,8 @@ package main
 import (
 	"context"
 
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/types"
+	whatsmeow "github.com/polymorfa/hypermeow"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func validateIdentityVerificationCodes(context.Context, *whatsmeow.Client, types.JID) error {

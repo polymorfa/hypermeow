@@ -17,9 +17,9 @@ import (
 	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
 	"github.com/polymorfa/libsignal-protocol-go/util/optional"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/util/keys"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/util/keys"
 )
 
 const (

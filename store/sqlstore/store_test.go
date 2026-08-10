@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 type pnMigrationTestDB struct {

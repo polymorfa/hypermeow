@@ -9,9 +9,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waFingerprint"
-	"go.mau.fi/whatsmeow/types"
+	whatsmeow "github.com/polymorfa/hypermeow"
+	"github.com/polymorfa/hypermeow/proto/waFingerprint"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func validateIdentityVerificationCodes(ctx context.Context, client *whatsmeow.Client, userID types.JID) error {

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"go.mau.fi/whatsmeow/mex"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/mex"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 type GetCatalogParams struct {

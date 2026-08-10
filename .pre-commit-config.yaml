@@ -17,7 +17,7 @@ repos:
       - id: go-imports-repo
         args:
           - "-local"
-          - "go.mau.fi/whatsmeow"
+          - "github.com/polymorfa/hypermeow"
           - "-w"
       - id: go-vet-repo-mod
       # TODO enable this

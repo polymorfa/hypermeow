@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 const (
