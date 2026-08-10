@@ -273,14 +273,24 @@ func (cli *Client) GetGroupRequestParticipants(ctx context.Context, jid types.JI
 		return nil, &ElementMissingError{Tag: "membership_approval_requests", In: "response to group request participants query"}
 	}
 	requestParticipants := request.GetChildrenByTag("membership_approval_request")
-	participants := make([]types.GroupParticipantRequest, len(requestParticipants))
-	for i, req := range requestParticipants {
-		participants[i] = types.GroupParticipantRequest{
-			JID:         req.AttrGetter().JID("jid"),
-			RequestedAt: req.AttrGetter().UnixTime("request_time"),
-		}
-	}
+	participants, usernames := parseGroupParticipantRequests(requestParticipants)
+	cli.storeContactUsernamesBestEffort(ctx, usernames)
 	return participants, nil
+}
+
+func parseGroupParticipantRequests(nodes []waBinary.Node) ([]types.GroupParticipantRequest, []store.ContactUsernameEntry) {
+	participants := make([]types.GroupParticipantRequest, len(nodes))
+	usernames := make([]store.ContactUsernameEntry, 0, len(nodes))
+	for i := range nodes {
+		ag := nodes[i].AttrGetter()
+		participant := parseParticipant(ag, &nodes[i])
+		participants[i] = types.GroupParticipantRequest{
+			JID:         participant.JID,
+			RequestedAt: ag.UnixTime("request_time"),
+		}
+		usernames = append(usernames, groupParticipantUsernames([]types.GroupParticipant{participant})...)
+	}
+	return participants, usernames
 }
 
 type ParticipantRequestChange string

@@ -162,3 +162,30 @@ func TestParseGroupChangeReturnsParticipantUsernames(t *testing.T) {
 		t.Fatalf("group-change usernames = %#v", usernames)
 	}
 }
+
+func TestParseGroupParticipantRequestsReturnsUsernamesByStableLID(t *testing.T) {
+	lid := types.NewJID("100000011111111", types.HiddenUserServer)
+	pn := types.NewJID("15550001111", types.DefaultUserServer)
+	nodes := []waBinary.Node{
+		{Tag: "membership_approval_request", Attrs: waBinary.Attrs{
+			"jid": lid, "username": "lid-user", "request_time": "1",
+		}},
+		{Tag: "membership_approval_request", Attrs: waBinary.Attrs{
+			"jid": pn, "lid": lid, "username": "pn-user", "request_time": "2",
+		}},
+	}
+
+	requests, usernames := parseGroupParticipantRequests(nodes)
+	if len(requests) != 2 || requests[0].JID != lid || requests[1].JID != pn {
+		t.Fatalf("participant requests = %#v", requests)
+	}
+	if len(usernames) != 2 {
+		t.Fatalf("usernames = %#v", usernames)
+	}
+	if usernames[0].JID != lid || usernames[0].Username != "lid-user" {
+		t.Fatalf("LID-addressed username = %#v", usernames[0])
+	}
+	if usernames[1].JID != lid || usernames[1].Username != "pn-user" {
+		t.Fatalf("PN-addressed username = %#v", usernames[1])
+	}
+}
