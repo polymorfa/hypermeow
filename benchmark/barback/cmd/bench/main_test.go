@@ -187,25 +187,50 @@ func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
 	}
 }
 
-func TestPhoneConsentResetsDatabaseBeforeMeasuredMetrics(t *testing.T) {
+func TestPhoneConsentPreservesTriggeringPingDatabaseStats(t *testing.T) {
 	jobs := make(chan *events.Message, 1)
 	var resetCalls atomic.Int64
+	phase := 0
 	r := &runner{
-		cfg:            config{PhoneConsentSmoke: true},
+		cfg:            config{PhoneConsentSmoke: true, Total: 1},
 		fatalErr:       make(chan error, 1),
 		failureReasons: make(map[string]int64),
 		jobs:           []chan *events.Message{jobs},
 	}
-	r.phoneConsentValidator = func(context.Context, *whatsmeow.Client, types.JID) error {
-		if resetCalls.Load() != 0 {
-			t.Fatal("statement stats reset before phone consent validation")
+	r.statementStatsSnapshot = func() databaseStats {
+		switch phase {
+		case 0:
+			phase = 1
+			return databaseStats{
+				Calls: 2, TotalExecMS: 3, Rows: 4, SizeBytes: 100,
+				Queries: []queryStat{{Query: "SELECT whatsmeow_session", Calls: 2, TotalExecMS: 3, Rows: 4}},
+			}
+		case 3:
+			phase = 4
+			return databaseStats{
+				Calls: 5, TotalExecMS: 7, Rows: 11, SizeBytes: 200,
+				Queries: []queryStat{
+					{Query: "SELECT whatsmeow_session", Calls: 1, TotalExecMS: 2, Rows: 3},
+					{Query: "UPDATE whatsmeow_device", Calls: 4, TotalExecMS: 5, Rows: 8},
+				},
+			}
+		default:
+			t.Fatalf("statement stats snapshot at phase %d", phase)
+			return databaseStats{}
 		}
+	}
+	r.phoneConsentValidator = func(context.Context, *whatsmeow.Client, types.JID) error {
+		if phase != 1 || resetCalls.Load() != 0 {
+			t.Fatalf("phone consent validation at phase %d after %d resets", phase, resetCalls.Load())
+		}
+		phase = 2
 		return nil
 	}
 	r.statementStatsReset = func(context.Context) error {
-		if r.startedAt.Load() != 0 {
-			t.Fatal("statement stats reset after workload metrics started")
+		if phase != 2 || r.startedAt.Load() != 0 {
+			t.Fatalf("statement stats reset at phase %d after workload metrics started", phase)
 		}
+		phase = 3
 		resetCalls.Add(1)
 		return nil
 	}
@@ -219,6 +244,20 @@ func TestPhoneConsentResetsDatabaseBeforeMeasuredMetrics(t *testing.T) {
 	}
 	if r.startedAt.Load() == 0 {
 		t.Fatal("workload metrics did not start after statement stats reset")
+	}
+	result := r.snapshot(false)
+	if phase != 4 {
+		t.Fatalf("final statement stats snapshot left phase at %d", phase)
+	}
+	if result.Database.Calls != 7 || result.Database.TotalExecMS != 10 || result.Database.Rows != 15 {
+		t.Fatalf("database totals omitted triggering ping: %+v", result.Database)
+	}
+	if result.Database.SizeBytes != 200 {
+		t.Fatalf("database size = %d, want final size 200", result.Database.SizeBytes)
+	}
+	if len(result.Database.Queries) != 2 || result.Database.Queries[0].Query != "UPDATE whatsmeow_device" ||
+		result.Database.Queries[1].Calls != 3 || result.Database.Queries[1].TotalExecMS != 5 || result.Database.Queries[1].Rows != 7 {
+		t.Fatalf("database query stats were not merged: %+v", result.Database.Queries)
 	}
 }
 

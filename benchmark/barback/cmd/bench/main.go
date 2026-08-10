@@ -141,22 +141,23 @@ type runner struct {
 	db         *sql.DB
 	httpClient *http.Client
 
-	received              atomic.Int64
-	sent                  atomic.Int64
-	failed                atomic.Int64
-	overflows             atomic.Int64
-	historySyncs          atomic.Int64
-	historyConvs          atomic.Int64
-	historyMessages       atomic.Int64
-	messageSequence       atomic.Int64
-	mediaUploads          atomic.Int64
-	mediaBytes            atomic.Int64
-	businessValid         atomic.Bool
-	phoneConsentValid     atomic.Bool
-	phoneConsentOnce      sync.Once
-	phoneConsentErr       error
-	phoneConsentValidator func(context.Context, *whatsmeow.Client, types.JID) error
-	statementStatsReset   func(context.Context) error
+	received               atomic.Int64
+	sent                   atomic.Int64
+	failed                 atomic.Int64
+	overflows              atomic.Int64
+	historySyncs           atomic.Int64
+	historyConvs           atomic.Int64
+	historyMessages        atomic.Int64
+	messageSequence        atomic.Int64
+	mediaUploads           atomic.Int64
+	mediaBytes             atomic.Int64
+	businessValid          atomic.Bool
+	phoneConsentValid      atomic.Bool
+	phoneConsentOnce       sync.Once
+	phoneConsentErr        error
+	phoneConsentValidator  func(context.Context, *whatsmeow.Client, types.JID) error
+	statementStatsReset    func(context.Context) error
+	statementStatsSnapshot func() databaseStats
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -172,17 +173,18 @@ type runner struct {
 	messageTypes    map[string]int64
 	failureReasons  map[string]int64
 
-	metricsMu      sync.Mutex
-	runtimeStart   runtimeStats
-	sessionStart   runtimeStats
-	resourceStart  resourceStats
-	metricsStarted bool
-	sessionStarted bool
-	tempStop       chan struct{}
-	tempPeakBytes  atomic.Int64
-	tempPeakFiles  atomic.Int64
-	connected      chan struct{}
-	connectedOnce  sync.Once
+	metricsMu         sync.Mutex
+	runtimeStart      runtimeStats
+	sessionStart      runtimeStats
+	resourceStart     resourceStats
+	metricsStarted    bool
+	sessionStarted    bool
+	preflightDatabase databaseStats
+	tempStop          chan struct{}
+	tempPeakBytes     atomic.Int64
+	tempPeakFiles     atomic.Int64
+	connected         chan struct{}
+	connectedOnce     sync.Once
 }
 
 func main() {
@@ -486,6 +488,7 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 				return
 			}
 			if !r.beforeBenchmarkMessage(func() error {
+				preflightDatabase := r.snapshotStatementStats()
 				validate := r.phoneConsentValidator
 				if validate == nil {
 					validate = r.validatePhoneNumberConsent
@@ -496,6 +499,9 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 				if err := r.resetStatementStats(ctx); err != nil {
 					return fmt.Errorf("reset workload statement stats: %w", err)
 				}
+				r.metricsMu.Lock()
+				r.preflightDatabase = preflightDatabase
+				r.metricsMu.Unlock()
 				return nil
 			}) {
 				return
@@ -525,6 +531,16 @@ func (r *runner) resetStatementStats(ctx context.Context) error {
 	return err
 }
 
+func (r *runner) snapshotStatementStats() databaseStats {
+	if r.statementStatsSnapshot != nil {
+		return r.statementStatsSnapshot()
+	}
+	if r.db == nil {
+		return databaseStats{}
+	}
+	return databaseSnapshot(r.db)
+}
+
 func (r *runner) startSessionMetrics() {
 	r.metricsMu.Lock()
 	if !r.sessionStarted {
@@ -539,13 +555,14 @@ func (r *runner) startMetrics() {
 	r.runtimeStart = runtimeSnapshot()
 	r.resourceStart = resourceSnapshot()
 	r.metricsStarted = true
-	r.tempStop = make(chan struct{})
+	tempStop := make(chan struct{})
+	r.tempStop = tempStop
 	r.metricsMu.Unlock()
-	go r.sampleTemporaryFiles()
+	go r.sampleTemporaryFiles(tempStop)
 	r.startedAt.Store(time.Now().UnixNano())
 }
 
-func (r *runner) sampleTemporaryFiles() {
+func (r *runner) sampleTemporaryFiles(stop <-chan struct{}) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -553,7 +570,7 @@ func (r *runner) sampleTemporaryFiles() {
 		updatePeak(&r.tempPeakBytes, bytes)
 		updatePeak(&r.tempPeakFiles, files)
 		select {
-		case <-r.tempStop:
+		case <-stop:
 			return
 		case <-ticker.C:
 		}
@@ -816,8 +833,11 @@ func (r *runner) snapshot(completed bool) result {
 	if duration > 0 {
 		res.ThroughputPerSec = float64(res.MessagesSent) / duration.Seconds()
 	}
-	if r.db != nil {
-		res.Database = databaseSnapshot(r.db)
+	if r.db != nil || r.statementStatsSnapshot != nil {
+		r.metricsMu.Lock()
+		preflightDatabase := r.preflightDatabase
+		r.metricsMu.Unlock()
+		res.Database = mergeDatabaseStats(preflightDatabase, r.snapshotStatementStats())
 	}
 	return res
 }
@@ -919,6 +939,39 @@ func databaseSnapshot(db *sql.DB) databaseStats {
 		stats.Queries = append(stats.Queries, item)
 	}
 	return stats
+}
+
+func mergeDatabaseStats(preflight, workload databaseStats) databaseStats {
+	workload.Calls += preflight.Calls
+	workload.TotalExecMS += preflight.TotalExecMS
+	workload.Rows += preflight.Rows
+
+	queries := make(map[string]queryStat, len(preflight.Queries)+len(workload.Queries))
+	for _, item := range append(append([]queryStat(nil), preflight.Queries...), workload.Queries...) {
+		merged := queries[item.Query]
+		merged.Query = item.Query
+		merged.Calls += item.Calls
+		merged.TotalExecMS += item.TotalExecMS
+		merged.Rows += item.Rows
+		queries[item.Query] = merged
+	}
+	workload.Queries = workload.Queries[:0]
+	for _, item := range queries {
+		workload.Queries = append(workload.Queries, item)
+	}
+	sort.Slice(workload.Queries, func(i, j int) bool {
+		if workload.Queries[i].Calls != workload.Queries[j].Calls {
+			return workload.Queries[i].Calls > workload.Queries[j].Calls
+		}
+		if workload.Queries[i].TotalExecMS != workload.Queries[j].TotalExecMS {
+			return workload.Queries[i].TotalExecMS > workload.Queries[j].TotalExecMS
+		}
+		return workload.Queries[i].Query < workload.Queries[j].Query
+	})
+	if len(workload.Queries) > 30 {
+		workload.Queries = workload.Queries[:30]
+	}
+	return workload
 }
 
 func runtimeSnapshot() runtimeStats {
