@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"github.com/polymorfa/libsignal-protocol-go/protocol"
-	"go.mau.fi/whatsmeow/types"
+
+	"github.com/polymorfa/hypermeow/types"
 )
 
 type countingSessionStore struct {

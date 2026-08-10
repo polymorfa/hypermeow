@@ -23,8 +23,8 @@ import (
 
 	"go.mau.fi/util/random"
 
-	"go.mau.fi/whatsmeow/socket"
-	"go.mau.fi/whatsmeow/util/cbcutil"
+	"github.com/polymorfa/hypermeow/socket"
+	"github.com/polymorfa/hypermeow/util/cbcutil"
 )
 
 // UploadResponse contains the data from the attachment upload, which can be put into a message to send the attachment.
@@ -308,8 +308,8 @@ func (cli *Client) DeleteMedia(ctx context.Context, appInfo MediaType, directPat
 
 	req.Header.Set("Origin", socket.Origin)
 	req.Header.Set("Referer", socket.Origin+"/")
-	if cmn := cli.Store.CompanionMetaNonce; cmn != "" && encHandle != "" {
-		req.Header.Set("Companion_User_Secret", cli.Store.CompanionMetaNonce)
+	if cmn := cli.currentCompanionMetaNonce(); cmn != "" && encHandle != "" {
+		req.Header.Set("Companion_User_Secret", cmn)
 	}
 
 	httpResp, err := cli.mediaHTTP.Do(req)

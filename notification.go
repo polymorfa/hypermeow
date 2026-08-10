@@ -15,12 +15,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/whatsmeow/appstate"
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	"github.com/polymorfa/hypermeow/appstate"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary.Node) {
@@ -39,14 +39,7 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 		}
 	} else if _, ok := node.GetOptionalChildByTag("identity"); ok {
 		cli.Log.Debugf("Got identity change for %s: %s, deleting all identities/sessions for that number", from, node)
-		err := cli.Store.Identities.DeleteAllIdentities(ctx, from.User)
-		if err != nil {
-			cli.Log.Warnf("Failed to delete all identities of %s from store after identity change: %v", from, err)
-		}
-		err = cli.Store.Sessions.DeleteAllSessions(ctx, from.User)
-		if err != nil {
-			cli.Log.Warnf("Failed to delete all sessions of %s from store after identity change: %v", from, err)
-		}
+		cli.deleteIdentityChangeState(ctx, from)
 		ts := node.AttrGetter().UnixTime("t")
 		storageLID := cli.resolveTCTokenStorageLID(ctx, from)
 		pt, err := cli.Store.PrivacyTokens.GetPrivacyToken(ctx, storageLID)
@@ -67,6 +60,45 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 		cli.dispatchEvent(&events.IdentityChange{JID: from, Timestamp: ts})
 	} else {
 		cli.Log.Debugf("Got unknown encryption notification from server: %s", node)
+	}
+}
+
+func (cli *Client) deleteIdentityChangeState(ctx context.Context, from types.JID) {
+	users := identityChangeSignalUsers(from)
+	if cli.Store.LIDs != nil {
+		var alternate types.JID
+		var err error
+		switch from.Server {
+		case types.DefaultUserServer, types.HostedServer:
+			alternate, err = cli.Store.LIDs.GetLIDForPN(ctx, types.NewJID(from.User, types.DefaultUserServer))
+		case types.HiddenUserServer, types.HostedLIDServer:
+			alternate, err = cli.Store.LIDs.GetPNForLID(ctx, types.NewJID(from.User, types.HiddenUserServer))
+		}
+		if err != nil {
+			cli.Log.Warnf("Failed to resolve alternate JID for identity change from %s: %v", from, err)
+		} else if !alternate.IsEmpty() {
+			users = append(users, identityChangeSignalUsers(alternate)...)
+		}
+	}
+	users = slices.Compact(users)
+	for _, user := range users {
+		if err := cli.Store.Identities.DeleteAllIdentities(ctx, user); err != nil {
+			cli.Log.Warnf("Failed to delete identities for %s after identity change from %s: %v", user, from, err)
+		}
+		if err := cli.Store.Sessions.DeleteAllSessions(ctx, user); err != nil {
+			cli.Log.Warnf("Failed to delete sessions for %s after identity change from %s: %v", user, from, err)
+		}
+	}
+}
+
+func identityChangeSignalUsers(jid types.JID) []string {
+	switch jid.Server {
+	case types.DefaultUserServer, types.HostedServer:
+		return []string{jid.User, jid.User + "_128"}
+	case types.HiddenUserServer, types.HostedLIDServer:
+		return []string{jid.User + "_1", jid.User + "_129"}
+	default:
+		return []string{jid.SignalAddressUser()}
 	}
 }
 
@@ -122,16 +154,17 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 	if fromLID != nil {
 		cli.StoreLIDPNMapping(ctx, *fromLID, from)
 	}
-	cached, ok := cli.userDevicesCache[from]
-	if !ok {
-		cli.Log.Debugf("No device list cached for %s, ignoring device list notification", from)
-		return
-	}
+	cached, hasCachedPN := cli.userDevicesCache[from]
 	var cachedLID deviceCache
 	var cachedLIDHash string
+	var hasCachedLID bool
 	if fromLID != nil {
-		cachedLID = cli.userDevicesCache[*fromLID]
+		cachedLID, hasCachedLID = cli.userDevicesCache[*fromLID]
 		cachedLIDHash = participantListHashV2(cachedLID.devices)
+	}
+	if !hasCachedPN && !hasCachedLID {
+		cli.Log.Debugf("No device list cached for %s, ignoring device list notification", from)
+		return
 	}
 	cachedParticipantHash := participantListHashV2(cached.devices)
 	for _, child := range node.GetChildren() {
@@ -143,15 +176,27 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 		changedDeviceLID := deviceChild.AttrGetter().OptionalJID("lid")
 		switch child.Tag {
 		case "add":
-			cached.devices = append(cached.devices, changedDeviceJID)
-			if changedDeviceLID != nil {
+			if hasCachedLID && (changedDeviceLID == nil || deviceLIDHash == "") {
+				delete(cli.userDevicesCache, *fromLID)
+				hasCachedLID = false
+			}
+			if hasCachedPN {
+				cached.devices = append(cached.devices, changedDeviceJID)
+			}
+			if hasCachedLID && changedDeviceLID != nil {
 				cachedLID.devices = append(cachedLID.devices, *changedDeviceLID)
 			}
 		case "remove":
-			cached.devices = slices.DeleteFunc(cached.devices, func(existing types.JID) bool {
-				return existing == changedDeviceJID
-			})
-			if changedDeviceLID != nil {
+			if hasCachedLID && (changedDeviceLID == nil || deviceLIDHash == "") {
+				delete(cli.userDevicesCache, *fromLID)
+				hasCachedLID = false
+			}
+			if hasCachedPN {
+				cached.devices = slices.DeleteFunc(cached.devices, func(existing types.JID) bool {
+					return existing == changedDeviceJID
+				})
+			}
+			if hasCachedLID && changedDeviceLID != nil {
 				cachedLID.devices = slices.DeleteFunc(cachedLID.devices, func(existing types.JID) bool {
 					return existing == *changedDeviceLID
 				})
@@ -160,20 +205,25 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 			// Exact meaning of "update" is unknown, clear device list cache to be safe
 			cli.Log.Debugf("%s's device list updated, dropping cached devices", from)
 			delete(cli.userDevicesCache, from)
+			if fromLID != nil {
+				delete(cli.userDevicesCache, *fromLID)
+			}
 			continue
 		default:
 			cli.Log.Debugf("Unknown device list change tag %s", child.Tag)
 			continue
 		}
-		newParticipantHash := participantListHashV2(cached.devices)
-		if newParticipantHash == deviceHash {
-			cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", from, cachedParticipantHash, deviceHash, child.Tag)
-			putBoundedCache(ensureMap(&cli.userDevicesCache), from, cached, maxUserDeviceCacheEntries)
-		} else {
-			cli.Log.Warnf("%s's device list hash changed from %s to %s (%s). New hash doesn't match (%s)", from, cachedParticipantHash, deviceHash, child.Tag, newParticipantHash)
-			delete(cli.userDevicesCache, from)
+		if hasCachedPN {
+			newParticipantHash := participantListHashV2(cached.devices)
+			if newParticipantHash == deviceHash {
+				cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", from, cachedParticipantHash, deviceHash, child.Tag)
+				putBoundedCache(ensureMap(&cli.userDevicesCache), from, cached, maxUserDeviceCacheEntries)
+			} else {
+				cli.Log.Warnf("%s's device list hash changed from %s to %s (%s). New hash doesn't match (%s)", from, cachedParticipantHash, deviceHash, child.Tag, newParticipantHash)
+				delete(cli.userDevicesCache, from)
+			}
 		}
-		if fromLID != nil && changedDeviceLID != nil && deviceLIDHash != "" {
+		if fromLID != nil && hasCachedLID && changedDeviceLID != nil && deviceLIDHash != "" {
 			newLIDParticipantHash := participantListHashV2(cachedLID.devices)
 			if newLIDParticipantHash == deviceLIDHash {
 				cli.Log.Debugf("%s's device list hash changed from %s to %s (%s). New hash matches", fromLID, cachedLIDHash, deviceLIDHash, child.Tag)
@@ -476,7 +526,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "fbid:devices":
 		cli.handleFBDeviceNotification(ctx, node)
 	case "w:gp2":
-		evt, lidPairs, redactedPhones, err := cli.parseGroupNotification(node)
+		evt, lidPairs, redactedPhones, usernames, err := cli.parseGroupNotificationWithUsernames(node)
 		if err != nil {
 			cli.Log.Errorf("Failed to parse group notification: %v", err)
 		} else {
@@ -488,6 +538,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 			if err != nil {
 				cli.Log.Warnf("Failed to store redacted phones from group notification: %v", err)
 			}
+			cli.storeContactUsernamesBestEffort(ctx, usernames)
 			cancelled = cli.dispatchEvent(evt)
 		}
 	case "picture":
@@ -506,9 +557,11 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 		cli.handleStatusNotification(ctx, node)
 	case "passkey_prologue_request":
 		cli.handlePasskeyNotification(ctx, node)
+	case "business":
+		cli.handleQueuedBusinessCatalogNotification(node)
 	case "crsc_continuation":
 		go cli.tryHandlePasskeyContinuationNotification(ctx, node)
-	// Other types: business, disappearing_mode, server, status, pay, psa
+	// Other types: disappearing_mode, server, status, pay, psa
 	default:
 		cli.Log.Debugf("Unhandled notification with type %s", notifType)
 	}

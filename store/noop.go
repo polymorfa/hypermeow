@@ -11,8 +11,8 @@ import (
 	"errors"
 	"time"
 
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/util/keys"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/util/keys"
 )
 
 type NoopStore struct {
@@ -58,6 +58,14 @@ func (n *NoopStore) DeleteIdentity(ctx context.Context, address string) error {
 }
 
 func (n *NoopStore) IsTrustedIdentity(ctx context.Context, address string, key [32]byte) (bool, error) {
+	return false, n.Error
+}
+
+func (n *NoopStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error) {
+	return nil, 0, n.Error
+}
+
+func (n *NoopStore) EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error) {
 	return false, n.Error
 }
 
@@ -278,6 +286,10 @@ func (n *NoopStore) GetLIDForPN(ctx context.Context, pn types.JID) (types.JID, e
 }
 
 func (n *NoopStore) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (map[types.JID]types.JID, error) {
+	return nil, n.Error
+}
+
+func (n *NoopStore) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) (map[types.JID]types.JID, error) {
 	return nil, n.Error
 }
 

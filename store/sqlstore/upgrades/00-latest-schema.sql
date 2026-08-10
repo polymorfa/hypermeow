@@ -1,4 +1,4 @@
--- v0 -> v15 (compatible with v8+): Latest schema
+-- v0 -> v18 (compatible with v8+): Latest schema
 CREATE TABLE whatsmeow_device (
 	jid TEXT PRIMARY KEY,
 	lid TEXT,
@@ -37,6 +37,8 @@ CREATE TABLE whatsmeow_identity_keys (
 	PRIMARY KEY (our_jid, their_id),
 	FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
 );
+-- only: postgres
+CREATE INDEX whatsmeow_identity_keys_their_pattern_idx ON whatsmeow_identity_keys (our_jid, their_id text_pattern_ops);
 
 CREATE TABLE whatsmeow_pre_keys (
 	jid      TEXT,
@@ -56,6 +58,8 @@ CREATE TABLE whatsmeow_sessions (
 	PRIMARY KEY (our_jid, their_id),
 	FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
 );
+-- only: postgres
+CREATE INDEX whatsmeow_sessions_their_pattern_idx ON whatsmeow_sessions (our_jid, their_id text_pattern_ops);
 
 CREATE TABLE whatsmeow_sender_keys (
 	our_jid    TEXT,
@@ -66,6 +70,9 @@ CREATE TABLE whatsmeow_sender_keys (
 	PRIMARY KEY (our_jid, chat_id, sender_id),
 	FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
 );
+CREATE INDEX whatsmeow_sender_keys_sender_idx ON whatsmeow_sender_keys (our_jid, sender_id);
+-- only: postgres
+CREATE INDEX whatsmeow_sender_keys_sender_pattern_idx ON whatsmeow_sender_keys (our_jid, sender_id text_pattern_ops);
 
 CREATE TABLE whatsmeow_app_state_sync_keys (
 	jid         TEXT,
@@ -107,6 +114,7 @@ CREATE TABLE whatsmeow_contacts (
 	push_name      TEXT,
 	business_name  TEXT,
 	redacted_phone TEXT,
+	username       TEXT,
 
 	PRIMARY KEY (our_jid, their_jid),
 	FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE

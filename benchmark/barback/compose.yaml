@@ -70,6 +70,8 @@ services:
       - ${HISTORY_CONVERSATIONS:-100}
       - --history-sync-messages
       - ${HISTORY_MESSAGES:-20}
+      - --capture-messages
+      - ${BARBACK_CAPTURE_MESSAGES:-0}
     depends_on:
       cert-init:
         condition: service_completed_successfully
@@ -95,6 +97,7 @@ services:
       additional_contexts:
         library: ${LIBRARY_CONTEXT:-../..}
       args:
+        BENCH_BUILD_TAGS: ${BENCH_BUILD_TAGS:-}
         BUILD_REV: ${BUILD_REV:-working-tree}
     depends_on:
       barback:
@@ -110,6 +113,10 @@ services:
       BENCH_TOTAL: ${BENCH_TOTAL:-200}
       BENCH_VARIANT: ${BENCH_VARIANT:-candidate}
       BENCH_GROUP_SIZE: ${BENCH_GROUP_SIZE:-128}
+      BENCH_BUSINESS_SMOKE: ${BENCH_BUSINESS_SMOKE:-false}
+      BENCH_PHONE_CONSENT_SMOKE: ${BENCH_PHONE_CONSENT_SMOKE:-false}
+      BENCH_SECURITY_CODE_SMOKE: ${BENCH_SECURITY_CODE_SMOKE:-false}
+      BENCH_SMOKE_ONLY: ${BENCH_SMOKE_ONLY:-false}
       BENCH_MODE: ${BENCH_MODE:-group}
       BENCH_MESSAGE_PROFILE: ${BENCH_MESSAGE_PROFILE:-text}
       BENCH_RATE: ${BENCH_RATE:-50}

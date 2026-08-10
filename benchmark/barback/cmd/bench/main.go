@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,27 +25,37 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"google.golang.org/protobuf/proto"
+
+	whatsmeow "github.com/polymorfa/hypermeow"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/store/sqlstore"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 var revision = "working-tree"
 
+const phoneConsentSmokeTimeout = 5 * time.Second
+
 type config struct {
-	DatabaseURL    string
-	BarbackURL     string
-	BarbackWS      string
-	TLSCAPath      string
-	TLSServerName  string
-	OutputPath     string
-	MemProfilePath string
-	Variant        string
-	Total          int64
-	Timeout        time.Duration
-	Workload       workloadConfig
+	DatabaseURL       string
+	BarbackURL        string
+	BarbackWS         string
+	TLSCAPath         string
+	TLSServerName     string
+	OutputPath        string
+	MemProfilePath    string
+	Variant           string
+	BusinessSmoke     bool
+	PhoneConsentSmoke bool
+	SecurityCodeSmoke bool
+	SmokeOnly         bool
+	Total             int64
+	Timeout           time.Duration
+	Workload          workloadConfig
 }
 
 type workloadConfig struct {
@@ -96,33 +107,37 @@ type runtimeStats struct {
 }
 
 type result struct {
-	Variant              string               `json:"variant"`
-	Revision             string               `json:"revision"`
-	StartedAt            time.Time            `json:"started_at"`
-	Completed            bool                 `json:"completed"`
-	Error                string               `json:"error,omitempty"`
-	TargetMessages       int64                `json:"target_messages"`
-	Workload             workloadConfig       `json:"workload"`
-	MessagesReceived     int64                `json:"messages_received"`
-	MessagesSent         int64                `json:"messages_sent"`
-	SendFailures         int64                `json:"send_failures"`
-	FailureReasons       map[string]int64     `json:"failure_reasons,omitempty"`
-	QueueOverflows       int64                `json:"queue_overflows"`
-	HistorySyncs         int64                `json:"history_syncs"`
-	HistoryConversations int64                `json:"history_conversations"`
-	HistoryMessages      int64                `json:"history_messages"`
-	DurationMS           float64              `json:"duration_ms"`
-	ThroughputPerSec     float64              `json:"throughput_per_sec"`
-	SendLatency          latencyStats         `json:"send_latency"`
-	Database             databaseStats        `json:"database"`
-	Runtime              runtimeStats         `json:"runtime"`
-	WorkloadRuntime      workloadRuntimeStats `json:"workload_runtime"`
-	SessionRuntime       workloadRuntimeStats `json:"session_runtime"`
-	Resources            resourceStats        `json:"resources"`
-	MessageTypes         map[string]int64     `json:"message_types"`
-	MediaUploads         int64                `json:"media_uploads"`
-	MediaUploadBytes     int64                `json:"media_upload_bytes"`
-	MediaUploadLatency   latencyStats         `json:"media_upload_latency"`
+	Variant               string               `json:"variant"`
+	Revision              string               `json:"revision"`
+	StartedAt             time.Time            `json:"started_at"`
+	Completed             bool                 `json:"completed"`
+	Error                 string               `json:"error,omitempty"`
+	TargetMessages        int64                `json:"target_messages"`
+	Workload              workloadConfig       `json:"workload"`
+	MessagesReceived      int64                `json:"messages_received"`
+	MessagesSent          int64                `json:"messages_sent"`
+	SendFailures          int64                `json:"send_failures"`
+	FailureReasons        map[string]int64     `json:"failure_reasons,omitempty"`
+	QueueOverflows        int64                `json:"queue_overflows"`
+	HistorySyncs          int64                `json:"history_syncs"`
+	HistoryConversations  int64                `json:"history_conversations"`
+	HistoryMessages       int64                `json:"history_messages"`
+	DurationMS            float64              `json:"duration_ms"`
+	ThroughputPerSec      float64              `json:"throughput_per_sec"`
+	SendLatency           latencyStats         `json:"send_latency"`
+	Database              databaseStats        `json:"database"`
+	Runtime               runtimeStats         `json:"runtime"`
+	WorkloadRuntime       workloadRuntimeStats `json:"workload_runtime"`
+	SessionRuntime        workloadRuntimeStats `json:"session_runtime"`
+	Resources             resourceStats        `json:"resources"`
+	MessageTypes          map[string]int64     `json:"message_types"`
+	MediaUploads          int64                `json:"media_uploads"`
+	MediaUploadBytes      int64                `json:"media_upload_bytes"`
+	MediaUploadLatency    latencyStats         `json:"media_upload_latency"`
+	BusinessAppValidated  bool                 `json:"business_app_validated"`
+	PhoneConsentValidated bool                 `json:"phone_consent_validated"`
+	SecurityCodeValidated bool                 `json:"security_code_validated"`
+	SmokeOnly             bool                 `json:"smoke_only"`
 }
 
 type runner struct {
@@ -130,22 +145,35 @@ type runner struct {
 	db         *sql.DB
 	httpClient *http.Client
 
-	received        atomic.Int64
-	sent            atomic.Int64
-	failed          atomic.Int64
-	overflows       atomic.Int64
-	historySyncs    atomic.Int64
-	historyConvs    atomic.Int64
-	historyMessages atomic.Int64
-	messageSequence atomic.Int64
-	mediaUploads    atomic.Int64
-	mediaBytes      atomic.Int64
+	received               atomic.Int64
+	sent                   atomic.Int64
+	failed                 atomic.Int64
+	overflows              atomic.Int64
+	historySyncs           atomic.Int64
+	historyConvs           atomic.Int64
+	historyMessages        atomic.Int64
+	messageSequence        atomic.Int64
+	mediaUploads           atomic.Int64
+	mediaBytes             atomic.Int64
+	businessValid          atomic.Bool
+	phoneConsentValid      atomic.Bool
+	phoneConsentOnce       sync.Once
+	phoneConsentErr        error
+	phoneConsentValidator  func(context.Context, *whatsmeow.Client, types.JID) error
+	statementStatsReset    func(context.Context) error
+	statementStatsSnapshot func() databaseStats
+	securityCodeValid      atomic.Bool
+	securityCodeOnce       sync.Once
+	securityCodeErr        error
+	preflightOnce          sync.Once
+	preflightErr           error
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
 	startedAt  atomic.Int64
 	finishedAt atomic.Int64
 	done       chan struct{}
+	fatalErr   chan error
 	jobs       []chan *events.Message
 
 	latencyMu       sync.Mutex
@@ -154,15 +182,20 @@ type runner struct {
 	messageTypes    map[string]int64
 	failureReasons  map[string]int64
 
-	metricsMu      sync.Mutex
-	runtimeStart   runtimeStats
-	sessionStart   runtimeStats
-	resourceStart  resourceStats
-	metricsStarted bool
-	sessionStarted bool
-	tempStop       chan struct{}
-	tempPeakBytes  atomic.Int64
-	tempPeakFiles  atomic.Int64
+	metricsMu         sync.Mutex
+	runtimeStart      runtimeStats
+	sessionStart      runtimeStats
+	resourceStart     resourceStats
+	metricsStarted    bool
+	sessionStarted    bool
+	preflightDatabase databaseStats
+	preflightCaptured bool
+	postConsentClean  bool
+	tempStop          chan struct{}
+	tempPeakBytes     atomic.Int64
+	tempPeakFiles     atomic.Int64
+	connected         chan struct{}
+	connectedOnce     sync.Once
 }
 
 func main() {
@@ -182,10 +215,12 @@ func main() {
 	r := &runner{
 		cfg:            cfg,
 		done:           make(chan struct{}),
+		fatalErr:       make(chan error, 1),
 		jobs:           make([]chan *events.Message, workerCount),
 		latencies:      make([]float64, 0, cfg.Total),
 		messageTypes:   make(map[string]int64),
 		failureReasons: make(map[string]int64),
+		connected:      make(chan struct{}),
 	}
 	for i := range r.jobs {
 		r.jobs[i] = make(chan *events.Message, queueCapacity)
@@ -255,17 +290,43 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	businessSmoke, err := strconv.ParseBool(env("BENCH_BUSINESS_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_BUSINESS_SMOKE")
+	}
+	phoneConsentSmoke, err := strconv.ParseBool(env("BENCH_PHONE_CONSENT_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_PHONE_CONSENT_SMOKE")
+	}
+	securityCodeSmoke, err := strconv.ParseBool(env("BENCH_SECURITY_CODE_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_SECURITY_CODE_SMOKE")
+	}
+	smokeOnly, err := strconv.ParseBool(env("BENCH_SMOKE_ONLY", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_SMOKE_ONLY")
+	}
+	if securityCodeSmoke && !smokeOnly {
+		return config{}, errors.New("BENCH_SECURITY_CODE_SMOKE requires BENCH_SMOKE_ONLY=true")
+	}
+	if smokeOnly && !phoneConsentSmoke && !securityCodeSmoke {
+		return config{}, errors.New("BENCH_SMOKE_ONLY requires a preflight smoke")
+	}
 	return config{
-		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
-		BarbackURL:     env("BARBACK_URL", "http://barback:8080"),
-		BarbackWS:      env("BARBACK_WS", "ws://barback:8080/ws/chat"),
-		TLSCAPath:      os.Getenv("BARBACK_TLS_CA"),
-		TLSServerName:  env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
-		OutputPath:     env("RESULT_PATH", "/results/result.json"),
-		MemProfilePath: os.Getenv("MEM_PROFILE_PATH"),
-		Variant:        env("BENCH_VARIANT", "candidate"),
-		Total:          total,
-		Timeout:        timeout,
+		DatabaseURL:       env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
+		BarbackURL:        env("BARBACK_URL", "http://barback:8080"),
+		BarbackWS:         env("BARBACK_WS", "ws://barback:8080/ws/chat"),
+		TLSCAPath:         os.Getenv("BARBACK_TLS_CA"),
+		TLSServerName:     env("BARBACK_TLS_SERVER_NAME", "0.0.0.0"),
+		OutputPath:        env("RESULT_PATH", "/results/result.json"),
+		MemProfilePath:    os.Getenv("MEM_PROFILE_PATH"),
+		Variant:           env("BENCH_VARIANT", "candidate"),
+		BusinessSmoke:     businessSmoke,
+		PhoneConsentSmoke: phoneConsentSmoke,
+		SecurityCodeSmoke: securityCodeSmoke,
+		SmokeOnly:         smokeOnly,
+		Total:             total,
+		Timeout:           timeout,
 		Workload: workloadConfig{
 			Scenario:             env("BENCH_SCENARIO", "custom"),
 			Mode:                 mode,
@@ -363,7 +424,10 @@ func (r *runner) run() (result, error) {
 		NoiseCertificateAuthority: &root,
 	}
 	client.EnableAutoReconnect = true
-	client.AddEventHandler(r.handler(client))
+	if r.cfg.PhoneConsentSmoke {
+		enablePhoneConsentReceiveBarrier(client)
+	}
+	client.AddEventHandler(r.handler(ctx, client))
 
 	workerCtx, stopWorkers := context.WithCancel(ctx)
 	defer stopWorkers()
@@ -375,14 +439,43 @@ func (r *runner) run() (result, error) {
 		return r.snapshot(false), fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
+	if r.cfg.BusinessSmoke && businessAppSmokeSupported() {
+		connectionTimer := time.NewTimer(30 * time.Second)
+		defer connectionTimer.Stop()
+		select {
+		case <-r.connected:
+		case <-connectionTimer.C:
+			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready")
+		case <-ctx.Done():
+			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready: %w", ctx.Err())
+		}
+		if err = validateBusinessApp(ctx, client); err != nil {
+			return r.snapshot(false), err
+		}
+		r.businessValid.Store(true)
+	}
 
+	if err = r.waitForRunCompletion(ctx); err != nil {
+		return r.snapshot(false), err
+	}
+	time.Sleep(2 * time.Second)
+	res := r.snapshot(true)
+	return res, nil
+}
+
+func (r *runner) waitForRunCompletion(ctx context.Context) error {
 	select {
 	case <-r.done:
-		time.Sleep(2 * time.Second)
-		res := r.snapshot(true)
-		return res, nil
+		select {
+		case err := <-r.fatalErr:
+			return err
+		default:
+			return nil
+		}
+	case err := <-r.fatalErr:
+		return err
 	case <-ctx.Done():
-		return r.snapshot(false), fmt.Errorf("benchmark incomplete: %w", ctx.Err())
+		return fmt.Errorf("benchmark incomplete: %w", ctx.Err())
 	}
 }
 
@@ -395,7 +488,7 @@ func (r *runner) stopMetricsSampler() {
 	r.metricsMu.Unlock()
 }
 
-func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
+func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeow.EventHandler {
 	var scanOnce sync.Once
 	return func(evt any) {
 		switch event := evt.(type) {
@@ -404,7 +497,12 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 				scanOnce.Do(func() { go r.scanQR(event.Codes[0]) })
 			}
 		case *events.Connected:
-			if _, err := r.db.ExecContext(context.Background(), "SELECT pg_stat_statements_reset()"); err != nil {
+			r.connectedOnce.Do(func() {
+				if r.connected != nil {
+					close(r.connected)
+				}
+			})
+			if err := r.resetStatementStats(context.Background()); err != nil {
 				fmt.Fprintf(os.Stderr, "reset statement stats: %v\n", err)
 			}
 			r.startSessionMetrics()
@@ -417,6 +515,26 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			}
 		case *events.Message:
 			if event.Message.GetConversation() != "ping" {
+				return
+			}
+			validatePhoneConsent := r.phoneConsentValidator
+			if validatePhoneConsent == nil {
+				validatePhoneConsent = r.validatePhoneNumberConsent
+			}
+			if !r.runBenchmarkPreflight(ctx, func() bool {
+				return r.beforeBenchmarkMessage(
+					func() error {
+						return validatePhoneConsent(ctx, client, phoneConsentTarget(event))
+					},
+					func() error {
+						return validateIdentityVerificationCodes(ctx, client, phoneConsentTarget(event))
+					},
+				)
+			}) {
+				return
+			}
+			if r.cfg.SmokeOnly {
+				r.doneOnce.Do(func() { close(r.done) })
 				return
 			}
 			r.startOnce.Do(r.startMetrics)
@@ -433,6 +551,27 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 	}
 }
 
+func (r *runner) resetStatementStats(ctx context.Context) error {
+	if r.statementStatsReset != nil {
+		return r.statementStatsReset(ctx)
+	}
+	if r.db == nil {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, "SELECT pg_stat_statements_reset()")
+	return err
+}
+
+func (r *runner) snapshotStatementStats() databaseStats {
+	if r.statementStatsSnapshot != nil {
+		return r.statementStatsSnapshot()
+	}
+	if r.db == nil {
+		return databaseStats{}
+	}
+	return databaseSnapshot(r.db)
+}
+
 func (r *runner) startSessionMetrics() {
 	r.metricsMu.Lock()
 	if !r.sessionStarted {
@@ -447,13 +586,14 @@ func (r *runner) startMetrics() {
 	r.runtimeStart = runtimeSnapshot()
 	r.resourceStart = resourceSnapshot()
 	r.metricsStarted = true
-	r.tempStop = make(chan struct{})
+	tempStop := make(chan struct{})
+	r.tempStop = tempStop
 	r.metricsMu.Unlock()
-	go r.sampleTemporaryFiles()
+	go r.sampleTemporaryFiles(tempStop)
 	r.startedAt.Store(time.Now().UnixNano())
 }
 
-func (r *runner) sampleTemporaryFiles() {
+func (r *runner) sampleTemporaryFiles(stop <-chan struct{}) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -461,7 +601,7 @@ func (r *runner) sampleTemporaryFiles() {
 		updatePeak(&r.tempPeakBytes, bytes)
 		updatePeak(&r.tempPeakFiles, files)
 		select {
-		case <-r.tempStop:
+		case <-stop:
 			return
 		case <-ticker.C:
 		}
@@ -548,6 +688,165 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 	}
 }
 
+func (r *runner) runBenchmarkPreflight(ctx context.Context, validate func() bool) bool {
+	if !r.cfg.PhoneConsentSmoke && !r.cfg.SecurityCodeSmoke {
+		return true
+	}
+	r.preflightOnce.Do(func() {
+		preflightDatabase := r.snapshotStatementStats()
+		r.metricsMu.Lock()
+		r.preflightDatabase = preflightDatabase
+		r.preflightCaptured = true
+		r.metricsMu.Unlock()
+		valid := validate()
+		resetErr := r.resetStatementStats(ctx)
+		r.metricsMu.Lock()
+		r.postConsentClean = resetErr == nil
+		r.metricsMu.Unlock()
+		if !valid {
+			r.preflightErr = errors.New("benchmark smoke validation failed")
+		}
+		if resetErr != nil {
+			r.recordFailure(resetErr)
+			if r.preflightErr == nil {
+				r.preflightErr = fmt.Errorf("reset workload statement stats: %w", resetErr)
+			}
+			r.reportFatal(fmt.Errorf("reset workload statement stats: %w", resetErr))
+		}
+	})
+	return r.preflightErr == nil
+}
+
+func (r *runner) beforeBenchmarkMessage(validatePhoneConsent func() error, validateSecurityCodes ...func() error) bool {
+	if r.cfg.PhoneConsentSmoke && r.runPhoneConsentSmoke(validatePhoneConsent) != nil {
+		return false
+	}
+	if r.cfg.SecurityCodeSmoke {
+		if len(validateSecurityCodes) == 0 {
+			return false
+		}
+		if r.runSecurityCodeSmoke(validateSecurityCodes[0]) != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *runner) runPhoneConsentSmoke(validate func() error) error {
+	r.phoneConsentOnce.Do(func() {
+		r.phoneConsentErr = validate()
+		if r.phoneConsentErr == nil {
+			r.phoneConsentValid.Store(true)
+			return
+		}
+		r.recordFailure(r.phoneConsentErr)
+		fmt.Fprintf(os.Stderr, "validate phone number consent: %v\n", r.phoneConsentErr)
+		r.reportFatal(fmt.Errorf("validate phone number consent: %w", r.phoneConsentErr))
+	})
+	return r.phoneConsentErr
+}
+
+func (r *runner) runSecurityCodeSmoke(validate func() error) error {
+	r.securityCodeOnce.Do(func() {
+		r.securityCodeErr = validate()
+		if r.securityCodeErr == nil {
+			r.securityCodeValid.Store(true)
+			return
+		}
+		r.recordFailure(r.securityCodeErr)
+		fmt.Fprintf(os.Stderr, "validate identity verification code: %v\n", r.securityCodeErr)
+		r.reportFatal(fmt.Errorf("validate identity verification code: %w", r.securityCodeErr))
+	})
+	return r.securityCodeErr
+}
+
+func (r *runner) reportFatal(err error) {
+	if err == nil || r.fatalErr == nil {
+		return
+	}
+	select {
+	case r.fatalErr <- err:
+	default:
+	}
+}
+
+func phoneConsentTarget(message *events.Message) types.JID {
+	if message.Info.SenderAlt.Server == types.HiddenUserServer {
+		return message.Info.SenderAlt.ToNonAD()
+	}
+	if message.Info.Sender.Server == types.HiddenUserServer {
+		return message.Info.Sender.ToNonAD()
+	}
+	return message.Info.Chat.ToNonAD()
+}
+
+type capturedMessage struct {
+	PlaintextBase64 string `json:"plaintext_base64"`
+}
+
+func containsPhoneNumberConsentCaptures(captures []capturedMessage) bool {
+	var requestFound, shareFound bool
+	for _, capture := range captures {
+		plaintext, err := base64.StdEncoding.DecodeString(capture.PlaintextBase64)
+		if err != nil {
+			continue
+		}
+		var message waE2E.Message
+		if proto.Unmarshal(plaintext, &message) != nil {
+			continue
+		}
+		requestFound = requestFound || message.GetRequestPhoneNumberMessage() != nil
+		shareFound = shareFound || message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_SHARE_PHONE_NUMBER
+	}
+	return requestFound && shareFound
+}
+
+func buildRequestPhoneNumberMessage() *waE2E.Message {
+	return &waE2E.Message{RequestPhoneNumberMessage: &waE2E.RequestPhoneNumberMessage{}}
+}
+
+func buildSharePhoneNumberMessage() *waE2E.Message {
+	messageType := waE2E.ProtocolMessage_SHARE_PHONE_NUMBER
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: &messageType}}
+}
+
+func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsmeow.Client, chat types.JID) error {
+	if chat.Server != types.HiddenUserServer {
+		return fmt.Errorf("synthetic phone consent target is not a LID")
+	}
+	smokeCtx, cancel := context.WithTimeout(ctx, phoneConsentSmokeTimeout)
+	defer cancel()
+	if _, err := client.SendMessage(smokeCtx, chat, buildRequestPhoneNumberMessage()); err != nil {
+		return fmt.Errorf("send request phone number message: %w", err)
+	}
+	if _, err := client.SendMessage(smokeCtx, chat, buildSharePhoneNumberMessage()); err != nil {
+		return fmt.Errorf("send share phone number message: %w", err)
+	}
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		req, err := http.NewRequestWithContext(smokeCtx, http.MethodGet, r.cfg.BarbackURL+"/admin/mock-phone/captured-messages", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := r.httpClient.Do(req)
+		if err == nil {
+			var captures []capturedMessage
+			decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&captures)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && decodeErr == nil && containsPhoneNumberConsentCaptures(captures) {
+				return nil
+			}
+		}
+		select {
+		case <-smokeCtx.Done():
+			return fmt.Errorf("Barback did not capture request and share phone number messages: %w", smokeCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func (r *runner) checkDone() {
 	if r.sent.Load()+r.failed.Load() >= r.cfg.Total {
 		r.doneOnce.Do(func() {
@@ -572,28 +871,39 @@ func (r *runner) snapshot(completed bool) result {
 		}
 	}
 	runtimeNow := runtimeSnapshot()
+	targetMessages := r.cfg.Total
+	workloadCompleted := r.sent.Load() == r.cfg.Total
+	if r.cfg.SmokeOnly {
+		targetMessages = 0
+		workloadCompleted = (!r.cfg.PhoneConsentSmoke || r.phoneConsentValid.Load()) &&
+			(!r.cfg.SecurityCodeSmoke || r.securityCodeValid.Load())
+	}
 	res := result{
-		Variant:              r.cfg.Variant,
-		Revision:             revision,
-		StartedAt:            startedTime,
-		Completed:            completed && r.failed.Load() == 0 && r.sent.Load() == r.cfg.Total,
-		TargetMessages:       r.cfg.Total,
-		Workload:             r.cfg.Workload,
-		MessagesReceived:     r.received.Load(),
-		MessagesSent:         r.sent.Load(),
-		SendFailures:         r.failed.Load(),
-		FailureReasons:       r.failureReasonSnapshot(),
-		QueueOverflows:       r.overflows.Load(),
-		HistorySyncs:         r.historySyncs.Load(),
-		HistoryConversations: r.historyConvs.Load(),
-		HistoryMessages:      r.historyMessages.Load(),
-		DurationMS:           float64(duration) / float64(time.Millisecond),
-		SendLatency:          r.latencySnapshot(),
-		Runtime:              runtimeNow,
-		MessageTypes:         r.messageTypeSnapshot(),
-		MediaUploads:         r.mediaUploads.Load(),
-		MediaUploadBytes:     r.mediaBytes.Load(),
-		MediaUploadLatency:   r.uploadLatencySnapshot(),
+		Variant:               r.cfg.Variant,
+		Revision:              revision,
+		StartedAt:             startedTime,
+		Completed:             completed && r.failed.Load() == 0 && workloadCompleted,
+		TargetMessages:        targetMessages,
+		Workload:              r.cfg.Workload,
+		MessagesReceived:      r.received.Load(),
+		MessagesSent:          r.sent.Load(),
+		SendFailures:          r.failed.Load(),
+		FailureReasons:        r.failureReasonSnapshot(),
+		QueueOverflows:        r.overflows.Load(),
+		HistorySyncs:          r.historySyncs.Load(),
+		HistoryConversations:  r.historyConvs.Load(),
+		HistoryMessages:       r.historyMessages.Load(),
+		DurationMS:            float64(duration) / float64(time.Millisecond),
+		SendLatency:           r.latencySnapshot(),
+		Runtime:               runtimeNow,
+		MessageTypes:          r.messageTypeSnapshot(),
+		MediaUploads:          r.mediaUploads.Load(),
+		MediaUploadBytes:      r.mediaBytes.Load(),
+		MediaUploadLatency:    r.uploadLatencySnapshot(),
+		BusinessAppValidated:  r.businessValid.Load(),
+		PhoneConsentValidated: r.phoneConsentValid.Load(),
+		SecurityCodeValidated: r.securityCodeValid.Load(),
+		SmokeOnly:             r.cfg.SmokeOnly,
 	}
 	r.metricsMu.Lock()
 	if r.sessionStarted {
@@ -614,8 +924,17 @@ func (r *runner) snapshot(completed bool) result {
 	if duration > 0 {
 		res.ThroughputPerSec = float64(res.MessagesSent) / duration.Seconds()
 	}
-	if r.db != nil {
-		res.Database = databaseSnapshot(r.db)
+	if r.db != nil || r.statementStatsSnapshot != nil {
+		r.metricsMu.Lock()
+		preflightDatabase := r.preflightDatabase
+		preflightCaptured := r.preflightCaptured
+		postConsentClean := r.postConsentClean
+		r.metricsMu.Unlock()
+		if preflightCaptured && !postConsentClean {
+			res.Database = preflightDatabase
+		} else {
+			res.Database = mergeDatabaseStats(preflightDatabase, r.snapshotStatementStats())
+		}
 	}
 	return res
 }
@@ -702,8 +1021,7 @@ func databaseSnapshot(db *sql.DB) databaseStats {
 		FROM pg_stat_statements
 		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 		  AND query ILIKE '%whatsmeow_%'
-		ORDER BY calls DESC, total_exec_time DESC
-		LIMIT 30`)
+		ORDER BY calls DESC, total_exec_time DESC`)
 	if err != nil {
 		return stats
 	}
@@ -717,6 +1035,39 @@ func databaseSnapshot(db *sql.DB) databaseStats {
 		stats.Queries = append(stats.Queries, item)
 	}
 	return stats
+}
+
+func mergeDatabaseStats(preflight, workload databaseStats) databaseStats {
+	workload.Calls += preflight.Calls
+	workload.TotalExecMS += preflight.TotalExecMS
+	workload.Rows += preflight.Rows
+
+	queries := make(map[string]queryStat, len(preflight.Queries)+len(workload.Queries))
+	for _, item := range append(append([]queryStat(nil), preflight.Queries...), workload.Queries...) {
+		merged := queries[item.Query]
+		merged.Query = item.Query
+		merged.Calls += item.Calls
+		merged.TotalExecMS += item.TotalExecMS
+		merged.Rows += item.Rows
+		queries[item.Query] = merged
+	}
+	workload.Queries = workload.Queries[:0]
+	for _, item := range queries {
+		workload.Queries = append(workload.Queries, item)
+	}
+	sort.Slice(workload.Queries, func(i, j int) bool {
+		if workload.Queries[i].Calls != workload.Queries[j].Calls {
+			return workload.Queries[i].Calls > workload.Queries[j].Calls
+		}
+		if workload.Queries[i].TotalExecMS != workload.Queries[j].TotalExecMS {
+			return workload.Queries[i].TotalExecMS > workload.Queries[j].TotalExecMS
+		}
+		return workload.Queries[i].Query < workload.Queries[j].Query
+	})
+	if len(workload.Queries) > 30 {
+		workload.Queries = workload.Queries[:30]
+	}
+	return workload
 }
 
 func runtimeSnapshot() runtimeStats {

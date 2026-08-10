@@ -1,6 +1,6 @@
 syntax = "proto2";
 package WAWebProtobufsAea;
-option go_package = "go.mau.fi/whatsmeow/proto/waAea";
+option go_package = "github.com/polymorfa/hypermeow/proto/waAea";
 
 message NonE2EEAttestation {
 	enum AccountType {

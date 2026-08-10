@@ -11,7 +11,7 @@ import (
 
 	"go.mau.fi/util/jsontime"
 
-	"go.mau.fi/whatsmeow/proto/waVnameCert"
+	"github.com/polymorfa/hypermeow/proto/waVnameCert"
 )
 
 // VerifiedName contains verified WhatsApp business details.
@@ -33,6 +33,7 @@ type UserInfo struct {
 	PictureID    string
 	Devices      []JID
 	LID          JID
+	Username     string
 }
 
 type BotListInfo struct {
@@ -77,6 +78,7 @@ type ContactInfo struct {
 	FullName     string
 	PushName     string
 	BusinessName string
+	Username     string
 	// Only for LID members encountered in groups, the phone number in the form "+1∙∙∙∙∙∙∙∙80"
 	RedactedPhone string
 }
@@ -97,8 +99,15 @@ type IsOnWhatsAppResponse struct {
 	IsIn  bool   // Whether the phone is registered or not.
 
 	PhoneNumber JID
+	Username    string
 
 	VerifiedName *VerifiedName // If the phone is a business, the verified business details.
+}
+
+type UsernameResolution struct {
+	LID         JID
+	Username    string
+	KeyRequired bool
 }
 
 // BusinessMessageLinkTarget contains the info that is found using a business message link (see Client.ResolveBusinessMessageLink)
@@ -211,6 +220,26 @@ type BusinessHoursConfig struct {
 	CloseTime string
 }
 
+type BusinessHoursDay struct {
+	DayOfWeek string
+	Mode      string
+	OpenTime  int
+	CloseTime int
+}
+
+type BusinessHoursUpdate struct {
+	TimeZone string
+	Days     []BusinessHoursDay
+}
+
+type BusinessProfileUpdate struct {
+	Address     *string
+	Email       *string
+	Description *string
+	Websites    *[]string
+	Hours       *BusinessHoursUpdate
+}
+
 // Category contains a WhatsApp business category.
 type Category struct {
 	ID   string
@@ -222,6 +251,9 @@ type BusinessProfile struct {
 	JID                   JID
 	Address               string
 	Email                 string
+	Description           string
+	Websites              []string
+	CoverPhotoID          string
 	Categories            []Category
 	ProfileOptions        map[string]string
 	BusinessHoursTimeZone string

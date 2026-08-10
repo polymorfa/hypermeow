@@ -10,14 +10,15 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
-	"go.mau.fi/whatsmeow/proto/waAdv"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/util/keys"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	"github.com/polymorfa/hypermeow/proto/waAdv"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/util/keys"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type IdentityStore interface {
@@ -25,6 +26,11 @@ type IdentityStore interface {
 	DeleteAllIdentities(ctx context.Context, phone string) error
 	DeleteIdentity(ctx context.Context, address string) error
 	IsTrustedIdentity(ctx context.Context, address string, key [32]byte) (bool, error)
+}
+
+type IdentityKeyReader interface {
+	GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error)
+	EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error)
 }
 
 type SessionStore interface {
@@ -81,13 +87,15 @@ type AppStateStore interface {
 }
 
 type ContactEntry struct {
-	JID       types.JID
-	FirstName string
-	FullName  string
+	JID         types.JID
+	FirstName   string
+	FullName    string
+	Username    string
+	UsernameSet bool
 }
 
-func (ce ContactEntry) GetMassInsertValues() [3]any {
-	return [...]any{ce.JID.String(), ce.FirstName, ce.FullName}
+func (ce ContactEntry) GetMassInsertValues() [4]any {
+	return [...]any{ce.JID.String(), ce.FirstName, ce.FullName, ce.Username}
 }
 
 type RedactedPhoneEntry struct {
@@ -107,6 +115,23 @@ type ContactStore interface {
 	PutManyRedactedPhones(ctx context.Context, entries []RedactedPhoneEntry) error
 	GetContact(ctx context.Context, user types.JID) (types.ContactInfo, error)
 	GetAllContacts(ctx context.Context) (map[types.JID]types.ContactInfo, error)
+}
+
+type ContactUsernameStore interface {
+	PutContactUsername(ctx context.Context, user types.JID, username string) error
+}
+
+type ContactUsernameBatchStore interface {
+	PutManyContactUsernames(ctx context.Context, entries []ContactUsernameEntry) error
+}
+
+type ContactUsernameEntry struct {
+	JID      types.JID
+	Username string
+}
+
+func (cue ContactUsernameEntry) GetMassInsertValues() [2]any {
+	return [...]any{cue.JID.String(), cue.Username}
 }
 
 var MutedForever = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
@@ -190,6 +215,10 @@ type LIDStore interface {
 	GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (map[types.JID]types.JID, error)
 }
 
+type LIDBatchReverseStore interface {
+	GetManyPNsForLIDs(ctx context.Context, lids []types.JID) (map[types.JID]types.JID, error)
+}
+
 type AllSessionSpecificStores interface {
 	IdentityStore
 	SessionStore
@@ -252,6 +281,9 @@ type Device struct {
 	EventBuffer   EventBuffer
 	LIDs          LIDStore
 	Container     DeviceContainer
+
+	saveDeleteLockInit sync.Once
+	saveDeleteLock     chan struct{}
 }
 
 func (device *Device) GetJID() types.JID {
@@ -274,7 +306,32 @@ func (device *Device) GetLID() types.JID {
 
 var ErrDeviceDeleted = errors.New("invalid use of deleted device")
 
+func (device *Device) lockSaveDelete(ctx context.Context) error {
+	device.saveDeleteLockInit.Do(func() {
+		device.saveDeleteLock = make(chan struct{}, 1)
+		device.saveDeleteLock <- struct{}{}
+	})
+	select {
+	case <-device.saveDeleteLock:
+		if err := ctx.Err(); err != nil {
+			device.unlockSaveDelete()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (device *Device) unlockSaveDelete() {
+	device.saveDeleteLock <- struct{}{}
+}
+
 func (device *Device) Save(ctx context.Context) error {
+	if err := device.lockSaveDelete(ctx); err != nil {
+		return err
+	}
+	defer device.unlockSaveDelete()
 	if device.Deleted {
 		return ErrDeviceDeleted
 	}
@@ -282,6 +339,10 @@ func (device *Device) Save(ctx context.Context) error {
 }
 
 func (device *Device) Delete(ctx context.Context) error {
+	if err := device.lockSaveDelete(ctx); err != nil {
+		return err
+	}
+	defer device.unlockSaveDelete()
 	if device.Deleted {
 		return nil
 	}
