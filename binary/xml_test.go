@@ -47,3 +47,26 @@ func TestNodeStringRedactsSensitiveAttributes(t *testing.T) {
 		t.Fatalf("unexpected redacted node: %s", logged)
 	}
 }
+
+func TestNodeStringRedactsLinkedAccountPayload(t *testing.T) {
+	logged := (Node{
+		Tag: "linked_accounts",
+		Content: []Node{{
+			Tag:   "fb_page",
+			Attrs: Attrs{"id": "facebook-page-100"},
+			Content: []Node{
+				{Tag: "display_name", Content: []byte("Private Store")},
+				{Tag: "ig_handle", Content: "private_handle"},
+				{Tag: "profile_picture", Content: []Node{{Tag: "url", Content: []byte("https://private.invalid/picture?access=secret")}}},
+			},
+		}},
+	}).String()
+	for _, secret := range []string{"facebook-page-100", "Private Store", "private_handle", "private.invalid", "secret"} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("linked-account payload leaked %q: %s", secret, logged)
+		}
+	}
+	if logged != "<linked_accounts>[redacted]</linked_accounts>" {
+		t.Fatalf("unexpected linked-account redaction: %s", logged)
+	}
+}
