@@ -211,6 +211,26 @@ type BusinessHoursConfig struct {
 	CloseTime string
 }
 
+type BusinessHoursDay struct {
+	DayOfWeek string
+	Mode      string
+	OpenTime  int
+	CloseTime int
+}
+
+type BusinessHoursUpdate struct {
+	TimeZone string
+	Days     []BusinessHoursDay
+}
+
+type BusinessProfileUpdate struct {
+	Address     *string
+	Email       *string
+	Description *string
+	Websites    *[]string
+	Hours       *BusinessHoursUpdate
+}
+
 // Category contains a WhatsApp business category.
 type Category struct {
 	ID   string
@@ -222,6 +242,9 @@ type BusinessProfile struct {
 	JID                   JID
 	Address               string
 	Email                 string
+	Description           string
+	Websites              []string
+	CoverPhotoID          string
 	Categories            []Category
 	ProfileOptions        map[string]string
 	BusinessHoursTimeZone string

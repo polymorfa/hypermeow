@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
+	"strconv"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 )
@@ -231,9 +233,67 @@ func (iqe *IQError) Is(other error) bool {
 	} else if iqe.Code != 0 && otherIQE.Code != 0 {
 		return otherIQE.Code == iqe.Code && otherIQE.Text == iqe.Text
 	} else if iqe.ErrorNode != nil && otherIQE.ErrorNode != nil {
-		return iqe.ErrorNode.String() == otherIQE.ErrorNode.String()
+		return reflect.DeepEqual(normalizeIQErrorNode(iqe.ErrorNode), normalizeIQErrorNode(otherIQE.ErrorNode))
 	} else {
 		return false
+	}
+}
+
+func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
+	if node == nil {
+		return nil
+	}
+	normalized := *node
+	if len(node.Attrs) > 0 {
+		normalized.Attrs = make(waBinary.Attrs, len(node.Attrs))
+		for key, value := range node.Attrs {
+			value = normalizeIQErrorScalar(value)
+			if value != nil && value != "" {
+				normalized.Attrs[key] = value
+			}
+		}
+		if len(normalized.Attrs) == 0 {
+			normalized.Attrs = nil
+		}
+	} else {
+		normalized.Attrs = nil
+	}
+	if children, ok := node.Content.([]waBinary.Node); ok {
+		if len(children) == 0 {
+			normalized.Content = nil
+		} else {
+			normalizedChildren := make([]waBinary.Node, len(children))
+			for index := range children {
+				normalizedChildren[index] = *normalizeIQErrorNode(&children[index])
+			}
+			normalized.Content = normalizedChildren
+		}
+	} else {
+		normalized.Content = normalizeIQErrorScalar(node.Content)
+	}
+	return &normalized
+}
+
+func normalizeIQErrorScalar(value any) any {
+	switch typedValue := value.(type) {
+	case int:
+		return strconv.Itoa(typedValue)
+	case int32:
+		return strconv.FormatInt(int64(typedValue), 10)
+	case int64:
+		return strconv.FormatInt(typedValue, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typedValue), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typedValue), 10)
+	case uint64:
+		return strconv.FormatUint(typedValue, 10)
+	case bool:
+		return strconv.FormatBool(typedValue)
+	case []byte:
+		return string(typedValue)
+	default:
+		return value
 	}
 }
 
