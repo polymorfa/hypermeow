@@ -1,9 +1,9 @@
 package waArmadilloApplication
 
 import (
-	"go.mau.fi/whatsmeow/proto/armadilloutil"
-	"go.mau.fi/whatsmeow/proto/waCommon"
-	"go.mau.fi/whatsmeow/proto/waMediaTransport"
+	"github.com/polymorfa/hypermeow/proto/armadilloutil"
+	"github.com/polymorfa/hypermeow/proto/waCommon"
+	"github.com/polymorfa/hypermeow/proto/waMediaTransport"
 )
 
 func (*Armadillo) IsMessageApplicationSub() {}

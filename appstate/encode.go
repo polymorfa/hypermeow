@@ -9,11 +9,11 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/whatsmeow/proto/waCommon"
-	"go.mau.fi/whatsmeow/proto/waServerSync"
-	"go.mau.fi/whatsmeow/proto/waSyncAction"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/util/cbcutil"
+	"github.com/polymorfa/hypermeow/proto/waCommon"
+	"github.com/polymorfa/hypermeow/proto/waServerSync"
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/util/cbcutil"
 )
 
 // MutationInfo contains information about a single mutation to the app state.
@@ -162,6 +162,26 @@ func BuildLabelChat(target types.JID, labelID string, labeled bool) PatchInfo {
 	}
 }
 
+type LabelChatChange struct {
+	LabelID string
+	Labeled bool
+}
+
+func BuildLabelChatChanges(target types.JID, changes []LabelChatChange) PatchInfo {
+	mutations := make([]MutationInfo, 0, len(changes))
+	mutationIndexes := make(map[string]int, len(changes))
+	for _, change := range changes {
+		mutation := newLabelChatMutation(target, change.LabelID, change.Labeled)
+		if index, exists := mutationIndexes[change.LabelID]; exists {
+			mutations[index] = mutation
+		} else {
+			mutationIndexes[change.LabelID] = len(mutations)
+			mutations = append(mutations, mutation)
+		}
+	}
+	return PatchInfo{Type: WAPatchRegular, Mutations: mutations}
+}
+
 func newLabelMessageMutation(target types.JID, labelID, messageID string, labeled bool) MutationInfo {
 	return MutationInfo{
 		Index:   []string{IndexLabelAssociationMessage, labelID, target.String(), messageID, "0", "0"},
@@ -204,6 +224,43 @@ func BuildLabelEdit(labelID string, labelName string, labelColor int32, deleted 
 		Type: WAPatchRegular,
 		Mutations: []MutationInfo{
 			newLabelEditMutation(labelID, labelName, labelColor, deleted),
+		},
+	}
+}
+
+func newQuickReplyMutation(id, shortcut, message string, keywords []string, count int32, deleted bool, associatedLabelIDs []string) MutationInfo {
+	return MutationInfo{
+		Index:   []string{IndexQuickReply, id},
+		Version: 2,
+		Value: &waSyncAction.SyncActionValue{
+			QuickReplyAction: &waSyncAction.QuickReplyAction{
+				Shortcut:           proto.String(shortcut),
+				Message:            proto.String(message),
+				Keywords:           keywords,
+				Count:              proto.Int32(count),
+				Deleted:            proto.Bool(deleted),
+				AssociatedLabelIDs: associatedLabelIDs,
+			},
+		},
+	}
+}
+
+// BuildQuickReply builds an app state patch for adding or editing a quick reply.
+func BuildQuickReply(id, shortcut, message string, keywords []string, count int32, associatedLabelIDs ...string) PatchInfo {
+	return PatchInfo{
+		Type: WAPatchRegular,
+		Mutations: []MutationInfo{
+			newQuickReplyMutation(id, shortcut, message, keywords, count, false, associatedLabelIDs),
+		},
+	}
+}
+
+// BuildQuickReplyDelete builds an app state tombstone for deleting a quick reply.
+func BuildQuickReplyDelete(id string) PatchInfo {
+	return PatchInfo{
+		Type: WAPatchRegular,
+		Mutations: []MutationInfo{
+			newQuickReplyMutation(id, "", "", []string{}, 0, true, nil),
 		},
 	}
 }

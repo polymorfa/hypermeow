@@ -16,12 +16,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waHistorySync"
-	"go.mau.fi/whatsmeow/proto/waVnameCert"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waHistorySync"
+	"github.com/polymorfa/hypermeow/proto/waVnameCert"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 const (
@@ -189,6 +189,7 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 	}
 	output := make([]types.IsOnWhatsAppResponse, 0, len(jids))
 	lidEntries := make([]store.LIDMapping, 0, len(jids))
+	usernameEntries := make([]store.ContactUsernameEntry, 0, len(jids))
 	querySuffix := "@" + types.LegacyUserServer
 	for _, child := range list.GetChildren() {
 		ag := child.AttrGetter()
@@ -215,6 +216,10 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 		}
 		contactNode := child.GetChildByTag("contact")
 		info.IsIn = contactNode.AttrGetter().String("type") == "in"
+		info.Username = parseUSyncUsername(child)
+		if info.Username != "" && info.JID.Server == types.HiddenUserServer {
+			usernameEntries = append(usernameEntries, store.ContactUsernameEntry{JID: info.JID, Username: info.Username})
+		}
 		contactQuery, _ := contactNode.Content.([]byte)
 		info.Query = strings.TrimSuffix(string(contactQuery), querySuffix)
 		output = append(output, info)
@@ -225,7 +230,42 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 			return output, fmt.Errorf("failed to store LID mappings: %w", err)
 		}
 	}
+	cli.storeContactUsernamesBestEffort(ctx, usernameEntries)
 	return output, nil
+}
+
+func (cli *Client) storeContactUsernamesBestEffort(ctx context.Context, entries []store.ContactUsernameEntry) {
+	if err := putContactUsernames(ctx, cli.Store.Contacts, entries); err != nil {
+		cli.Log.Warnf("Failed to store usernames: %v", err)
+	}
+}
+
+func putContactUsernames(ctx context.Context, contacts store.ContactStore, entries []store.ContactUsernameEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if batch, ok := contacts.(store.ContactUsernameBatchStore); ok {
+		return batch.PutManyContactUsernames(ctx, entries)
+	}
+	single, ok := contacts.(store.ContactUsernameStore)
+	if !ok {
+		return nil
+	}
+	var firstErr error
+	for _, entry := range entries {
+		if err := single.PutContactUsername(ctx, entry.JID, entry.Username); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func parseUSyncUsername(user waBinary.Node) string {
+	if username, ok := user.GetChildByTag("username").Content.([]byte); ok && len(username) > 0 {
+		return string(username)
+	}
+	contact := user.GetChildByTag("contact")
+	return contact.AttrGetter().OptionalString("username")
 }
 
 // GetUserInfo gets basic user info (avatar, status, verified business name, device list).
@@ -236,6 +276,7 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 		{Tag: "picture"},
 		{Tag: "devices", Attrs: waBinary.Attrs{"version": "2"}},
 		{Tag: "lid"},
+		{Tag: "username"},
 	}, UsyncQueryExtras{
 		IncludePrivacyToken: true,
 	})
@@ -244,6 +285,7 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 	}
 	respData := make(map[types.JID]types.UserInfo, len(jids))
 	mappings := make([]store.LIDMapping, 0, len(jids))
+	usernames := make([]store.ContactUsernameEntry, 0, len(jids))
 	for _, child := range list.GetChildren() {
 		jid, jidOK := child.Attrs["jid"].(types.JID)
 		if child.Tag != "user" || !jidOK {
@@ -261,6 +303,7 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 
 		lidTag := child.GetChildByTag("lid")
 		info.LID = lidTag.AttrGetter().OptionalJIDOrEmpty("val")
+		info.Username = parseUSyncUsername(child)
 
 		if !info.LID.IsEmpty() {
 			mappings = append(mappings, store.LIDMapping{PN: jid, LID: info.LID})
@@ -270,6 +313,13 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 			cli.updateBusinessName(ctx, jid, info.LID, nil, verifiedName.Details.GetVerifiedName())
 		}
 		respData[jid] = info
+		if info.Username != "" {
+			usernameJID := info.LID
+			if usernameJID.IsEmpty() {
+				usernameJID = jid
+			}
+			usernames = append(usernames, store.ContactUsernameEntry{JID: usernameJID, Username: info.Username})
+		}
 	}
 
 	err = cli.Store.LIDs.PutManyLIDMappings(ctx, mappings)
@@ -277,8 +327,105 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 		// not worth returning on the error, instead just post a log
 		cli.Log.Errorf("Failed to place LID mappings from USync call")
 	}
+	if err := putContactUsernames(ctx, cli.Store.Contacts, usernames); err != nil {
+		cli.Log.Errorf("Failed to store usernames from USync call: %v", err)
+	}
 
 	return respData, nil
+}
+
+var ErrUsernameNotFound = errors.New("username not found")
+
+func parseUsernameResolution(list *waBinary.Node) (types.UsernameResolution, error) {
+	children := list.GetChildren()
+	if len(children) != 1 || children[0].Tag != "user" {
+		return types.UsernameResolution{}, ErrUsernameNotFound
+	}
+	user := children[0]
+	contact := user.GetChildByTag("contact")
+	contactAttrs := contact.AttrGetter()
+	if contactAttrs.OptionalString("type") == "out" {
+		return types.UsernameResolution{}, ErrUsernameNotFound
+	}
+	lid := user.AttrGetter().OptionalJIDOrEmpty("jid").ToNonAD()
+	if lid.IsEmpty() {
+		return types.UsernameResolution{KeyRequired: true}, nil
+	}
+	if lid.Server != types.HiddenUserServer {
+		return types.UsernameResolution{}, fmt.Errorf("username resolved to non-LID JID %s", lid)
+	}
+	return types.UsernameResolution{
+		LID:      lid,
+		Username: contactAttrs.OptionalString("username"),
+	}, nil
+}
+
+func (cli *Client) ResolveUsername(ctx context.Context, username, key string) (types.UsernameResolution, error) {
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	if len(username) < 3 || len(username) > 35 {
+		return types.UsernameResolution{}, fmt.Errorf("username must contain 3 to 35 characters")
+	}
+	if key != "" {
+		if len(key) != 4 {
+			return types.UsernameResolution{}, fmt.Errorf("username key must contain 4 digits")
+		}
+		for _, char := range key {
+			if char < '0' || char > '9' {
+				return types.UsernameResolution{}, fmt.Errorf("username key must contain 4 digits")
+			}
+		}
+	}
+	list, err := cli.usync(ctx, []types.JID{types.EmptyJID}, "query", "interactive", []waBinary.Node{
+		{Tag: "contact", Attrs: waBinary.Attrs{"addressing_mode": "lid"}},
+		{Tag: "business", Content: []waBinary.Node{{Tag: "verified_name"}}},
+	}, UsyncQueryExtras{Username: username, UsernameKey: key})
+	if err != nil {
+		return types.UsernameResolution{}, err
+	}
+	result, err := parseUsernameResolution(list)
+	if err != nil || result.KeyRequired {
+		return result, err
+	}
+	if result.Username == "" {
+		result.Username = username
+	}
+	if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok {
+		if err = usernameStore.PutContactUsername(ctx, result.LID, result.Username); err != nil {
+			cli.Log.Warnf("Failed to store username for %s: %v", result.LID, err)
+		}
+	}
+	return result, nil
+}
+
+// ResolveLID returns the stable LID for a phone-number JID.
+func (cli *Client) ResolveLID(ctx context.Context, phone types.JID) (types.JID, error) {
+	device := phone.Device
+	phone = phone.ToNonAD()
+	if phone.Server != types.DefaultUserServer {
+		return types.EmptyJID, fmt.Errorf("cannot resolve non-PN JID %s to LID", phone)
+	}
+	if cli.Store == nil || cli.Store.LIDs == nil {
+		return types.EmptyJID, fmt.Errorf("LID store is unavailable")
+	}
+	lid, err := cli.Store.LIDs.GetLIDForPN(ctx, phone)
+	if err != nil {
+		return types.EmptyJID, fmt.Errorf("get cached LID for %s: %w", phone, err)
+	}
+	if !lid.IsEmpty() {
+		lid = lid.ToNonAD()
+		lid.Device = device
+		return lid, nil
+	}
+	info, err := cli.GetUserInfo(ctx, []types.JID{phone})
+	if err != nil {
+		return types.EmptyJID, fmt.Errorf("resolve LID for %s with USync: %w", phone, err)
+	}
+	lid = info[phone].LID.ToNonAD()
+	if lid.IsEmpty() {
+		return types.EmptyJID, fmt.Errorf("USync returned no LID for %s", phone)
+	}
+	lid.Device = device
+	return lid, nil
 }
 
 func (cli *Client) GetBotListV2(ctx context.Context) ([]types.BotListInfo, error) {
@@ -390,6 +537,15 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	}
 	address, _ := profileNode.GetChildByTag("address").Content.([]byte)
 	email, _ := profileNode.GetChildByTag("email").Content.([]byte)
+	description, _ := profileNode.GetChildByTag("description").Content.([]byte)
+	websiteNodes := profileNode.GetChildrenByTag("website")
+	websites := make([]string, 0, len(websiteNodes))
+	for _, websiteNode := range websiteNodes {
+		website, _ := websiteNode.Content.([]byte)
+		websites = append(websites, string(website))
+	}
+	coverPhoto := profileNode.GetChildByTag("cover_photo")
+	coverPhotoID := coverPhoto.AttrGetter().String("id")
 	businessHour := profileNode.GetChildByTag("business_hours")
 	businessHourTimezone := businessHour.AttrGetter().String("timezone")
 	businessHoursConfigs := businessHour.GetChildren()
@@ -433,6 +589,9 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 		JID:                   jid,
 		Email:                 string(email),
 		Address:               string(address),
+		Description:           string(description),
+		Websites:              websites,
+		CoverPhotoID:          coverPhotoID,
 		Categories:            categories,
 		ProfileOptions:        profileOptions,
 		BusinessHoursTimeZone: businessHourTimezone,
@@ -870,6 +1029,8 @@ func (cli *Client) getFBIDDevices(ctx context.Context, jids []types.JID) ([]type
 type UsyncQueryExtras struct {
 	BotListInfo         []types.BotListInfo
 	IncludePrivacyToken bool
+	Username            string
+	UsernameKey         string
 }
 
 func (cli *Client) usync(ctx context.Context, jids []types.JID, mode, context string, query []waBinary.Node, extra ...UsyncQueryExtras) (*waBinary.Node, error) {
@@ -887,6 +1048,14 @@ func (cli *Client) usync(ctx context.Context, jids []types.JID, mode, context st
 	for i, jid := range jids {
 		userList[i].Tag = "user"
 		jid = jid.ToNonAD()
+		if extras.Username != "" {
+			attrs := waBinary.Attrs{"username": extras.Username}
+			if extras.UsernameKey != "" {
+				attrs["pin"] = extras.UsernameKey
+			}
+			userList[i].Content = []waBinary.Node{{Tag: "contact", Attrs: attrs}}
+			continue
+		}
 
 		switch jid.Server {
 		case types.LegacyUserServer:

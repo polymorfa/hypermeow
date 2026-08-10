@@ -1,6 +1,6 @@
 syntax = "proto2";
 package WAWebProtobufsChatLockSettings;
-option go_package = "go.mau.fi/whatsmeow/proto/waChatLockSettings";
+option go_package = "github.com/polymorfa/hypermeow/proto/waChatLockSettings";
 
 import "waUserPassword/WAWebProtobufsUserPassword.proto";
 

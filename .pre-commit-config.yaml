@@ -4,10 +4,11 @@ repos:
     hooks:
       - id: trailing-whitespace
         exclude_types: [markdown]
-        exclude: LICENSE
+        exclude: '(^LICENSE$|\.patch$)'
       - id: end-of-file-fixer
         exclude: LICENSE
       - id: check-yaml
+        exclude: ^benchmark/barback/compose\.(dm|local-cache)\.yaml$
       - id: check-added-large-files
 
   - repo: https://github.com/tekwizely/pre-commit-golang
@@ -16,7 +17,7 @@ repos:
       - id: go-imports-repo
         args:
           - "-local"
-          - "go.mau.fi/whatsmeow"
+          - "github.com/polymorfa/hypermeow"
           - "-w"
       - id: go-vet-repo-mod
       # TODO enable this

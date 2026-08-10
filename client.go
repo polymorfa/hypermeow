@@ -28,17 +28,17 @@ import (
 	"golang.org/x/net/proxy"
 	"golang.org/x/sync/semaphore"
 
-	"go.mau.fi/whatsmeow/appstate"
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/proto/waWa6"
-	"go.mau.fi/whatsmeow/proto/waWeb"
-	"go.mau.fi/whatsmeow/socket"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-	"go.mau.fi/whatsmeow/util/keys"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	"github.com/polymorfa/hypermeow/appstate"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/proto/waWa6"
+	"github.com/polymorfa/hypermeow/proto/waWeb"
+	"github.com/polymorfa/hypermeow/socket"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
+	"github.com/polymorfa/hypermeow/util/keys"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 // EventHandler is a function that can handle events from WhatsApp.
@@ -114,9 +114,10 @@ type Client struct {
 	// the client will not attempt to reconnect. The number of retries can be read from AutoReconnectErrors.
 	AutoReconnectHook func(error) bool
 	// If SynchronousAck is set, acks for messages will only be sent after all event handlers return.
-	SynchronousAck             bool
-	EnableDecryptedEventBuffer bool
-	lastDecryptedBufferClear   time.Time
+	SynchronousAck                bool
+	EnableDecryptedEventBuffer    bool
+	synchronousMessageNameUpdates atomic.Bool
+	lastDecryptedBufferClear      time.Time
 
 	DisableLoginAutoReconnect bool
 
@@ -124,8 +125,10 @@ type Client struct {
 
 	// EmitAppStateEventsOnFullSync can be set to true if you want to get app state events emitted
 	// even when re-syncing the whole state.
-	EmitAppStateEventsOnFullSync bool
-	AppStateDebugLogs            bool
+	EmitAppStateEventsOnFullSync   bool
+	EmitLabelEventsOnFullSync      bool
+	EmitQuickReplyEventsOnFullSync bool
+	AppStateDebugLogs              bool
 
 	AutomaticMessageRerequestFromPhone bool
 	pendingPhoneRerequests             map[types.MessageID]context.CancelFunc
@@ -134,10 +137,15 @@ type Client struct {
 	appStateProc     *appstate.Processor
 	appStateSyncLock sync.Mutex
 
-	historySyncNotifications        chan *waE2E.HistorySyncNotification
+	historySyncNotifications        chan historySyncNotification
 	historySyncHandlerStarted       atomic.Bool
 	ManualHistorySyncDownload       bool
 	DisableManualHistorySyncReceipt bool
+	DisableHistorySyncReceipt       bool
+	DisableHistorySyncStorage       bool
+	DisableHistorySyncMediaDelete   bool
+	historySyncNonce                atomic.Pointer[string]
+	historySyncNonceSaveLock        sync.Mutex
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time
@@ -147,6 +155,7 @@ type Client struct {
 
 	responseWaiters     map[string]chan<- *waBinary.Node
 	responseWaitersLock sync.Mutex
+	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
 	handlerQueue      chan *waBinary.Node
 	eventHandlers     []wrappedEventHandler
@@ -323,7 +332,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		socketWait:         make(chan struct{}),
 		expectedDisconnect: exsync.NewEvent(),
 
-		historySyncNotifications: make(chan *waE2E.HistorySyncNotification, 32),
+		historySyncNotifications: make(chan historySyncNotification, 32),
 
 		GetMessageForRetry: func(requester, to types.JID, id types.MessageID) *waE2E.Message { return nil },
 
@@ -896,6 +905,7 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		}
 	}
 	cli.recvLog.Debugf("%s", node)
+	cli.handleOutOfBandNode(node)
 	// Signal-disabled handoff: parse and dispatch UndecryptedMessage
 	// synchronously from the recv goroutine, so the event interleaves
 	// with [RawNodeHandler] callbacks in wire order. Going through the
@@ -925,6 +935,13 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		cli.enqueueNode(ctx, node)
 	} else if node.Tag != "ack" {
 		cli.Log.Debugf("Didn't handle WhatsApp node %s", node.Tag)
+	}
+}
+
+func (cli *Client) handleOutOfBandNode(node *waBinary.Node) {
+	if node.Tag == "notification" && node.Attrs["type"] == "business" {
+		cli.handleBusinessCatalogNotification(node)
+		node.Attrs[businessNonceDeliveredAttr] = true
 	}
 }
 

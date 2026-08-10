@@ -23,15 +23,15 @@ import (
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	armadillo "go.mau.fi/whatsmeow/proto"
-	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
-	"go.mau.fi/whatsmeow/proto/waCommon"
-	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
-	"go.mau.fi/whatsmeow/proto/waMsgApplication"
-	"go.mau.fi/whatsmeow/proto/waMsgTransport"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	armadillo "github.com/polymorfa/hypermeow/proto"
+	"github.com/polymorfa/hypermeow/proto/waArmadilloApplication"
+	"github.com/polymorfa/hypermeow/proto/waCommon"
+	"github.com/polymorfa/hypermeow/proto/waConsumerApplication"
+	"github.com/polymorfa/hypermeow/proto/waMsgApplication"
+	"github.com/polymorfa/hypermeow/proto/waMsgTransport"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 const FBMessageVersion = 3
@@ -198,7 +198,7 @@ func (cli *Client) SendFBMessage(
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
 	}
 	expectedPHash := ag.OptionalString("phash")
-	if len(expectedPHash) > 0 && phash != expectedPHash {
+	if setParticipantHashMismatch(&resp, phash, expectedPHash) {
 		cli.Log.Warnf("Server returned different participant list hash when sending to %s. Some devices may not have received the message.", to)
 		// TODO also invalidate device list caches
 		cli.groupCacheLock.Lock()

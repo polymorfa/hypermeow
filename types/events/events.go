@@ -14,18 +14,18 @@ import (
 
 	"go.mau.fi/util/jsontime"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	armadillo "go.mau.fi/whatsmeow/proto"
-	"go.mau.fi/whatsmeow/proto/instamadilloTransportPayload"
-	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
-	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/proto/waHistorySync"
-	"go.mau.fi/whatsmeow/proto/waMsgApplication"
-	"go.mau.fi/whatsmeow/proto/waMsgTransport"
-	"go.mau.fi/whatsmeow/proto/waWeb"
-	"go.mau.fi/whatsmeow/types"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	armadillo "github.com/polymorfa/hypermeow/proto"
+	"github.com/polymorfa/hypermeow/proto/instamadilloTransportPayload"
+	"github.com/polymorfa/hypermeow/proto/waArmadilloApplication"
+	"github.com/polymorfa/hypermeow/proto/waCompanionReg"
+	"github.com/polymorfa/hypermeow/proto/waConsumerApplication"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/proto/waHistorySync"
+	"github.com/polymorfa/hypermeow/proto/waMsgApplication"
+	"github.com/polymorfa/hypermeow/proto/waMsgTransport"
+	"github.com/polymorfa/hypermeow/proto/waWeb"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 // QR is emitted after connecting when there's no session data in the device store.
@@ -271,6 +271,7 @@ type HistorySync struct {
 	Data *waHistorySync.HistorySync
 
 	Notification *waE2E.HistorySyncNotification
+	MessageID    types.MessageID
 }
 
 type DecryptFailMode string

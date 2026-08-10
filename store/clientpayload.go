@@ -17,9 +17,9 @@ import (
 
 	"github.com/polymorfa/libsignal-protocol-go/ecc"
 
-	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"go.mau.fi/whatsmeow/proto/waWa6"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/proto/waCompanionReg"
+	"github.com/polymorfa/hypermeow/proto/waWa6"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 // WAVersionContainer is a container for a WhatsApp web version number.
@@ -151,6 +151,7 @@ var DeviceProps = &waCompanionReg.DeviceProps{
 		InitialSyncMaxMessagesPerChat:            nil,
 		SupportManusHistory:                      proto.Bool(true),
 		SupportHatchHistory:                      proto.Bool(true),
+		SupportInlineContacts:                    proto.Bool(true),
 	},
 	PlatformType:    waCompanionReg.DeviceProps_UNKNOWN.Enum(),
 	RequireFullSync: proto.Bool(false),

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestMarkReadRejectsMultipleReceiptTypes(t *testing.T) {

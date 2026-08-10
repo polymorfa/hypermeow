@@ -9,9 +9,9 @@ package events
 import (
 	"time"
 
-	"go.mau.fi/whatsmeow/appstate"
-	"go.mau.fi/whatsmeow/proto/waSyncAction"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/appstate"
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 // Contact is emitted when an entry in the user's contact list is modified from another device.
@@ -21,6 +21,15 @@ type Contact struct {
 
 	Action       *waSyncAction.ContactAction // The new contact info.
 	FromFullSync bool                        // Whether the action is emitted because of a fullSync
+}
+
+// LIDContact is emitted when a LID-keyed contact is modified from another device.
+type LIDContact struct {
+	JID       types.JID
+	Timestamp time.Time
+
+	Action       *waSyncAction.LidContactAction
+	FromFullSync bool
 }
 
 // PushName is emitted when a message is received with a different push name than the previous value cached for the same user.
@@ -173,6 +182,15 @@ type LabelAssociationMessage struct {
 
 	Action       *waSyncAction.LabelAssociationAction // The current label status of the message.
 	FromFullSync bool                                 // Whether the action is emitted because of a fullSync
+}
+
+// QuickReply is emitted when a quick reply is changed from any device.
+type QuickReply struct {
+	Timestamp time.Time
+	ID        string
+
+	Action       *waSyncAction.QuickReplyAction
+	FromFullSync bool
 }
 
 // AppState is emitted directly for new data received from app state syncing.

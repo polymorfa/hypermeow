@@ -1,0 +1,46 @@
+{
+  "sourceRevision": "74509efe262b37b26bed05486c9f4160db5e841b",
+  "waVersion": "2.3000.1044776264",
+  "operations": {
+    "DeleteNewsletter": {
+      "documentId": "30062808666639665",
+      "kind": "mutation",
+      "responseDiscriminator": "xwa2_newsletter_delete_v2"
+    },
+    "BizCreateOrder": {
+      "documentId": "26486627094287046",
+      "kind": "mutation",
+      "responseDiscriminator": "xwa_checkout_place_order"
+    },
+    "BizQueryOrder": {
+      "documentId": "26593811266898374",
+      "kind": "query",
+      "responseDiscriminator": "xwa_checkout_get_order_info"
+    },
+    "QueryCatalog": {
+      "documentId": "30445081048424116",
+      "kind": "query",
+      "responseDiscriminator": "xwa_product_catalog_get_product_catalog"
+    },
+    "QueryCatalogProduct": {
+      "documentId": "9660926520672123",
+      "kind": "query",
+      "responseDiscriminator": "xwa_product_catalog_get_product"
+    },
+    "QueryProductCollections": {
+      "documentId": "9430970660362540",
+      "kind": "query",
+      "responseDiscriminator": "xwa_product_catalog_get_collections"
+    },
+    "QueryProductListCatalog": {
+      "documentId": "30125049463760630",
+      "kind": "query",
+      "responseDiscriminator": "xwa_product_catalog_get_product_list"
+    },
+    "QueryProductSingleCollection": {
+      "documentId": "9546992575408789",
+      "kind": "query",
+      "responseDiscriminator": "xwa_product_catalog_get_single_collection"
+    }
+  }
+}

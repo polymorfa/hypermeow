@@ -17,14 +17,14 @@ import (
 	"github.com/polymorfa/libsignal-protocol-go/ecc"
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waAdv"
-	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"go.mau.fi/whatsmeow/proto/waWa6"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-	"go.mau.fi/whatsmeow/util/keys"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waAdv"
+	"github.com/polymorfa/hypermeow/proto/waCompanionReg"
+	"github.com/polymorfa/hypermeow/proto/waWa6"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
+	"github.com/polymorfa/hypermeow/util/keys"
 )
 
 var (

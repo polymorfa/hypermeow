@@ -29,12 +29,12 @@ import (
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waAICommon"
-	"go.mau.fi/whatsmeow/proto/waCommon"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waAICommon"
+	"github.com/polymorfa/hypermeow/proto/waCommon"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 const WebMessageIDPrefix = "3EB0"
@@ -126,6 +126,14 @@ type SendResponse struct {
 	// The identity the message was sent with (LID or PN)
 	// This is currently not reliable in all cases.
 	Sender types.JID
+
+	// PHashMismatch indicates the server acknowledged a different participant list hash.
+	PHashMismatch bool
+}
+
+func setParticipantHashMismatch(resp *SendResponse, sent, acknowledged string) bool {
+	resp.PHashMismatch = acknowledged != "" && sent != acknowledged
+	return resp.PHashMismatch
 }
 
 // SendRequestExtra contains the optional parameters for SendMessage.
@@ -329,21 +337,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	} else if to.Server == types.DefaultUserServer && !req.Peer {
 		start := time.Now()
 		var toLID types.JID
-		toLID, err = cli.Store.LIDs.GetLIDForPN(ctx, to)
+		toLID, err = cli.ResolveLID(ctx, to)
 		if err != nil {
-			err = fmt.Errorf("failed to get LID for PN %s: %w", to, err)
+			err = fmt.Errorf("failed to resolve LID for PN %s: %w", to, err)
 			return
-		} else if toLID.IsEmpty() {
-			var info map[types.JID]types.UserInfo
-			cli.Log.Debugf("LID for %s not found, fetching user info", to)
-			info, err = cli.GetUserInfo(ctx, []types.JID{to})
-			if err != nil {
-				err = fmt.Errorf("failed to get user info for %s to fill LID cache: %w", to, err)
-				return
-			} else if toLID = info[to].LID; toLID.IsEmpty() {
-				err = fmt.Errorf("no LID found for %s from server", to)
-				return
-			}
 		}
 		resp.DebugTimings.LIDFetch = time.Since(start)
 		cli.Log.Debugf("Replacing SendMessage destination with LID %s -> %s", to, toLID)
@@ -452,7 +449,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
 	}
 	expectedPHash := ag.OptionalString("phash")
-	if len(expectedPHash) > 0 && phash != expectedPHash {
+	if setParticipantHashMismatch(&resp, phash, expectedPHash) {
 		cli.Log.Warnf("Server returned different participant list hash (%s != %s) when sending to %s. Some devices may not have received the message.", phash, expectedPHash, to)
 		switch to.Server {
 		case types.GroupServer:
@@ -993,20 +990,63 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return getButtonTypeFromMessage(msg.ViewOnceMessage.Message)
 	case msg.ViewOnceMessageV2 != nil:
 		return getButtonTypeFromMessage(msg.ViewOnceMessageV2.Message)
+	case msg.ViewOnceMessageV2Extension != nil:
+		return getButtonTypeFromMessage(msg.ViewOnceMessageV2Extension.Message)
 	case msg.EphemeralMessage != nil:
 		return getButtonTypeFromMessage(msg.EphemeralMessage.Message)
 	case msg.ButtonsMessage != nil:
 		return "buttons"
-	case msg.ButtonsResponseMessage != nil:
-		return "buttons_response"
 	case msg.ListMessage != nil:
 		return "list"
-	case msg.ListResponseMessage != nil:
-		return "list_response"
+	case msg.InteractiveMessage != nil && msg.InteractiveMessage.GetNativeFlowMessage() != nil:
+		return "native_flow"
 	case msg.InteractiveResponseMessage != nil:
 		return "interactive_response"
 	default:
 		return ""
+	}
+}
+
+func buildNativeFlowBizNode(msg *waE2E.Message, nowUnix int64) waBinary.Node {
+	name := "mixed"
+	for msg != nil {
+		switch {
+		case msg.ViewOnceMessage != nil:
+			msg = msg.ViewOnceMessage.Message
+		case msg.ViewOnceMessageV2 != nil:
+			msg = msg.ViewOnceMessageV2.Message
+		case msg.ViewOnceMessageV2Extension != nil:
+			msg = msg.ViewOnceMessageV2Extension.Message
+		case msg.EphemeralMessage != nil:
+			msg = msg.EphemeralMessage.Message
+		default:
+			goto unwrapped
+		}
+	}
+unwrapped:
+	if interactive := msg.GetInteractiveMessage(); interactive != nil {
+		if buttons := interactive.GetNativeFlowMessage().GetButtons(); len(buttons) > 0 && buttons[0].GetName() != "" {
+			candidate := buttons[0].GetName()
+			name = candidate
+			for _, button := range buttons[1:] {
+				if button.GetName() != candidate {
+					name = "mixed"
+					break
+				}
+			}
+		}
+	}
+	return waBinary.Node{
+		Tag: "biz",
+		Attrs: waBinary.Attrs{
+			"actual_actors":   "2",
+			"host_storage":    "2",
+			"privacy_mode_ts": strconv.FormatInt(nowUnix, 10),
+		},
+		Content: []waBinary.Node{
+			{Tag: "interactive", Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"}, Content: []waBinary.Node{{Tag: "native_flow", Attrs: waBinary.Attrs{"name": name, "v": "9"}}}},
+			{Tag: "quality_control", Attrs: waBinary.Attrs{"source_type": "third_party"}},
+		},
 	}
 }
 
@@ -1016,6 +1056,8 @@ func getButtonAttributes(msg *waE2E.Message) waBinary.Attrs {
 		return getButtonAttributes(msg.ViewOnceMessage.Message)
 	case msg.ViewOnceMessageV2 != nil:
 		return getButtonAttributes(msg.ViewOnceMessageV2.Message)
+	case msg.ViewOnceMessageV2Extension != nil:
+		return getButtonAttributes(msg.ViewOnceMessageV2Extension.Message)
 	case msg.EphemeralMessage != nil:
 		return getButtonAttributes(msg.EphemeralMessage.Message)
 	case msg.TemplateMessage != nil:
@@ -1149,13 +1191,17 @@ func (cli *Client) getMessageContent(
 	}
 
 	if buttonType := getButtonTypeFromMessage(message); buttonType != "" {
-		content = append(content, waBinary.Node{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag:   buttonType,
-				Attrs: getButtonAttributes(message),
-			}},
-		})
+		if buttonType == "native_flow" {
+			content = append(content, buildNativeFlowBizNode(message, time.Now().Unix()))
+		} else {
+			content = append(content, waBinary.Node{
+				Tag: "biz",
+				Content: []waBinary.Node{{
+					Tag:   buttonType,
+					Attrs: getButtonAttributes(message),
+				}},
+			})
+		}
 	}
 	return content
 }

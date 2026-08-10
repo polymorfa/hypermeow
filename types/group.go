@@ -106,6 +106,7 @@ type GroupParticipant struct {
 	JID         JID
 	PhoneNumber JID
 	LID         JID
+	Username    string
 
 	IsAdmin      bool
 	IsSuperAdmin bool

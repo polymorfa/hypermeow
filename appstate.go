@@ -17,13 +17,13 @@ import (
 	"go.mau.fi/util/exslices"
 	"go.mau.fi/util/ptr"
 
-	"go.mau.fi/whatsmeow/appstate"
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/proto/waServerSync"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	"github.com/polymorfa/hypermeow/appstate"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/proto/waServerSync"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 // FetchAppState fetches updates to the given type of app state. If fullSync is true, the current
@@ -67,7 +67,7 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	wantSnapshot := fullSync
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if fullSync && !cli.EmitAppStateEventsOnFullSync {
+	if fullSync && !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	for hasMore {
@@ -108,7 +108,7 @@ func (cli *Client) handleAppStateRecovery(
 	}
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if !cli.EmitAppStateEventsOnFullSync {
+	if !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	snapshot, err := appstate.ParseRecovery(result[0].GetSyncdSnapshotFatalRecoveryResponse())
@@ -186,28 +186,62 @@ func (cli *Client) collectEventsToDispatch(
 		}
 	}
 	for _, mutation := range mutations {
-		if eventsToDispatch != nil && mutation.Operation == waServerSync.SyncdMutation_SET {
+		emitMutation := eventsToDispatch != nil && (!fullSync || cli.shouldEmitFullSyncMutation(mutation.Index))
+		if emitMutation && mutation.Operation == waServerSync.SyncdMutation_SET {
 			*eventsToDispatch = append(*eventsToDispatch, &events.AppState{Index: mutation.Index, SyncActionValue: mutation.Action})
 		}
 		evt := cli.dispatchAppState(ctx, name, mutation, fullSync)
-		if eventsToDispatch != nil && evt != nil {
+		if emitMutation && evt != nil {
 			*eventsToDispatch = append(*eventsToDispatch, evt)
 		}
 	}
 	return nil
 }
 
+func (cli *Client) shouldEmitFullSyncMutation(index []string) bool {
+	if cli.EmitAppStateEventsOnFullSync {
+		return true
+	}
+	if len(index) == 0 {
+		return false
+	}
+	if cli.EmitQuickReplyEventsOnFullSync && index[0] == appstate.IndexQuickReply {
+		return true
+	}
+	if !cli.EmitLabelEventsOnFullSync {
+		return false
+	}
+	switch index[0] {
+	case appstate.IndexLabelEdit, appstate.IndexLabelAssociationChat, appstate.IndexLabelAssociationMessage:
+		return true
+	default:
+		return false
+	}
+}
+
 func (cli *Client) filterContacts(mutations []appstate.Mutation) ([]appstate.Mutation, []store.ContactEntry) {
 	filteredMutations := mutations[:0]
 	contacts := make([]store.ContactEntry, 0, len(mutations))
 	for _, mutation := range mutations {
-		if mutation.Index[0] == "contact" && len(mutation.Index) > 1 {
+		if len(mutation.Index) > 1 && mutation.Index[0] == appstate.IndexContact {
 			jid, _ := types.ParseJID(mutation.Index[1])
 			act := mutation.Action.GetContactAction()
 			contacts = append(contacts, store.ContactEntry{
-				JID:       jid,
-				FirstName: act.GetFirstName(),
-				FullName:  act.GetFullName(),
+				JID:         jid,
+				FirstName:   act.GetFirstName(),
+				FullName:    act.GetFullName(),
+				Username:    act.GetUsername(),
+				UsernameSet: true,
+			})
+		} else if len(mutation.Index) > 1 && mutation.Index[0] == appstate.IndexLIDContact {
+			jid, _ := types.ParseJID(mutation.Index[1])
+			act := mutation.Action.GetLidContactAction()
+			contacts = append(contacts, store.ContactEntry{
+				JID:         jid,
+				FirstName:   act.GetFirstName(),
+				FullName:    act.GetFullName(),
+				Username:    act.GetUsername(),
+				UsernameSet: true,
 			})
 		} else {
 			filteredMutations = append(filteredMutations, mutation)
@@ -291,6 +325,18 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		eventToDispatch = &events.Contact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
 		if cli.Store.Contacts != nil {
 			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
+			if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && storeUpdateError == nil {
+				storeUpdateError = usernameStore.PutContactUsername(ctx, jid, act.GetUsername())
+			}
+		}
+	case appstate.IndexLIDContact:
+		act := mutation.Action.GetLidContactAction()
+		eventToDispatch = &events.LIDContact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
+		if cli.Store.Contacts != nil {
+			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
+			if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && storeUpdateError == nil {
+				storeUpdateError = usernameStore.PutContactUsername(ctx, jid, act.GetUsername())
+			}
 		}
 	case appstate.IndexClearChat:
 		act := mutation.Action.GetClearChatAction()
@@ -415,6 +461,16 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 			LabelID:      mutation.Index[1],
 			MessageID:    mutation.Index[3],
 			Action:       act,
+			FromFullSync: fullSync,
+		}
+	case appstate.IndexQuickReply:
+		if len(mutation.Index) < 2 {
+			return
+		}
+		eventToDispatch = &events.QuickReply{
+			Timestamp:    ts,
+			ID:           mutation.Index[1],
+			Action:       mutation.Action.GetQuickReplyAction(),
 			FromFullSync: fullSync,
 		}
 	}
