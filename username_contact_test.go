@@ -37,6 +37,9 @@ func TestFilterContactsPreservesUsername(t *testing.T) {
 	if contacts[0].Username != "example" || contacts[1].Username != "lid-example" {
 		t.Fatalf("usernames = %q, %q", contacts[0].Username, contacts[1].Username)
 	}
+	if !contacts[0].UsernameSet || !contacts[1].UsernameSet {
+		t.Fatal("snapshot usernames were not marked authoritative")
+	}
 }
 
 type recordingLIDContactStore struct {

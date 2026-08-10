@@ -82,10 +82,11 @@ type AppStateStore interface {
 }
 
 type ContactEntry struct {
-	JID       types.JID
-	FirstName string
-	FullName  string
-	Username  string
+	JID         types.JID
+	FirstName   string
+	FullName    string
+	Username    string
+	UsernameSet bool
 }
 
 func (ce ContactEntry) GetMassInsertValues() [4]any {

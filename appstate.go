@@ -227,19 +227,21 @@ func (cli *Client) filterContacts(mutations []appstate.Mutation) ([]appstate.Mut
 			jid, _ := types.ParseJID(mutation.Index[1])
 			act := mutation.Action.GetContactAction()
 			contacts = append(contacts, store.ContactEntry{
-				JID:       jid,
-				FirstName: act.GetFirstName(),
-				FullName:  act.GetFullName(),
-				Username:  act.GetUsername(),
+				JID:         jid,
+				FirstName:   act.GetFirstName(),
+				FullName:    act.GetFullName(),
+				Username:    act.GetUsername(),
+				UsernameSet: true,
 			})
 		} else if len(mutation.Index) > 1 && mutation.Index[0] == appstate.IndexLIDContact {
 			jid, _ := types.ParseJID(mutation.Index[1])
 			act := mutation.Action.GetLidContactAction()
 			contacts = append(contacts, store.ContactEntry{
-				JID:       jid,
-				FirstName: act.GetFirstName(),
-				FullName:  act.GetFullName(),
-				Username:  act.GetUsername(),
+				JID:         jid,
+				FirstName:   act.GetFirstName(),
+				FullName:    act.GetFullName(),
+				Username:    act.GetUsername(),
+				UsernameSet: true,
 			})
 		} else {
 			filteredMutations = append(filteredMutations, mutation)

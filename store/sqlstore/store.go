@@ -857,8 +857,11 @@ const (
 	`
 	putContactNamesQuery = `
 		INSERT INTO whatsmeow_contacts (our_jid, their_jid, first_name, full_name, username) VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name,
-			username=CASE WHEN excluded.username <> '' THEN excluded.username ELSE whatsmeow_contacts.username END
+		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name, username=excluded.username
+	`
+	putContactNamesWithoutUsernameQuery = `
+		INSERT INTO whatsmeow_contacts (our_jid, their_jid, first_name, full_name) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name
 	`
 	putContactUsernameQuery = `
 		INSERT INTO whatsmeow_contacts (our_jid, their_jid, username) VALUES ($1, $2, $3)
@@ -888,6 +891,29 @@ const (
 var putContactNamesMassInsertBuilder = dbutil.NewMassInsertBuilder[store.ContactEntry, [1]any](
 	putContactNamesQuery, "($1, $%d, $%d, $%d, $%d)",
 )
+
+type contactNameEntryWithoutUsername store.ContactEntry
+
+func (entry contactNameEntryWithoutUsername) GetMassInsertValues() [3]any {
+	return [...]any{entry.JID.String(), entry.FirstName, entry.FullName}
+}
+
+var putContactNamesWithoutUsernameMassInsertBuilder = dbutil.NewMassInsertBuilder[contactNameEntryWithoutUsername, [1]any](
+	putContactNamesWithoutUsernameQuery, "($1, $%d, $%d, $%d)",
+)
+
+func splitContactNameEntries(contacts []store.ContactEntry) ([]store.ContactEntry, []contactNameEntryWithoutUsername) {
+	withUsername := make([]store.ContactEntry, 0, len(contacts))
+	withoutUsername := make([]contactNameEntryWithoutUsername, 0, len(contacts))
+	for _, contact := range contacts {
+		if contact.UsernameSet || contact.Username != "" {
+			withUsername = append(withUsername, contact)
+		} else {
+			withoutUsername = append(withoutUsername, contactNameEntryWithoutUsername(contact))
+		}
+	}
+	return withUsername, withoutUsername
+}
 
 var putRedactedPhonesMassInsertBuilder = dbutil.NewMassInsertBuilder[store.RedactedPhoneEntry, [1]any](
 	putRedactedPhoneQuery, "($1, $%d, $%d)",
@@ -986,11 +1012,18 @@ func (s *SQLStore) PutAllContactNames(ctx context.Context, contacts []store.Cont
 	if origLen != len(contacts) {
 		s.log.Warnf("%d duplicate contacts found in PutAllContactNames", origLen-len(contacts))
 	}
+	withUsername, withoutUsername := splitContactNameEntries(contacts)
 	err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
-		for slice := range slices.Chunk(contacts, contactBatchSize) {
+		for slice := range slices.Chunk(withUsername, contactBatchSize) {
 			query, vars := putContactNamesMassInsertBuilder.Build([1]any{s.JID}, slice)
 			_, err := s.db.Exec(ctx, query, vars...)
 			if err != nil {
+				return err
+			}
+		}
+		for slice := range slices.Chunk(withoutUsername, contactBatchSize) {
+			query, vars := putContactNamesWithoutUsernameMassInsertBuilder.Build([1]any{s.JID}, slice)
+			if _, err := s.db.Exec(ctx, query, vars...); err != nil {
 				return err
 			}
 		}

@@ -861,10 +861,11 @@ func historicalInlineContactEntries(contacts []*waHistorySync.InlineContact) ([]
 			continue
 		}
 		entries = append(entries, store.ContactEntry{
-			JID:       jid,
-			FirstName: contact.GetFirstName(),
-			FullName:  contact.GetFullName(),
-			Username:  contact.GetUsername(),
+			JID:         jid,
+			FirstName:   contact.GetFirstName(),
+			FullName:    contact.GetFullName(),
+			Username:    contact.GetUsername(),
+			UsernameSet: true,
 		})
 	}
 	return entries, mappings
