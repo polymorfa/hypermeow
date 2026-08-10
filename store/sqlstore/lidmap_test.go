@@ -12,7 +12,10 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-type emptyLIDMapDB struct{ queries int }
+type emptyLIDMapDB struct {
+	queries int
+	maxArgs int
+}
 
 type emptyLIDMapConnector struct{ state *emptyLIDMapDB }
 
@@ -30,8 +33,9 @@ func (*emptyLIDMapConn) Prepare(string) (driver.Stmt, error) {
 
 func (*emptyLIDMapConn) Close() error              { return nil }
 func (*emptyLIDMapConn) Begin() (driver.Tx, error) { return nil, errors.New("unexpected transaction") }
-func (conn *emptyLIDMapConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+func (conn *emptyLIDMapConn) QueryContext(_ context.Context, _ string, args []driver.NamedValue) (driver.Rows, error) {
 	conn.state.queries++
+	conn.state.maxArgs = max(conn.state.maxArgs, len(args))
 	return emptyLIDMapRows{}, nil
 }
 
@@ -103,5 +107,26 @@ func TestGetManyPNsForLIDsCachesMissingMappings(t *testing.T) {
 	}
 	if state.queries != 1 {
 		t.Fatalf("missing mapping queried %d times, want 1", state.queries)
+	}
+}
+
+func TestGetManyPNsForLIDsChunksFallbackQueries(t *testing.T) {
+	state := &emptyLIDMapDB{}
+	db := sql.OpenDB(&emptyLIDMapConnector{state: state})
+	t.Cleanup(func() { _ = db.Close() })
+	cache := NewWithDB(db, "sqlite3", nil).LIDMap
+	lids := make([]types.JID, lidQueryBatchSize*2+1)
+	for i := range lids {
+		lids[i] = types.NewJID(fmt.Sprintf("%d", 100000000000000+i), types.HiddenUserServer)
+	}
+
+	if _, err := cache.GetManyPNsForLIDs(context.Background(), lids); err != nil {
+		t.Fatal(err)
+	}
+	if state.queries != 3 {
+		t.Fatalf("fallback issued %d queries, want 3", state.queries)
+	}
+	if state.maxArgs > lidQueryBatchSize {
+		t.Fatalf("fallback query used %d arguments, limit %d", state.maxArgs, lidQueryBatchSize)
 	}
 }

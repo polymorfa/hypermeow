@@ -296,43 +296,51 @@ func (s *CachedLIDMap) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) 
 		return result, nil
 	}
 
-	var res dbutil.RowIter[store.LIDMapping]
+	found := make(map[string]struct{}, len(missingLIDs))
+	scanResults := func(res dbutil.RowIter[store.LIDMapping]) error {
+		_, err := s.scanManyLids(res, func(lid, pn string) {
+			found[lid] = struct{}{}
+			for _, dev := range missingLIDDevices[lid] {
+				pnDev := dev
+				pnDev.Server = types.DefaultUserServer
+				pnDev.User = pn
+				result[dev] = pnDev
+			}
+		})
+		return err
+	}
 	if wrapped, ok := wrapPostgresArray(s.db, missingLIDs); ok {
-		res = convertLIDRow.NewRowIter(s.db.Query(
+		if err := scanResults(convertLIDRow.NewRowIter(s.db.Query(
 			ctx,
 			`SELECT lid, pn FROM whatsmeow_lid_map WHERE lid = ANY($1)`,
 			wrapped,
-		))
+		))); err != nil {
+			return result, err
+		}
 	} else {
-		placeholders := make([]string, len(missingLIDs))
-		for i := range missingLIDs {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-		}
-		res = convertLIDRow.NewRowIter(s.db.Query(
-			ctx,
-			fmt.Sprintf(`SELECT lid, pn FROM whatsmeow_lid_map WHERE lid IN (%s)`, strings.Join(placeholders, ",")),
-			exslices.CastToAny(missingLIDs)...,
-		))
-	}
-	found := make(map[string]struct{}, len(missingLIDs))
-	_, err := s.scanManyLids(res, func(lid, pn string) {
-		found[lid] = struct{}{}
-		for _, dev := range missingLIDDevices[lid] {
-			pnDev := dev
-			pnDev.Server = types.DefaultUserServer
-			pnDev.User = pn
-			result[dev] = pnDev
-		}
-	})
-	if err == nil {
-		for _, lid := range missingLIDs {
-			if _, ok := found[lid]; !ok {
-				s.cacheMissLocked(s.lidToPNCache, s.pnToLIDCache, lid)
+		for lids := range slices.Chunk(missingLIDs, lidQueryBatchSize) {
+			placeholders := make([]string, len(lids))
+			for i := range lids {
+				placeholders[i] = fmt.Sprintf("$%d", i+1)
+			}
+			if err := scanResults(convertLIDRow.NewRowIter(s.db.Query(
+				ctx,
+				fmt.Sprintf(`SELECT lid, pn FROM whatsmeow_lid_map WHERE lid IN (%s)`, strings.Join(placeholders, ",")),
+				exslices.CastToAny(lids)...,
+			))); err != nil {
+				return result, err
 			}
 		}
 	}
-	return result, err
+	for _, lid := range missingLIDs {
+		if _, ok := found[lid]; !ok {
+			s.cacheMissLocked(s.lidToPNCache, s.pnToLIDCache, lid)
+		}
+	}
+	return result, nil
 }
+
+const lidQueryBatchSize = 300
 
 func (s *CachedLIDMap) PutLIDMapping(ctx context.Context, lid, pn types.JID) error {
 	if lid.Server != types.HiddenUserServer || pn.Server != types.DefaultUserServer {
