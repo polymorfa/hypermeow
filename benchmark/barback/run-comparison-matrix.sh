@@ -16,6 +16,24 @@ candidate_ref=${CANDIDATE_REF:-HEAD}
 whatsmeow_sha=$(git -C "$repo_dir" rev-parse "$whatsmeow_ref^{commit}")
 pre_pr3_sha=$(git -C "$repo_dir" rev-parse "$pre_pr3_ref^{commit}")
 candidate_sha=$(git -C "$repo_dir" rev-parse "$candidate_ref^{commit}")
+candidate_build_tags=${CANDIDATE_BUILD_TAGS-}
+if [[ ! -v CANDIDATE_BUILD_TAGS ]]; then
+	required_candidate_symbols=(
+		'func (cli *Client) GetCatalog('
+		'func (cli *Client) GetCatalogProduct('
+		'func (cli *Client) GetCatalogProducts('
+		'func (cli *Client) GetProductCollection('
+		'func (cli *Client) GetProductCollections('
+		'func (cli *Client) GetOrderDetails('
+		'func (cli *Client) GetIdentityVerificationCodes('
+	)
+	for symbol in "${required_candidate_symbols[@]}"; do
+		if ! git -C "$repo_dir" grep -Fq "$symbol" "$candidate_sha" -- '*.go'; then
+			candidate_build_tags=benchmark_legacy
+			break
+		fi
+	done
+fi
 repeats=${BENCH_REPEATS:-1}
 repeat_start=${BENCH_REPEAT_START:-1}
 if ! [[ $repeats =~ ^[1-9][0-9]*$ ]]; then
@@ -45,6 +63,8 @@ run_revision() {
 	local build_tags=
 	if [[ $name != hypermeow ]]; then
 		build_tags=benchmark_legacy
+	else
+		build_tags=$candidate_build_tags
 	fi
 	if ((repeats > 1)); then
 		variant="${name}-r${repeat}"

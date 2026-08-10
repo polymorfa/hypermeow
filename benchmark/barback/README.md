@@ -53,7 +53,7 @@ BENCH_REPEATS=3 ./run-comparison-matrix.sh
 
 Resume an interrupted repeated matrix with `BENCH_REPEAT_START`, keeping `BENCH_REPEATS` set to the final repeat number.
 
-Set `CANDIDATE_REF` to benchmark a frozen candidate while using newer harness code. All three libraries are exported to temporary immutable contexts before the matrix starts.
+Set `CANDIDATE_REF` to benchmark a frozen candidate while using newer harness code. The comparison driver selects the legacy build mode when that revision lacks APIs imported by newer smoke checks. Set `CANDIDATE_BUILD_TAGS` explicitly to override this detection for a custom library. All three libraries are exported to temporary immutable contexts before the matrix starts.
 
 The archived upstream baseline receives only `patches/barback-socket-config.patch`, the same URL, Origin, and Noise certificate-authority injection already present before PR #3. The patch is required to connect upstream WhatsMeow to Barback and contains no runtime optimization.
 
