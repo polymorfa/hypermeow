@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -80,6 +81,20 @@ func TestBuildSharedMassInsertQuery(t *testing.T) {
 	want := "INSERT VALUES ($1,$2,$3),($1,$4,$5) ON CONFLICT"
 	if query != want {
 		t.Fatalf("unexpected query:\n%s\nwant:\n%s", query, want)
+	}
+}
+
+func TestBulkContactNamesPreserveMissingUsername(t *testing.T) {
+	withUsername, withoutUsername := splitContactNameEntries([]store.ContactEntry{
+		{JID: types.NewJID("100", types.HiddenUserServer)},
+		{JID: types.NewJID("101", types.HiddenUserServer), Username: "named"},
+		{JID: types.NewJID("102", types.HiddenUserServer), UsernameSet: true},
+	})
+	if len(withoutUsername) != 1 || withoutUsername[0].JID.User != "100" {
+		t.Fatalf("name-only contacts = %#v", withoutUsername)
+	}
+	if len(withUsername) != 2 || withUsername[0].Username != "named" || !withUsername[1].UsernameSet || withUsername[1].Username != "" {
+		t.Fatalf("username-aware contacts = %#v", withUsername)
 	}
 }
 

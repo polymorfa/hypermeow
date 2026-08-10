@@ -22,7 +22,7 @@ var (
 )
 
 func sensitiveXMLAttribute(key string) bool {
-	return key == "auth" || key == "token"
+	return key == "auth" || key == "pin" || key == "token"
 }
 
 func sensitiveXMLNodeContent(tag string) bool {

@@ -223,13 +223,25 @@ func (cli *Client) filterContacts(mutations []appstate.Mutation) ([]appstate.Mut
 	filteredMutations := mutations[:0]
 	contacts := make([]store.ContactEntry, 0, len(mutations))
 	for _, mutation := range mutations {
-		if mutation.Index[0] == "contact" && len(mutation.Index) > 1 {
+		if len(mutation.Index) > 1 && mutation.Index[0] == appstate.IndexContact {
 			jid, _ := types.ParseJID(mutation.Index[1])
 			act := mutation.Action.GetContactAction()
 			contacts = append(contacts, store.ContactEntry{
-				JID:       jid,
-				FirstName: act.GetFirstName(),
-				FullName:  act.GetFullName(),
+				JID:         jid,
+				FirstName:   act.GetFirstName(),
+				FullName:    act.GetFullName(),
+				Username:    act.GetUsername(),
+				UsernameSet: true,
+			})
+		} else if len(mutation.Index) > 1 && mutation.Index[0] == appstate.IndexLIDContact {
+			jid, _ := types.ParseJID(mutation.Index[1])
+			act := mutation.Action.GetLidContactAction()
+			contacts = append(contacts, store.ContactEntry{
+				JID:         jid,
+				FirstName:   act.GetFirstName(),
+				FullName:    act.GetFullName(),
+				Username:    act.GetUsername(),
+				UsernameSet: true,
 			})
 		} else {
 			filteredMutations = append(filteredMutations, mutation)
@@ -313,6 +325,18 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		eventToDispatch = &events.Contact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
 		if cli.Store.Contacts != nil {
 			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
+			if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && storeUpdateError == nil {
+				storeUpdateError = usernameStore.PutContactUsername(ctx, jid, act.GetUsername())
+			}
+		}
+	case appstate.IndexLIDContact:
+		act := mutation.Action.GetLidContactAction()
+		eventToDispatch = &events.LIDContact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
+		if cli.Store.Contacts != nil {
+			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
+			if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && storeUpdateError == nil {
+				storeUpdateError = usernameStore.PutContactUsername(ctx, jid, act.GetUsername())
+			}
 		}
 	case appstate.IndexClearChat:
 		act := mutation.Action.GetClearChatAction()

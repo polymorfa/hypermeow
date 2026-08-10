@@ -38,12 +38,12 @@ func TestNodeStringRedactsSensitiveContent(t *testing.T) {
 func TestNodeStringRedactsSensitiveAttributes(t *testing.T) {
 	logged := (Node{
 		Tag:   "cover_photo",
-		Attrs: Attrs{"auth": "media-secret", "token": "upload-secret", "id": "cover-100"},
+		Attrs: Attrs{"auth": "media-secret", "pin": "1234", "token": "upload-secret", "id": "cover-100"},
 	}).String()
-	if strings.Contains(logged, "media-secret") || strings.Contains(logged, "upload-secret") {
+	if strings.Contains(logged, "media-secret") || strings.Contains(logged, "1234") || strings.Contains(logged, "upload-secret") {
 		t.Fatalf("sensitive attributes were not redacted: %s", logged)
 	}
-	if !strings.Contains(logged, `id="cover-100"`) || strings.Count(logged, "[redacted]") != 2 {
+	if !strings.Contains(logged, `id="cover-100"`) || strings.Count(logged, "[redacted]") != 3 {
 		t.Fatalf("unexpected redacted node: %s", logged)
 	}
 }

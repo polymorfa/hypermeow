@@ -151,6 +151,7 @@ var DeviceProps = &waCompanionReg.DeviceProps{
 		InitialSyncMaxMessagesPerChat:            nil,
 		SupportManusHistory:                      proto.Bool(true),
 		SupportHatchHistory:                      proto.Bool(true),
+		SupportInlineContacts:                    proto.Bool(true),
 	},
 	PlatformType:    waCompanionReg.DeviceProps_UNKNOWN.Enum(),
 	RequireFullSync: proto.Bool(false),

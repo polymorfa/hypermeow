@@ -855,6 +855,18 @@ const (
 		INSERT INTO whatsmeow_contacts (our_jid, their_jid, first_name, full_name) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name
 	`
+	putContactNamesQuery = `
+		INSERT INTO whatsmeow_contacts (our_jid, their_jid, first_name, full_name, username) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name, username=excluded.username
+	`
+	putContactNamesWithoutUsernameQuery = `
+		INSERT INTO whatsmeow_contacts (our_jid, their_jid, first_name, full_name) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name
+	`
+	putContactUsernameQuery = `
+		INSERT INTO whatsmeow_contacts (our_jid, their_jid, username) VALUES ($1, $2, $3)
+		ON CONFLICT (our_jid, their_jid) DO UPDATE SET username=excluded.username
+	`
 	putRedactedPhoneQuery = `
 		INSERT INTO whatsmeow_contacts (our_jid, their_jid, redacted_phone)
 		VALUES ($1, $2, $3)
@@ -869,16 +881,39 @@ const (
 		ON CONFLICT (our_jid, their_jid) DO UPDATE SET business_name=excluded.business_name
 	`
 	getContactQuery = `
-		SELECT first_name, full_name, push_name, business_name, redacted_phone FROM whatsmeow_contacts WHERE our_jid=$1 AND their_jid=$2
+		SELECT first_name, full_name, push_name, business_name, redacted_phone, username FROM whatsmeow_contacts WHERE our_jid=$1 AND their_jid=$2
 	`
 	getAllContactsQuery = `
-		SELECT their_jid, first_name, full_name, push_name, business_name, redacted_phone FROM whatsmeow_contacts WHERE our_jid=$1
+		SELECT their_jid, first_name, full_name, push_name, business_name, redacted_phone, username FROM whatsmeow_contacts WHERE our_jid=$1
 	`
 )
 
 var putContactNamesMassInsertBuilder = dbutil.NewMassInsertBuilder[store.ContactEntry, [1]any](
-	putContactNameQuery, "($1, $%d, $%d, $%d)",
+	putContactNamesQuery, "($1, $%d, $%d, $%d, $%d)",
 )
+
+type contactNameEntryWithoutUsername store.ContactEntry
+
+func (entry contactNameEntryWithoutUsername) GetMassInsertValues() [3]any {
+	return [...]any{entry.JID.String(), entry.FirstName, entry.FullName}
+}
+
+var putContactNamesWithoutUsernameMassInsertBuilder = dbutil.NewMassInsertBuilder[contactNameEntryWithoutUsername, [1]any](
+	putContactNamesWithoutUsernameQuery, "($1, $%d, $%d, $%d)",
+)
+
+func splitContactNameEntries(contacts []store.ContactEntry) ([]store.ContactEntry, []contactNameEntryWithoutUsername) {
+	withUsername := make([]store.ContactEntry, 0, len(contacts))
+	withoutUsername := make([]contactNameEntryWithoutUsername, 0, len(contacts))
+	for _, contact := range contacts {
+		if contact.UsernameSet || contact.Username != "" {
+			withUsername = append(withUsername, contact)
+		} else {
+			withoutUsername = append(withoutUsername, contactNameEntryWithoutUsername(contact))
+		}
+	}
+	return withUsername, withoutUsername
+}
 
 var putRedactedPhonesMassInsertBuilder = dbutil.NewMassInsertBuilder[store.RedactedPhoneEntry, [1]any](
 	putRedactedPhoneQuery, "($1, $%d, $%d)",
@@ -946,6 +981,24 @@ func (s *SQLStore) PutContactName(ctx context.Context, user types.JID, firstName
 	return nil
 }
 
+func (s *SQLStore) PutContactUsername(ctx context.Context, user types.JID, username string) error {
+	s.contactCacheLock.Lock()
+	defer s.contactCacheLock.Unlock()
+
+	cached, err := s.getContact(ctx, user)
+	if err != nil {
+		return err
+	}
+	if cached.Username != username {
+		if _, err = s.db.Exec(ctx, putContactUsernameQuery, s.JID, user, username); err != nil {
+			return err
+		}
+		cached.Username = username
+		cached.Found = true
+	}
+	return nil
+}
+
 const contactBatchSize = 300
 
 func (s *SQLStore) PutAllContactNames(ctx context.Context, contacts []store.ContactEntry) error {
@@ -959,11 +1012,18 @@ func (s *SQLStore) PutAllContactNames(ctx context.Context, contacts []store.Cont
 	if origLen != len(contacts) {
 		s.log.Warnf("%d duplicate contacts found in PutAllContactNames", origLen-len(contacts))
 	}
+	withUsername, withoutUsername := splitContactNameEntries(contacts)
 	err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
-		for slice := range slices.Chunk(contacts, contactBatchSize) {
+		for slice := range slices.Chunk(withUsername, contactBatchSize) {
 			query, vars := putContactNamesMassInsertBuilder.Build([1]any{s.JID}, slice)
 			_, err := s.db.Exec(ctx, query, vars...)
 			if err != nil {
+				return err
+			}
+		}
+		for slice := range slices.Chunk(withoutUsername, contactBatchSize) {
+			query, vars := putContactNamesWithoutUsernameMassInsertBuilder.Build([1]any{s.JID}, slice)
+			if _, err := s.db.Exec(ctx, query, vars...); err != nil {
 				return err
 			}
 		}
@@ -1020,8 +1080,8 @@ func (s *SQLStore) getContact(ctx context.Context, user types.JID) (*types.Conta
 		return cached, nil
 	}
 
-	var first, full, push, business, redactedPhone sql.NullString
-	err := s.db.QueryRow(ctx, getContactQuery, s.JID, user).Scan(&first, &full, &push, &business, &redactedPhone)
+	var first, full, push, business, redactedPhone, username sql.NullString
+	err := s.db.QueryRow(ctx, getContactQuery, s.JID, user).Scan(&first, &full, &push, &business, &redactedPhone, &username)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -1032,6 +1092,7 @@ func (s *SQLStore) getContact(ctx context.Context, user types.JID) (*types.Conta
 		PushName:      push.String,
 		BusinessName:  business.String,
 		RedactedPhone: redactedPhone.String,
+		Username:      username.String,
 	}
 	s.setCachedContactLocked(user, info)
 	return info, nil
@@ -1054,8 +1115,8 @@ type contactTuple struct {
 
 var convertContactRow = dbutil.ConvertRowFn[*contactTuple](func(rows dbutil.Scannable) (*contactTuple, error) {
 	var jid types.JID
-	var first, full, push, business, redactedPhone sql.NullString
-	err := rows.Scan(&jid, &first, &full, &push, &business, &redactedPhone)
+	var first, full, push, business, redactedPhone, username sql.NullString
+	err := rows.Scan(&jid, &first, &full, &push, &business, &redactedPhone, &username)
 	if err != nil {
 		return nil, fmt.Errorf("error scanning row: %w", err)
 	}
@@ -1068,6 +1129,7 @@ var convertContactRow = dbutil.ConvertRowFn[*contactTuple](func(rows dbutil.Scan
 			PushName:      push.String,
 			BusinessName:  business.String,
 			RedactedPhone: redactedPhone.String,
+			Username:      username.String,
 		},
 	}, nil
 })
