@@ -651,6 +651,11 @@ func (cli *Client) decryptGroupMsg(ctx context.Context, child *waBinary.Node, fr
 
 const checkPadding = true
 
+type historySyncNotification struct {
+	messageID    types.MessageID
+	notification *waE2E.HistorySyncNotification
+}
+
 func isValidPadding(plaintext []byte) bool {
 	lastByte := plaintext[len(plaintext)-1]
 	expectedPadding := bytes.Repeat([]byte{lastByte}, int(lastByte))
@@ -713,15 +718,17 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 	ctx := cli.BackgroundEventCtx
 	for {
 		select {
-		case notif := <-cli.historySyncNotifications:
-			blob, err := cli.DownloadHistorySync(ctx, notif, false)
+		case queued := <-cli.historySyncNotifications:
+			blob, err := cli.DownloadHistorySync(ctx, queued.notification, false)
 			if err != nil {
 				cli.Log.Errorf("Failed to download history sync: %v", err)
 			} else {
-				cli.dispatchEvent(&events.HistorySync{Data: blob, Notification: notif})
-				err = cli.DeleteMedia(ctx, MediaHistory, notif.GetDirectPath(), notif.GetFileEncSHA256(), notif.GetEncHandle())
-				if err != nil {
-					cli.Log.Warnf("Failed to delete history sync media from server: %v", err)
+				cli.dispatchEvent(&events.HistorySync{Data: blob, Notification: queued.notification, MessageID: queued.messageID})
+				if cli.shouldDeleteHistorySyncMedia() {
+					err = cli.DeleteMedia(ctx, MediaHistory, queued.notification.GetDirectPath(), queued.notification.GetFileEncSHA256(), queued.notification.GetEncHandle())
+					if err != nil {
+						cli.Log.Warnf("Failed to delete history sync media from server: %v", err)
+					}
 				}
 			}
 		case <-time.After(1 * time.Minute):
@@ -783,7 +790,22 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 	cli.Log.Debugf("Received history sync (type %s, chunk %d, progress %d)", historySync.GetSyncType(), historySync.GetChunkOrder(), historySync.GetProgress())
+	storageCtx := ctx
+	if !synchronousStorage {
+		storageCtx = context.WithoutCancel(ctx)
+	}
+	nonceChanged := false
+	if historySync.CompanionMetaNonce != nil && cli.shouldStoreHistorySyncNonce() {
+		nonceChanged = cli.updateCompanionMetaNonce(historySync.GetCompanionMetaNonce())
+	}
+	storeHistorySync := cli.shouldStoreHistorySync()
 	doStorage := func(ctx context.Context) {
+		if nonceChanged {
+			cli.persistCompanionMetaNonce(ctx)
+		}
+		if !storeHistorySync {
+			return
+		}
 		if err := cli.storeNCTSalt(ctx, historySync.GetNctSalt()); err != nil {
 			cli.Log.Warnf("Failed to store NCT salt from history sync: %v", err)
 		}
@@ -798,14 +820,13 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		if historySync.GlobalSettings != nil {
 			cli.storeGlobalSettings(ctx, historySync.GlobalSettings)
 		}
-		if historySync.CompanionMetaNonce != nil {
-			cli.storeCompanionMetaNonce(ctx, historySync.GetCompanionMetaNonce())
-		}
 	}
-	if synchronousStorage {
-		doStorage(ctx)
+	if !storeHistorySync && !nonceChanged {
+		return &historySync, nil
+	} else if synchronousStorage {
+		doStorage(storageCtx)
 	} else {
-		go doStorage(context.WithoutCancel(ctx))
+		go doStorage(storageCtx)
 	}
 	return &historySync, nil
 }
@@ -877,12 +898,12 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 
 	if protoMsg.GetHistorySyncNotification() != nil {
 		if !cli.ManualHistorySyncDownload {
-			cli.historySyncNotifications <- protoMsg.HistorySyncNotification
+			cli.historySyncNotifications <- historySyncNotification{messageID: info.ID, notification: protoMsg.HistorySyncNotification}
 			if cli.historySyncHandlerStarted.CompareAndSwap(false, true) {
 				go cli.handleHistorySyncNotificationLoop()
 			}
 		}
-		if !(cli.ManualHistorySyncDownload && cli.DisableManualHistorySyncReceipt) {
+		if cli.shouldSendHistorySyncReceipt() {
 			go func() {
 				err := cli.SendProtocolMessageReceipt(ctx, info.ID, types.ReceiptTypeHistorySync)
 				if err != nil {
@@ -919,6 +940,22 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		}()
 	}
 	return
+}
+
+func (cli *Client) shouldSendHistorySyncReceipt() bool {
+	return !cli.DisableHistorySyncReceipt && !(cli.ManualHistorySyncDownload && cli.DisableManualHistorySyncReceipt)
+}
+
+func (cli *Client) shouldStoreHistorySync() bool {
+	return !cli.DisableHistorySyncStorage
+}
+
+func (cli *Client) shouldDeleteHistorySyncMedia() bool {
+	return !cli.DisableHistorySyncMediaDelete
+}
+
+func (cli *Client) shouldStoreHistorySyncNonce() bool {
+	return cli.shouldStoreHistorySync() || cli.shouldDeleteHistorySyncMedia()
 }
 
 func (cli *Client) processProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
@@ -1089,18 +1126,36 @@ func (cli *Client) storeGlobalSettings(ctx context.Context, settings *waHistoryS
 	}
 }
 
-func (cli *Client) storeCompanionMetaNonce(ctx context.Context, nonce string) {
-	if nonce != "" && nonce != cli.Store.CompanionMetaNonce {
-		cli.Store.CompanionMetaNonce = nonce
-		err := cli.Store.Save(ctx)
-		if err != nil {
-			zerolog.Ctx(ctx).Err(err).
-				Msg("Failed to save companion meta nonce")
-		} else {
-			zerolog.Ctx(ctx).Debug().
-				Msg("Saved companion meta nonce")
-		}
+func (cli *Client) updateCompanionMetaNonce(nonce string) bool {
+	if nonce == "" || nonce == cli.currentCompanionMetaNonce() {
+		return false
 	}
+	cli.historySyncNonce.Store(&nonce)
+	return true
+}
+
+func (cli *Client) persistCompanionMetaNonce(ctx context.Context) {
+	cli.historySyncNonceSaveLock.Lock()
+	defer cli.historySyncNonceSaveLock.Unlock()
+	nonce := cli.currentCompanionMetaNonce()
+	if nonce == "" || nonce == cli.Store.CompanionMetaNonce {
+		return
+	}
+	cli.Store.CompanionMetaNonce = nonce
+	if err := cli.Store.Save(ctx); err != nil {
+		zerolog.Ctx(ctx).Err(err).
+			Msg("Failed to save companion meta nonce")
+	} else {
+		zerolog.Ctx(ctx).Debug().
+			Msg("Saved companion meta nonce")
+	}
+}
+
+func (cli *Client) currentCompanionMetaNonce() string {
+	if nonce := cli.historySyncNonce.Load(); nonce != nil {
+		return *nonce
+	}
+	return cli.Store.CompanionMetaNonce
 }
 
 func (cli *Client) storeHistoricalPNLIDMappings(ctx context.Context, mappings []*waHistorySync.PhoneNumberToLIDMapping) {

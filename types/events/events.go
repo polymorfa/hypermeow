@@ -271,6 +271,7 @@ type HistorySync struct {
 	Data *waHistorySync.HistorySync
 
 	Notification *waE2E.HistorySyncNotification
+	MessageID    types.MessageID
 }
 
 type DecryptFailMode string
