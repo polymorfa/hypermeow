@@ -5,56 +5,45 @@ import (
 	"testing"
 )
 
-func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
-	node := Node{
-		Tag:   "business_profile",
-		Attrs: Attrs{"auth": "media-secret", "token": "upload-secret"},
-		Content: []Node{
-			{Tag: "access_token", Content: []byte("catalog-token")},
-			{Tag: "session_cookies", Content: []byte("catalog-cookie")},
-			{Tag: "wa_ad_account_nonce", Content: []byte("catalog-nonce")},
-			{Tag: "code", Content: []byte("exchange-code")},
-			{Tag: "address", Content: []byte("12 Private Street")},
-			{Tag: "email", Content: []byte("owner@example.test")},
-			{Tag: "description", Content: []byte("Private description")},
-			{Tag: "website", Content: []byte("https://private.example.test")},
-			{Tag: "address", Content: "34 Private Street"},
-			{Tag: "email", Content: "other@example.test"},
-			{Tag: "description", Content: "Other private description"},
-			{Tag: "website", Content: "https://other-private.example.test"},
-			{Tag: "access_token", Content: "other-catalog-token"},
-			{Tag: "session_cookies", Content: "other-catalog-cookie"},
-			{Tag: "wa_ad_account_nonce", Content: "other-catalog-nonce"},
-			{Tag: "code", Content: "other-exchange-code"},
-		},
-	}
-
-	logged := node.String()
-	for _, sensitive := range []string{
-		"media-secret",
-		"upload-secret",
-		"catalog-token",
-		"catalog-cookie",
-		"catalog-nonce",
-		"exchange-code",
-		"12 Private Street",
-		"owner@example.test",
-		"Private description",
-		"https://private.example.test",
-		"34 Private Street",
-		"other@example.test",
-		"Other private description",
-		"https://other-private.example.test",
-		"other-catalog-token",
-		"other-catalog-cookie",
-		"other-catalog-nonce",
-		"other-exchange-code",
+func TestNodeStringRedactsSensitiveContent(t *testing.T) {
+	for _, tag := range []string{
+		"access_token",
+		"address",
+		"code",
+		"description",
+		"email",
+		"session_cookies",
+		"token",
+		"wa_ad_account_nonce",
+		"website",
 	} {
-		if strings.Contains(logged, sensitive) {
-			t.Fatalf("logged sensitive value %q: %s", sensitive, logged)
+		for _, contentType := range []struct {
+			name  string
+			value func(string) any
+		}{
+			{name: "bytes", value: func(secret string) any { return []byte(secret) }},
+			{name: "string", value: func(secret string) any { return secret }},
+		} {
+			t.Run(tag+"/"+contentType.name, func(t *testing.T) {
+				secret := "private-" + tag
+				logged := (Node{Tag: tag, Content: contentType.value(secret)}).String()
+				if strings.Contains(logged, secret) || !strings.Contains(logged, "[redacted]") {
+					t.Fatalf("sensitive content was not redacted: %s", logged)
+				}
+			})
 		}
 	}
-	if strings.Count(logged, "[redacted]") != 18 {
+}
+
+func TestNodeStringRedactsSensitiveAttributes(t *testing.T) {
+	logged := (Node{
+		Tag:   "cover_photo",
+		Attrs: Attrs{"auth": "media-secret", "token": "upload-secret", "id": "cover-100"},
+	}).String()
+	if strings.Contains(logged, "media-secret") || strings.Contains(logged, "upload-secret") {
+		t.Fatalf("sensitive attributes were not redacted: %s", logged)
+	}
+	if !strings.Contains(logged, `id="cover-100"`) || strings.Count(logged, "[redacted]") != 2 {
 		t.Fatalf("unexpected redacted node: %s", logged)
 	}
 }
