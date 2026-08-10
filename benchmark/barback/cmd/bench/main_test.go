@@ -12,7 +12,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -193,11 +192,11 @@ func TestJobShardDistributesChats(t *testing.T) {
 }
 
 func TestContainsPhoneNumberConsentCaptures(t *testing.T) {
-	requestPayload, err := proto.Marshal(whatsmeow.BuildRequestPhoneNumberMessage(nil))
+	requestPayload, err := proto.Marshal(buildRequestPhoneNumberMessage())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sharePayload, err := proto.Marshal(whatsmeow.BuildSharePhoneNumberMessage())
+	sharePayload, err := proto.Marshal(buildSharePhoneNumberMessage())
 	if err != nil {
 		t.Fatal(err)
 	}

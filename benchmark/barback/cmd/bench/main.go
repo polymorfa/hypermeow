@@ -675,14 +675,23 @@ func containsPhoneNumberConsentCaptures(captures []capturedMessage) bool {
 	return requestFound && shareFound
 }
 
+func buildRequestPhoneNumberMessage() *waE2E.Message {
+	return &waE2E.Message{RequestPhoneNumberMessage: &waE2E.RequestPhoneNumberMessage{}}
+}
+
+func buildSharePhoneNumberMessage() *waE2E.Message {
+	messageType := waE2E.ProtocolMessage_SHARE_PHONE_NUMBER
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: &messageType}}
+}
+
 func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsmeow.Client, chat types.JID) error {
 	if chat.Server != types.HiddenUserServer {
 		return fmt.Errorf("synthetic phone consent target is not a LID")
 	}
-	if _, err := client.SendMessage(ctx, chat, whatsmeow.BuildRequestPhoneNumberMessage(nil)); err != nil {
+	if _, err := client.SendMessage(ctx, chat, buildRequestPhoneNumberMessage()); err != nil {
 		return fmt.Errorf("send request phone number message: %w", err)
 	}
-	if _, err := client.SendMessage(ctx, chat, whatsmeow.BuildSharePhoneNumberMessage()); err != nil {
+	if _, err := client.SendMessage(ctx, chat, buildSharePhoneNumberMessage()); err != nil {
 		return fmt.Errorf("send share phone number message: %w", err)
 	}
 
