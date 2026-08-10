@@ -125,6 +125,7 @@ type Client struct {
 	// EmitAppStateEventsOnFullSync can be set to true if you want to get app state events emitted
 	// even when re-syncing the whole state.
 	EmitAppStateEventsOnFullSync bool
+	EmitLabelEventsOnFullSync    bool
 	AppStateDebugLogs            bool
 
 	AutomaticMessageRerequestFromPhone bool
