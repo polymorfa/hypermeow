@@ -624,13 +624,14 @@ func (cli *Client) GetLinkedGroupsParticipants(ctx context.Context, community ty
 	if !ok {
 		return nil, &ElementMissingError{Tag: "linked_groups_participants", In: "response to community participants query"}
 	}
-	members, lidPairs, _ := parseParticipantList(&participants)
+	members, lidPairs, usernames := parseParticipantList(&participants)
 	if len(lidPairs) > 0 {
 		err = cli.Store.LIDs.PutManyLIDMappings(ctx, lidPairs)
 		if err != nil {
 			cli.Log.Warnf("Failed to store LID mappings for community participants: %v", err)
 		}
 	}
+	cli.storeContactUsernamesBestEffort(ctx, usernames)
 	return members, nil
 }
 
