@@ -4,6 +4,7 @@ set -euo pipefail
 benchmark_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$benchmark_dir/../.." && pwd)
 temp_dir=$(mktemp -d)
+. "$benchmark_dir/comparison-matrix-env.sh"
 
 cleanup() {
 	rm -rf -- "$temp_dir"
@@ -71,10 +72,15 @@ run_revision() {
 	else
 		build_tags=$candidate_build_tags
 	fi
+	local security_code_smoke
+	security_code_smoke=$(comparison_security_code_smoke "$name" "$build_tags" "${BENCH_SECURITY_CODE_SMOKE:-false}")
 	if ((repeats > 1)); then
 		variant="${name}-r${repeat}"
 	fi
-	LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="$variant" BENCH_BUILD_TAGS="$build_tags" ./run-system-matrix.sh "$scenario"
+	if [[ $security_code_smoke == true ]]; then
+		LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="${variant}-security-smoke" BENCH_BUILD_TAGS="$build_tags" BENCH_SECURITY_CODE_SMOKE=true BENCH_SMOKE_ONLY=true MEM_PROFILE_SCENARIO= ./run-system-matrix.sh "$scenario"
+	fi
+	LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="$variant" BENCH_BUILD_TAGS="$build_tags" BENCH_SECURITY_CODE_SMOKE=false BENCH_SMOKE_ONLY=false ./run-system-matrix.sh "$scenario"
 }
 
 for ((repeat = repeat_start; repeat <= repeats; repeat++)); do

@@ -364,7 +364,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		if info.SenderAlt.Server == types.HiddenUserServer {
 			senderEncryptionJID = info.SenderAlt
 			cli.migrateSessionStore(ctx, info.Sender, info.SenderAlt)
-		} else if lid, err := cli.resolveLID(ctx, info.Sender); err != nil {
+		} else if lid, err := cli.ResolveLID(ctx, info.Sender); err != nil {
 			cli.Log.Errorf("Failed to resolve LID for %s: %v", info.Sender, err)
 			if cli.SynchronousAck {
 				cli.sendRetryReceipt(ctx, node, info, false)

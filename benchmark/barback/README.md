@@ -83,3 +83,10 @@ Set `BENCH_PHONE_CONSENT_SMOKE=true BARBACK_CAPTURE_MESSAGES=10` to send a
 request-phone-number message and a share-phone-number protocol message through
 Signal, then verify both decrypted protobufs in Barback's bounded capture
 buffer. This uses only the synthetic browser and fake phone identities.
+
+Set `BENCH_SECURITY_CODE_SMOKE=true` on `run-comparison-matrix.sh` to validate
+LID identity verification codes. The driver runs that check in a separate
+smoke-only stack, removes its PostgreSQL volume, and then starts the measured
+candidate from cold state. Direct Compose runs must also set
+`BENCH_SMOKE_ONLY=true`; combining this validation with a measured workload is
+rejected because it would warm the candidate's device and identity caches.

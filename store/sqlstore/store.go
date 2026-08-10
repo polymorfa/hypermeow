@@ -75,6 +75,7 @@ type SQLStore struct {
 	contactCacheLock  sync.Mutex
 	identityCache     map[string]identityCacheEntry
 	identityCacheLock sync.RWMutex
+	identityDeleteGen uint64
 
 	migratedPNSessionsCache     map[string]struct{}
 	emptyPNMigrationCache       map[string]time.Time
@@ -136,9 +137,15 @@ const (
 		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) VALUES ($1, $2, $3)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity
 	`
-	deleteAllIdentitiesQuery = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2`
-	deleteIdentityQuery      = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
-	getIdentityQuery         = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	ensureIdentityQuery = `
+		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) VALUES ($1, $2, $3)
+		ON CONFLICT (our_jid, their_id) DO NOTHING
+	`
+	deleteAllIdentitiesQuery     = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3`
+	deleteIdentityQuery          = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	getIdentityQuery             = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	getManyIdentityQueryPostgres = `SELECT their_id, identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id = ANY($2)`
+	getManyIdentityQueryGeneric  = `SELECT their_id, identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id IN (%s)`
 )
 
 func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte) error {
@@ -163,11 +170,13 @@ func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte
 func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error {
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
-	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, phone+":%")
+	lower, upper := signalAddressRange(phone)
+	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, lower, upper)
 	if err == nil {
+		s.identityDeleteGen++
 		for address := range s.identityCache {
 			if strings.HasPrefix(address, phone+":") {
-				delete(s.identityCache, address)
+				s.setCachedIdentityLocked(address, identityCacheEntry{})
 			}
 		}
 	}
@@ -179,7 +188,8 @@ func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
 	defer s.identityCacheLock.Unlock()
 	_, err := s.db.Exec(ctx, deleteIdentityQuery, s.JID, address)
 	if err == nil {
-		delete(s.identityCache, address)
+		s.identityDeleteGen++
+		s.setCachedIdentityLocked(address, identityCacheEntry{})
 	}
 	return err
 }
@@ -212,6 +222,143 @@ func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [3
 	return existingKey == key, nil
 }
 
+func (s *SQLStore) EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error) {
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	if deleteGeneration != s.identityDeleteGen {
+		return false, nil
+	}
+	if cached, ok := s.identityCache[address]; ok && cached.Present {
+		return cached.Key == key, nil
+	}
+	if _, err := s.db.Exec(ctx, ensureIdentityQuery, s.JID, address, key[:]); err != nil {
+		return false, err
+	}
+	var existingIdentity []byte
+	if err := s.db.QueryRow(ctx, getIdentityQuery, s.JID, address).Scan(&existingIdentity); err != nil {
+		return false, err
+	}
+	if len(existingIdentity) != 32 {
+		return false, ErrInvalidLength
+	}
+	existingKey := *(*[32]byte)(existingIdentity)
+	s.setCachedIdentityLocked(address, identityCacheEntry{Key: existingKey, Present: true})
+	return existingKey == key, nil
+}
+
+type addressIdentityTuple struct {
+	Address  string
+	Identity []byte
+}
+
+var identityScanner = dbutil.ConvertRowFn[addressIdentityTuple](func(row dbutil.Scannable) (out addressIdentityTuple, err error) {
+	err = row.Scan(&out.Address, &out.Identity)
+	return
+})
+
+func (s *SQLStore) queryManyIdentities(ctx context.Context, addresses []string) (dbutil.Rows, error) {
+	if wrapped, ok := wrapPostgresArray(s.db, addresses); ok {
+		return s.db.Query(ctx, getManyIdentityQueryPostgres, s.JID, wrapped)
+	}
+	args := make([]any, len(addresses)+1)
+	placeholders := make([]string, len(addresses))
+	args[0] = s.JID
+	for i, address := range addresses {
+		args[i+1] = address
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+	}
+	return s.db.Query(ctx, fmt.Sprintf(getManyIdentityQueryGeneric, strings.Join(placeholders, ",")), args...)
+}
+
+func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error) {
+	if len(addresses) == 0 {
+		s.identityCacheLock.RLock()
+		generation := s.identityDeleteGen
+		s.identityCacheLock.RUnlock()
+		return nil, generation, nil
+	}
+	result := make(map[string][32]byte, len(addresses))
+	missing := make([]string, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
+	s.identityCacheLock.RLock()
+	generation := s.identityDeleteGen
+	for _, address := range addresses {
+		if _, duplicate := seen[address]; duplicate {
+			continue
+		}
+		seen[address] = struct{}{}
+		if cached, ok := s.identityCache[address]; ok {
+			if cached.Present {
+				result[address] = cached.Key
+			}
+		} else {
+			missing = append(missing, address)
+		}
+	}
+	s.identityCacheLock.RUnlock()
+	if len(missing) == 0 {
+		return result, generation, nil
+	}
+
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	generation = s.identityDeleteGen
+	stillMissing := missing[:0]
+	for _, address := range missing {
+		if cached, ok := s.identityCache[address]; ok {
+			if cached.Present {
+				result[address] = cached.Key
+			}
+		} else {
+			stillMissing = append(stillMissing, address)
+		}
+	}
+	missing = stillMissing
+	if len(missing) == 0 {
+		return result, generation, nil
+	}
+
+	rows, err := s.queryManyIdentities(ctx, missing)
+	fetched := make(map[string]identityCacheEntry, len(missing))
+	for _, address := range missing {
+		fetched[address] = identityCacheEntry{}
+	}
+	err = identityScanner.NewRowIter(rows, err).Iter(func(tuple addressIdentityTuple) (bool, error) {
+		if len(tuple.Identity) != 32 {
+			return false, ErrInvalidLength
+		}
+		key := *(*[32]byte)(tuple.Identity)
+		fetched[tuple.Address] = identityCacheEntry{Key: key, Present: true}
+		result[tuple.Address] = key
+		return true, nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	s.cacheFetchedIdentitiesLocked(result, fetched)
+	return result, generation, nil
+}
+
+func (s *SQLStore) cacheFetchedIdentities(result map[string][32]byte, fetched map[string]identityCacheEntry) {
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	s.cacheFetchedIdentitiesLocked(result, fetched)
+}
+
+func (s *SQLStore) cacheFetchedIdentitiesLocked(result map[string][32]byte, fetched map[string]identityCacheEntry) {
+	for address, entry := range fetched {
+		if current, ok := s.identityCache[address]; ok {
+			if current.Present {
+				result[address] = current.Key
+			} else {
+				delete(result, address)
+			}
+			continue
+		}
+		s.setCachedIdentityLocked(address, entry)
+	}
+}
+
 const (
 	getSessionQuery             = `SELECT session FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id=$2`
 	hasSessionQuery             = `SELECT true FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id=$2`
@@ -229,7 +376,7 @@ const (
 		FROM UNNEST($2::text[], $3::bytea[]) AS batch(their_id, session)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
 	`
-	deleteAllSessionsQuery = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2`
+	deleteAllSessionsQuery = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3`
 	deleteSessionQuery     = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id=$2`
 
 	migratePNToLIDSessionsQuery = `
@@ -441,8 +588,13 @@ func (s *SQLStore) DeleteAllSessions(ctx context.Context, phone string) error {
 }
 
 func (s *SQLStore) deleteAllSessions(ctx context.Context, phone string) error {
-	_, err := s.db.Exec(ctx, deleteAllSessionsQuery, s.JID, phone+":%")
+	lower, upper := signalAddressRange(phone)
+	_, err := s.db.Exec(ctx, deleteAllSessionsQuery, s.JID, lower, upper)
 	return err
+}
+
+func signalAddressRange(user string) (string, string) {
+	return user + ":", user + ";"
 }
 
 func (s *SQLStore) deleteAllSenderKeys(ctx context.Context, phone string) error {

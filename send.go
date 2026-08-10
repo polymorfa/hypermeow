@@ -337,7 +337,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	} else if to.Server == types.DefaultUserServer && !req.Peer {
 		start := time.Now()
 		var toLID types.JID
-		toLID, err = cli.resolveLID(ctx, to)
+		toLID, err = cli.ResolveLID(ctx, to)
 		if err != nil {
 			err = fmt.Errorf("failed to resolve LID for PN %s: %w", to, err)
 			return

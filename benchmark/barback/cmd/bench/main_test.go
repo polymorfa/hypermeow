@@ -32,6 +32,8 @@ func TestLoadConfigWorkload(t *testing.T) {
 	t.Setenv("HISTORY_MESSAGES", "5")
 	t.Setenv("BENCH_BUSINESS_SMOKE", "1")
 	t.Setenv("BENCH_PHONE_CONSENT_SMOKE", "1")
+	t.Setenv("BENCH_SECURITY_CODE_SMOKE", "1")
+	t.Setenv("BENCH_SMOKE_ONLY", "1")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -51,6 +53,19 @@ func TestLoadConfigWorkload(t *testing.T) {
 	}
 	if !cfg.PhoneConsentSmoke {
 		t.Fatal("phone consent smoke validation was not enabled")
+	}
+	if !cfg.SecurityCodeSmoke {
+		t.Fatal("security code smoke validation was not enabled")
+	}
+	if !cfg.SmokeOnly {
+		t.Fatal("smoke-only mode was not enabled")
+	}
+}
+
+func TestLoadConfigRequiresSecuritySmokeIsolation(t *testing.T) {
+	t.Setenv("BENCH_SECURITY_CODE_SMOKE", "true")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("security code smoke was accepted without smoke-only isolation")
 	}
 }
 
@@ -147,6 +162,9 @@ func TestPhoneConsentFailureIsSharedAcrossWorkers(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("validation calls = %d, want 1", calls.Load())
 	}
+	if r.failed.Load() != 0 {
+		t.Fatalf("security code validation changed workload send failures to %d", r.failed.Load())
+	}
 }
 
 func TestPhoneConsentSmokeRunsBeforeMeasuredMetrics(t *testing.T) {
@@ -160,7 +178,7 @@ func TestPhoneConsentSmokeRunsBeforeMeasuredMetrics(t *testing.T) {
 			t.Fatal("workload metrics started before phone consent validation")
 		}
 		return nil
-	}) {
+	}, nil) {
 		t.Fatal("phone consent validation failed")
 	}
 	r.startOnce.Do(r.startMetrics)
@@ -176,7 +194,7 @@ func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
 		fatalErr:       make(chan error, 1),
 		failureReasons: make(map[string]int64),
 	}
-	if r.beforeBenchmarkMessage(func() error { return errors.New("failed") }) {
+	if r.beforeBenchmarkMessage(func() error { return errors.New("failed") }, nil) {
 		t.Fatal("failed phone consent validation allowed the workload to start")
 	}
 	if r.startedAt.Load() != 0 {
@@ -330,6 +348,86 @@ func TestHandlerUsesRunContextForPhoneConsent(t *testing.T) {
 		}
 	default:
 		t.Fatal("canceled run context was not propagated to phone consent validation")
+	}
+}
+
+func TestOptionalSmokesFinishBeforeMeasuredMetrics(t *testing.T) {
+	r := &runner{
+		cfg: config{
+			PhoneConsentSmoke: true,
+			SecurityCodeSmoke: true,
+		},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	var order []string
+	if !r.beforeBenchmarkMessage(
+		func() error {
+			order = append(order, "phone")
+			return nil
+		},
+		func() error {
+			if r.startedAt.Load() != 0 {
+				t.Fatal("workload metrics started before security code validation")
+			}
+			order = append(order, "security")
+			return nil
+		},
+	) {
+		t.Fatal("preflight validation failed")
+	}
+	if len(order) != 2 || order[0] != "phone" || order[1] != "security" {
+		t.Fatalf("validation order = %v", order)
+	}
+}
+
+func TestSmokeOnlyResultCompletesWithoutMeasuredMessages(t *testing.T) {
+	r := &runner{cfg: config{SecurityCodeSmoke: true, SmokeOnly: true, Total: 100}}
+	r.securityCodeValid.Store(true)
+
+	result := r.snapshot(true)
+	if !result.Completed || result.TargetMessages != 0 || !result.SmokeOnly {
+		t.Fatalf("unexpected smoke-only result: %+v", result)
+	}
+}
+
+func TestSecurityCodeFailureIsSharedAcrossWorkers(t *testing.T) {
+	r := &runner{
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	sentinel := errors.New("security code failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	validate := func() error {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return sentinel
+	}
+
+	var workers sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			errs <- r.runSecurityCodeSmoke(validate)
+		}()
+	}
+	<-entered
+	close(release)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("worker error = %v, want %v", err, sentinel)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("validation calls = %d, want 1", calls.Load())
 	}
 }
 

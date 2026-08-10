@@ -108,6 +108,51 @@ type contactUsernameRaceTx struct{}
 func (contactUsernameRaceTx) Commit() error   { return nil }
 func (contactUsernameRaceTx) Rollback() error { return nil }
 
+type ensureIdentityConnector struct {
+	key [32]byte
+}
+
+func (connector *ensureIdentityConnector) Connect(context.Context) (driver.Conn, error) {
+	return &ensureIdentityConn{key: connector.key}, nil
+}
+
+func (*ensureIdentityConnector) Driver() driver.Driver { return pnMigrationTestDriver{} }
+
+type ensureIdentityConn struct {
+	key [32]byte
+}
+
+func (*ensureIdentityConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (*ensureIdentityConn) Close() error { return nil }
+func (*ensureIdentityConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("unexpected transaction")
+}
+func (*ensureIdentityConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return driver.RowsAffected(0), nil
+}
+func (conn *ensureIdentityConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return &ensureIdentityRows{key: conn.key}, nil
+}
+
+type ensureIdentityRows struct {
+	key  [32]byte
+	read bool
+}
+
+func (*ensureIdentityRows) Columns() []string { return []string{"identity"} }
+func (*ensureIdentityRows) Close() error      { return nil }
+func (rows *ensureIdentityRows) Next(values []driver.Value) error {
+	if rows.read {
+		return io.EOF
+	}
+	rows.read = true
+	values[0] = rows.key[:]
+	return nil
+}
+
 func TestNewSQLStoreDefersCaches(t *testing.T) {
 	store := NewSQLStore(nil, types.JID{User: "123", Server: types.DefaultUserServer})
 	if store.contactCache != nil || store.identityCache != nil || store.migratedPNSessionsCache != nil || store.emptyPNMigrationCache != nil || store.migratingPNSessions != nil {
@@ -149,6 +194,109 @@ func TestIdentityCacheIsBounded(t *testing.T) {
 	}
 	if _, ok := store.identityCache["new:1"]; !ok {
 		t.Fatal("new identity was not cached")
+	}
+}
+
+func TestCacheFetchedIdentitiesPreservesConcurrentWrites(t *testing.T) {
+	address := "100000011111111_1:7"
+	oldKey := [32]byte{1}
+	newKey := [32]byte{2}
+	store := &SQLStore{identityCache: map[string]identityCacheEntry{
+		address: {Key: newKey, Present: true},
+	}}
+	result := map[string][32]byte{address: oldKey}
+	store.cacheFetchedIdentities(result, map[string]identityCacheEntry{
+		address: {Key: oldKey, Present: true},
+	})
+
+	if got := store.identityCache[address]; !got.Present || got.Key != newKey {
+		t.Fatalf("identity cache was overwritten with stale query result: %#v", got)
+	}
+	if result[address] != newKey {
+		t.Fatalf("returned identity = %x, want concurrent value %x", result[address], newKey)
+	}
+}
+
+func TestDeleteIdentityLeavesNegativeCacheEntry(t *testing.T) {
+	state := &contactUsernameRaceDB{entered: make(chan struct{}), release: make(chan struct{})}
+	close(state.release)
+	db := sql.OpenDB(&contactUsernameRaceConnector{state: state})
+	t.Cleanup(func() { _ = db.Close() })
+	address := "100000011111111_1:7"
+	sqlStore := NewSQLStore(NewWithDB(db, "postgres", nil), types.NewJID("15550000000", types.DefaultUserServer))
+	sqlStore.identityCache = map[string]identityCacheEntry{address: {Key: [32]byte{1}, Present: true}}
+
+	if err := sqlStore.DeleteIdentity(context.Background(), address); err != nil {
+		t.Fatal(err)
+	}
+	entry, exists := sqlStore.identityCache[address]
+	if !exists || entry.Present {
+		t.Fatalf("identity deletion did not leave a negative cache entry: %#v", entry)
+	}
+}
+
+func TestSignalAddressRangeTreatsDomainSuffixLiterally(t *testing.T) {
+	lower, upper := signalAddressRange("123_1")
+	if lower != "123_1:" || upper != "123_1;" {
+		t.Fatalf("signal address range = [%q, %q)", lower, upper)
+	}
+	for name, query := range map[string]string{
+		"identity": deleteAllIdentitiesQuery,
+		"session":  deleteAllSessionsQuery,
+	} {
+		if strings.Contains(query, "LIKE") || !strings.Contains(query, "their_id >= $2 AND their_id < $3") {
+			t.Fatalf("%s deletion is not a literal prefix range: %s", name, query)
+		}
+	}
+}
+
+func TestEnsureIdentityRejectsDifferentCachedKey(t *testing.T) {
+	address := "100000011111111_1:7"
+	storedKey := [32]byte{1}
+	sqlStore := &SQLStore{identityCache: map[string]identityCacheEntry{
+		address: {Key: storedKey, Present: true},
+	}}
+
+	trusted, err := sqlStore.EnsureIdentity(context.Background(), address, [32]byte{2}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		t.Fatal("different cached identity was trusted")
+	}
+	if got := sqlStore.identityCache[address]; !got.Present || got.Key != storedKey {
+		t.Fatalf("stored identity was overwritten: %#v", got)
+	}
+}
+
+func TestEnsureIdentityDoesNotOverwriteDatabaseKeyAfterNegativeCache(t *testing.T) {
+	address := "100000011111111_1:7"
+	storedKey := [32]byte{1}
+	db := sql.OpenDB(&ensureIdentityConnector{key: storedKey})
+	t.Cleanup(func() { _ = db.Close() })
+	sqlStore := NewSQLStore(NewWithDB(db, "postgres", nil), types.NewJID("15550000000", types.DefaultUserServer))
+	sqlStore.identityCache = map[string]identityCacheEntry{address: {}}
+
+	trusted, err := sqlStore.EnsureIdentity(context.Background(), address, [32]byte{2}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		t.Fatal("different database identity was trusted")
+	}
+	if got := sqlStore.identityCache[address]; !got.Present || got.Key != storedKey {
+		t.Fatalf("database identity was not retained: %#v", got)
+	}
+}
+
+func TestEnsureIdentityRejectsFetchStartedBeforeDeletion(t *testing.T) {
+	sqlStore := &SQLStore{identityDeleteGen: 2}
+	trusted, err := sqlStore.EnsureIdentity(context.Background(), "100000011111111_1:7", [32]byte{1}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		t.Fatal("identity fetched before deletion was trusted")
 	}
 }
 
