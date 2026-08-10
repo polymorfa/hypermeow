@@ -263,6 +263,7 @@ func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
 		"button":        func(params *BusinessListMessageParams) { params.ButtonText = strings.Repeat("c", 21) },
 		"footer":        func(params *BusinessListMessageParams) { params.Footer = strings.Repeat("f", 61) },
 		"section title": func(params *BusinessListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 25) },
+		"row ID":        func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].ID = strings.Repeat("i", 201) },
 		"row title":     func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].Title = strings.Repeat("r", 25) },
 		"row description": func(params *BusinessListMessageParams) {
 			params.Sections[0].Rows[0].Description = strings.Repeat("d", 73)
@@ -277,6 +278,14 @@ func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
 				t.Fatal("expected protocol limit error")
 			}
 		})
+	}
+	multipleSections := valid
+	multipleSections.Sections = []BusinessListSection{
+		{Rows: []BusinessListRow{{ID: "one", Title: "One"}}},
+		{Title: "Second", Rows: []BusinessListRow{{ID: "two", Title: "Two"}}},
+	}
+	if _, err := BuildBusinessListMessage(multipleSections); err == nil {
+		t.Fatal("multiple sections with an empty title unexpectedly passed")
 	}
 }
 
