@@ -369,15 +369,17 @@ func BuildBusinessFlowMessage(params BusinessFlowMessageParams) (*waE2E.Message,
 	if !utf8.ValidString(params.DataJSON) || !bounded(params.DataJSON, 16*1024) {
 		return nil, errors.New("business flow data is too large")
 	}
-	var data map[string]json.RawMessage
+	var data *map[string]json.RawMessage
 	if params.DataJSON != "" {
-		if err := json.Unmarshal([]byte(params.DataJSON), &data); err != nil || data == nil {
+		parsed := make(map[string]json.RawMessage)
+		if err := json.Unmarshal([]byte(params.DataJSON), &parsed); err != nil || parsed == nil {
 			return nil, errors.New("business flow data must be a JSON object")
 		}
+		data = &parsed
 	}
 	type actionPayload struct {
-		Screen string                     `json:"screen,omitempty"`
-		Data   map[string]json.RawMessage `json:"data,omitempty"`
+		Screen string                      `json:"screen,omitempty"`
+		Data   *map[string]json.RawMessage `json:"data,omitempty"`
 	}
 	var payload *actionPayload
 	if params.FlowAction == "navigate" {

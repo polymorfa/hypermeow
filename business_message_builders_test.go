@@ -364,6 +364,37 @@ func TestBuildBusinessFlowMessageMatchesWebGenerator(t *testing.T) {
 	}
 }
 
+func TestBuildBusinessFlowMessagePreservesExplicitEmptyData(t *testing.T) {
+	base := BusinessFlowMessageParams{
+		Body: "Book a visit", ButtonText: "Choose a time", FlowID: "flow-100", FlowToken: "synthetic-token",
+		FlowAction: "navigate", Screen: "APPOINTMENT",
+	}
+	for name, dataJSON := range map[string]string{"omitted": "", "empty": `{}`} {
+		t.Run(name, func(t *testing.T) {
+			params := base
+			params.DataJSON = dataJSON
+			msg, err := BuildBusinessFlowMessage(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var encoded struct {
+				ActionPayload map[string]json.RawMessage `json:"flow_action_payload"`
+			}
+			buttonJSON := msg.GetInteractiveMessage().GetNativeFlowMessage().GetButtons()[0].GetButtonParamsJSON()
+			if err := json.Unmarshal([]byte(buttonJSON), &encoded); err != nil {
+				t.Fatal(err)
+			}
+			data, present := encoded.ActionPayload["data"]
+			if dataJSON == "" && present {
+				t.Fatalf("omitted data encoded as %s", data)
+			}
+			if dataJSON != "" && (!present || string(data) != `{}`) {
+				t.Fatalf("explicit empty data encoded as %s", data)
+			}
+		})
+	}
+}
+
 func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	if _, err := BuildBusinessProductMessage(BusinessProductMessageParams{ProductID: "p", Title: "Tea", CurrencyCode: "USD"}); err == nil {
 		t.Fatal("expected missing owner to fail")
