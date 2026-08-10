@@ -126,6 +126,14 @@ type SendResponse struct {
 	// The identity the message was sent with (LID or PN)
 	// This is currently not reliable in all cases.
 	Sender types.JID
+
+	// PHashMismatch indicates the server acknowledged a different participant list hash.
+	PHashMismatch bool
+}
+
+func setParticipantHashMismatch(resp *SendResponse, sent, acknowledged string) bool {
+	resp.PHashMismatch = acknowledged != "" && sent != acknowledged
+	return resp.PHashMismatch
 }
 
 // SendRequestExtra contains the optional parameters for SendMessage.
@@ -452,7 +460,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
 	}
 	expectedPHash := ag.OptionalString("phash")
-	if len(expectedPHash) > 0 && phash != expectedPHash {
+	if setParticipantHashMismatch(&resp, phash, expectedPHash) {
 		cli.Log.Warnf("Server returned different participant list hash (%s != %s) when sending to %s. Some devices may not have received the message.", phash, expectedPHash, to)
 		switch to.Server {
 		case types.GroupServer:
