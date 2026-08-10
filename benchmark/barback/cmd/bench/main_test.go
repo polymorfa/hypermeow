@@ -20,6 +20,7 @@ func TestLoadConfigWorkload(t *testing.T) {
 	t.Setenv("BENCH_GROUP_SIZE", "0")
 	t.Setenv("HISTORY_CONVERSATIONS", "10")
 	t.Setenv("HISTORY_MESSAGES", "5")
+	t.Setenv("BENCH_BUSINESS_SMOKE", "1")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -33,6 +34,9 @@ func TestLoadConfigWorkload(t *testing.T) {
 	}
 	if cfg.Workload.HistoryConversations != 10 || cfg.Workload.HistoryMessages != 5 {
 		t.Fatalf("unexpected history workload: %+v", cfg.Workload)
+	}
+	if !cfg.BusinessSmoke {
+		t.Fatal("business smoke validation was not enabled")
 	}
 }
 

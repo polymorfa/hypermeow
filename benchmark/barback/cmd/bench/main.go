@@ -24,6 +24,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -42,6 +43,7 @@ type config struct {
 	OutputPath     string
 	MemProfilePath string
 	Variant        string
+	BusinessSmoke  bool
 	Total          int64
 	Timeout        time.Duration
 	Workload       workloadConfig
@@ -123,6 +125,7 @@ type result struct {
 	MediaUploads         int64                `json:"media_uploads"`
 	MediaUploadBytes     int64                `json:"media_upload_bytes"`
 	MediaUploadLatency   latencyStats         `json:"media_upload_latency"`
+	BusinessAppValidated bool                 `json:"business_app_validated"`
 }
 
 type runner struct {
@@ -140,6 +143,7 @@ type runner struct {
 	messageSequence atomic.Int64
 	mediaUploads    atomic.Int64
 	mediaBytes      atomic.Int64
+	businessValid   atomic.Bool
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -163,6 +167,8 @@ type runner struct {
 	tempStop       chan struct{}
 	tempPeakBytes  atomic.Int64
 	tempPeakFiles  atomic.Int64
+	connected      chan struct{}
+	connectedOnce  sync.Once
 }
 
 func main() {
@@ -186,6 +192,7 @@ func main() {
 		latencies:      make([]float64, 0, cfg.Total),
 		messageTypes:   make(map[string]int64),
 		failureReasons: make(map[string]int64),
+		connected:      make(chan struct{}),
 	}
 	for i := range r.jobs {
 		r.jobs[i] = make(chan *events.Message, queueCapacity)
@@ -255,6 +262,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	businessSmoke, err := strconv.ParseBool(env("BENCH_BUSINESS_SMOKE", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_BUSINESS_SMOKE")
+	}
 	return config{
 		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
 		BarbackURL:     env("BARBACK_URL", "http://barback:8080"),
@@ -264,6 +275,7 @@ func loadConfig() (config, error) {
 		OutputPath:     env("RESULT_PATH", "/results/result.json"),
 		MemProfilePath: os.Getenv("MEM_PROFILE_PATH"),
 		Variant:        env("BENCH_VARIANT", "candidate"),
+		BusinessSmoke:  businessSmoke,
 		Total:          total,
 		Timeout:        timeout,
 		Workload: workloadConfig{
@@ -375,6 +387,21 @@ func (r *runner) run() (result, error) {
 		return r.snapshot(false), fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
+	if r.cfg.BusinessSmoke && businessAppSmokeSupported() {
+		connectionTimer := time.NewTimer(30 * time.Second)
+		defer connectionTimer.Stop()
+		select {
+		case <-r.connected:
+		case <-connectionTimer.C:
+			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready")
+		case <-ctx.Done():
+			return r.snapshot(false), fmt.Errorf("business app validation: connection did not become ready: %w", ctx.Err())
+		}
+		if err = validateBusinessApp(ctx, client); err != nil {
+			return r.snapshot(false), err
+		}
+		r.businessValid.Store(true)
+	}
 
 	select {
 	case <-r.done:
@@ -404,6 +431,11 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 				scanOnce.Do(func() { go r.scanQR(event.Codes[0]) })
 			}
 		case *events.Connected:
+			r.connectedOnce.Do(func() {
+				if r.connected != nil {
+					close(r.connected)
+				}
+			})
 			if _, err := r.db.ExecContext(context.Background(), "SELECT pg_stat_statements_reset()"); err != nil {
 				fmt.Fprintf(os.Stderr, "reset statement stats: %v\n", err)
 			}
@@ -594,6 +626,7 @@ func (r *runner) snapshot(completed bool) result {
 		MediaUploads:         r.mediaUploads.Load(),
 		MediaUploadBytes:     r.mediaBytes.Load(),
 		MediaUploadLatency:   r.uploadLatencySnapshot(),
+		BusinessAppValidated: r.businessValid.Load(),
 	}
 	r.metricsMu.Lock()
 	if r.sessionStarted {

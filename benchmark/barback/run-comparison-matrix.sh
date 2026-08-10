@@ -16,6 +16,26 @@ candidate_ref=${CANDIDATE_REF:-HEAD}
 whatsmeow_sha=$(git -C "$repo_dir" rev-parse "$whatsmeow_ref^{commit}")
 pre_pr3_sha=$(git -C "$repo_dir" rev-parse "$pre_pr3_ref^{commit}")
 candidate_sha=$(git -C "$repo_dir" rev-parse "$candidate_ref^{commit}")
+candidate_build_tags=${CANDIDATE_BUILD_TAGS-}
+if [[ ! -v CANDIDATE_BUILD_TAGS ]]; then
+	required_candidate_symbols=(
+		'func (cli *Client) GetCatalog('
+		'func (cli *Client) GetCatalogProduct('
+		'func (cli *Client) GetCatalogProducts('
+		'func (cli *Client) GetProductCollection('
+		'func (cli *Client) GetProductCollections('
+		'func (cli *Client) GetOrderDetails('
+	)
+	if [[ -f "$benchmark_dir/cmd/bench/security_code_smoke.go" ]]; then
+		required_candidate_symbols+=('func (cli *Client) GetIdentityVerificationCodes(')
+	fi
+	for symbol in "${required_candidate_symbols[@]}"; do
+		if ! git -C "$repo_dir" grep -Fq "$symbol" "$candidate_sha" -- '*.go'; then
+			candidate_build_tags=benchmark_legacy
+			break
+		fi
+	done
+fi
 repeats=${BENCH_REPEATS:-1}
 repeat_start=${BENCH_REPEAT_START:-1}
 if ! [[ $repeats =~ ^[1-9][0-9]*$ ]]; then
@@ -42,10 +62,16 @@ fi
 
 run_revision() {
 	local name=$1 context=$2 revision=$3 repeat=$4 scenario=$5 variant=$1
+	local build_tags=
+	if [[ $name != hypermeow ]]; then
+		build_tags=benchmark_legacy
+	else
+		build_tags=$candidate_build_tags
+	fi
 	if ((repeats > 1)); then
 		variant="${name}-r${repeat}"
 	fi
-	LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="$variant" ./run-system-matrix.sh "$scenario"
+	LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="$variant" BENCH_BUILD_TAGS="$build_tags" ./run-system-matrix.sh "$scenario"
 }
 
 for ((repeat = repeat_start; repeat <= repeats; repeat++)); do
