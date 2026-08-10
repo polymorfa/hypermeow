@@ -21,6 +21,7 @@ type BusinessProductMessageParams struct {
 	CurrencyCode        string
 	PriceAmount1000     int64
 	SalePriceAmount1000 int64
+	SalePricePresent    bool
 	RetailerID          string
 	URL                 string
 	ProductImageCount   uint32
@@ -141,14 +142,14 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 	if strings.TrimSpace(params.ProductID) == "" || !bounded(params.ProductID, 256) || strings.TrimSpace(params.Title) == "" || !bounded(params.Title, 256) {
 		return nil, errors.New("invalid business product identity")
 	}
-	if !bounded(params.Description, 4096) || !bounded(params.RetailerID, 256) || !bounded(params.URL, 2048) || !bounded(params.Body, 4096) || !bounded(params.Footer, 256) {
+	if !bounded(params.Description, 4096) || !bounded(params.RetailerID, 256) || !bounded(params.URL, 2048) || !bounded(params.Body, 1024) || !bounded(params.Footer, 60) {
 		return nil, errors.New("business product message field is too large")
 	}
 	if params.PriceAmount1000 < 0 || params.SalePriceAmount1000 < 0 {
 		return nil, errors.New("invalid business product price")
 	}
 	pricePresent := params.PriceAmount1000 != 0 || params.CurrencyCode != ""
-	if !pricePresent && params.SalePriceAmount1000 > 0 {
+	if !pricePresent && (params.SalePriceAmount1000 > 0 || params.SalePricePresent) {
 		return nil, errors.New("business product sale price requires a base price")
 	}
 	if pricePresent && !validCurrency(params.CurrencyCode) {
@@ -167,11 +168,15 @@ func BuildBusinessProductMessage(params BusinessProductMessageParams) (*waE2E.Me
 	if pricePresent {
 		priceAmount1000 = proto.Int64(params.PriceAmount1000)
 	}
+	salePriceAmount1000 := optionalPositiveInt64(params.SalePriceAmount1000)
+	if params.SalePricePresent {
+		salePriceAmount1000 = proto.Int64(params.SalePriceAmount1000)
+	}
 	return &waE2E.Message{ProductMessage: &waE2E.ProductMessage{
 		Product: &waE2E.ProductMessage_ProductSnapshot{
 			ProductImage: params.ProductImage, ProductID: proto.String(params.ProductID), Title: proto.String(params.Title),
 			Description: optionalString(params.Description), CurrencyCode: optionalString(params.CurrencyCode),
-			PriceAmount1000: priceAmount1000, SalePriceAmount1000: optionalPositiveInt64(params.SalePriceAmount1000),
+			PriceAmount1000: priceAmount1000, SalePriceAmount1000: salePriceAmount1000,
 			RetailerID: optionalString(params.RetailerID), URL: optionalString(params.URL), ProductImageCount: optionalPositiveUint32(params.ProductImageCount),
 		},
 		BusinessOwnerJID: proto.String(params.BusinessOwnerJID.ToNonAD().String()), Body: optionalString(params.Body), Footer: optionalString(params.Footer), ContextInfo: params.ContextInfo,
