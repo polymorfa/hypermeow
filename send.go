@@ -1026,7 +1026,14 @@ func buildNativeFlowBizNode(msg *waE2E.Message, nowUnix int64) waBinary.Node {
 unwrapped:
 	if interactive := msg.GetInteractiveMessage(); interactive != nil {
 		if buttons := interactive.GetNativeFlowMessage().GetButtons(); len(buttons) > 0 && buttons[0].GetName() != "" {
-			name = buttons[0].GetName()
+			candidate := buttons[0].GetName()
+			name = candidate
+			for _, button := range buttons[1:] {
+				if button.GetName() != candidate {
+					name = "mixed"
+					break
+				}
+			}
 		}
 	}
 	return waBinary.Node{

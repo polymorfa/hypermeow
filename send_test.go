@@ -53,6 +53,22 @@ func TestInteractiveNativeFlowsRequestNamedBusinessMetadata(t *testing.T) {
 	}
 }
 
+func TestHeterogeneousNativeFlowsRequestMixedBusinessMetadata(t *testing.T) {
+	msg := &waE2E.Message{InteractiveMessage: &waE2E.InteractiveMessage{
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			Buttons: []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+				{Name: proto.String("quick_reply")},
+				{Name: proto.String("cta_url")},
+			},
+		}},
+	}}
+	biz := buildNativeFlowBizNode(msg, 1_700_000_000)
+	flow := biz.Content.([]waBinary.Node)[0].Content.([]waBinary.Node)[0]
+	if flow.Attrs["name"] != "mixed" {
+		t.Fatalf("native-flow name = %q", flow.Attrs["name"])
+	}
+}
+
 func TestNativeFlowBusinessMetadataUnwrapsMessages(t *testing.T) {
 	inner := &waE2E.Message{InteractiveMessage: &waE2E.InteractiveMessage{
 		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
