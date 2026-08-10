@@ -25,8 +25,10 @@ if [[ ! -v CANDIDATE_BUILD_TAGS ]]; then
 		'func (cli *Client) GetProductCollection('
 		'func (cli *Client) GetProductCollections('
 		'func (cli *Client) GetOrderDetails('
-		'func (cli *Client) GetIdentityVerificationCodes('
 	)
+	if [[ -f "$benchmark_dir/cmd/bench/security_code_smoke.go" ]]; then
+		required_candidate_symbols+=('func (cli *Client) GetIdentityVerificationCodes(')
+	fi
 	for symbol in "${required_candidate_symbols[@]}"; do
 		if ! git -C "$repo_dir" grep -Fq "$symbol" "$candidate_sha" -- '*.go'; then
 			candidate_build_tags=benchmark_legacy
