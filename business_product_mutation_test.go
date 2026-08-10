@@ -245,6 +245,18 @@ func TestBusinessAccessTokenLockObservesCancellation(t *testing.T) {
 	}
 }
 
+func TestBusinessAccessTokenInvalidationObservesCancellation(t *testing.T) {
+	client := &Client{}
+	state := client.getBusinessCatalogAuth()
+	<-state.tokenLock
+	defer func() { state.tokenLock <- struct{}{} }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.invalidateBusinessAccessToken(ctx, "synthetic-token"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+}
+
 func TestSendBusinessFacebookGraphQL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {

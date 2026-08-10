@@ -515,16 +515,21 @@ func (cli *Client) businessAccessToken(ctx context.Context) (businessAccessToken
 	return token, nil
 }
 
-func (cli *Client) invalidateBusinessAccessToken(token string) {
+func (cli *Client) invalidateBusinessAccessToken(ctx context.Context, token string) error {
 	state := cli.businessCatalogAuth.Load()
 	if state == nil {
-		return
+		return nil
 	}
-	<-state.tokenLock
+	select {
+	case <-state.tokenLock:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if state.token.accessToken == token {
 		state.token = businessAccessToken{}
 	}
 	state.tokenLock <- struct{}{}
+	return nil
 }
 
 func (cli *Client) sendBusinessFacebookGraphQL(ctx context.Context, endpoint, documentID, accessToken string, variables map[string]any) (json.RawMessage, error) {
@@ -598,7 +603,9 @@ func (cli *Client) executeBusinessProductMutation(ctx context.Context, documentI
 			return data, nil
 		}
 		if attempt == 0 && isBusinessGraphQLAuthError(err) {
-			cli.invalidateBusinessAccessToken(token.accessToken)
+			if err = cli.invalidateBusinessAccessToken(ctx, token.accessToken); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		return nil, err
