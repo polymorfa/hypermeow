@@ -39,14 +39,7 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 		}
 	} else if _, ok := node.GetOptionalChildByTag("identity"); ok {
 		cli.Log.Debugf("Got identity change for %s: %s, deleting all identities/sessions for that number", from, node)
-		err := cli.Store.Identities.DeleteAllIdentities(ctx, from.User)
-		if err != nil {
-			cli.Log.Warnf("Failed to delete all identities of %s from store after identity change: %v", from, err)
-		}
-		err = cli.Store.Sessions.DeleteAllSessions(ctx, from.User)
-		if err != nil {
-			cli.Log.Warnf("Failed to delete all sessions of %s from store after identity change: %v", from, err)
-		}
+		cli.deleteIdentityChangeState(ctx, from)
 		ts := node.AttrGetter().UnixTime("t")
 		storageLID := cli.resolveTCTokenStorageLID(ctx, from)
 		pt, err := cli.Store.PrivacyTokens.GetPrivacyToken(ctx, storageLID)
@@ -67,6 +60,45 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 		cli.dispatchEvent(&events.IdentityChange{JID: from, Timestamp: ts})
 	} else {
 		cli.Log.Debugf("Got unknown encryption notification from server: %s", node)
+	}
+}
+
+func (cli *Client) deleteIdentityChangeState(ctx context.Context, from types.JID) {
+	users := identityChangeSignalUsers(from)
+	if cli.Store.LIDs != nil {
+		var alternate types.JID
+		var err error
+		switch from.Server {
+		case types.DefaultUserServer, types.HostedServer:
+			alternate, err = cli.Store.LIDs.GetLIDForPN(ctx, types.NewJID(from.User, types.DefaultUserServer))
+		case types.HiddenUserServer, types.HostedLIDServer:
+			alternate, err = cli.Store.LIDs.GetPNForLID(ctx, types.NewJID(from.User, types.HiddenUserServer))
+		}
+		if err != nil {
+			cli.Log.Warnf("Failed to resolve alternate JID for identity change from %s: %v", from, err)
+		} else if !alternate.IsEmpty() {
+			users = append(users, identityChangeSignalUsers(alternate)...)
+		}
+	}
+	users = slices.Compact(users)
+	for _, user := range users {
+		if err := cli.Store.Identities.DeleteAllIdentities(ctx, user); err != nil {
+			cli.Log.Warnf("Failed to delete identities for %s after identity change from %s: %v", user, from, err)
+		}
+		if err := cli.Store.Sessions.DeleteAllSessions(ctx, user); err != nil {
+			cli.Log.Warnf("Failed to delete sessions for %s after identity change from %s: %v", user, from, err)
+		}
+	}
+}
+
+func identityChangeSignalUsers(jid types.JID) []string {
+	switch jid.Server {
+	case types.DefaultUserServer, types.HostedServer:
+		return []string{jid.User, jid.User + "_128"}
+	case types.HiddenUserServer, types.HostedLIDServer:
+		return []string{jid.User + "_1", jid.User + "_129"}
+	default:
+		return []string{jid.SignalAddressUser()}
 	}
 }
 
