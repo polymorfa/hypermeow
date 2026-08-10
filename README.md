@@ -43,10 +43,13 @@ Use `-m`. Without it, `go mod why` asks about the *package* `go.mau.fi/whatsmeow
 A stricter check inspects the link graph directly:
 
 ```sh
-! go list -deps ./... | grep -q '^go\.mau\.fi/whatsmeow'
+deps="$(go list -deps ./...)" && ! grep -q '^go\.mau\.fi/whatsmeow' <<<"$deps"
 ```
 
-The negation matters if you put this in CI. `grep` exits 0 when it *finds* a match, so without the `!` the step would succeed exactly when the graph is unsafe and fail when it is clean. As written, exit 0 means safe.
+Exit 0 means safe. Both halves of that command are load-bearing in CI:
+
+- the `!` is needed because `grep` exits 0 when it *finds* a match, so without it the step would succeed exactly when the graph is unsafe;
+- `go list` is kept out of the negated pipeline because, piped directly, a failed `go list` produces no output, `grep` then exits nonzero for want of a match, and the `!` would turn "the graph could not be loaded" into a pass.
 
 or assert it in a test via `debug.ReadBuildInfo()`, failing if any entry in `Deps` reports the module path `go.mau.fi/whatsmeow`.
 
