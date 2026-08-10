@@ -156,6 +156,7 @@ type runner struct {
 	phoneConsentOnce      sync.Once
 	phoneConsentErr       error
 	phoneConsentValidator func(context.Context, *whatsmeow.Client, types.JID) error
+	statementStatsReset   func(context.Context) error
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -469,7 +470,7 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 					close(r.connected)
 				}
 			})
-			if _, err := r.db.ExecContext(context.Background(), "SELECT pg_stat_statements_reset()"); err != nil {
+			if err := r.resetStatementStats(context.Background()); err != nil {
 				fmt.Fprintf(os.Stderr, "reset statement stats: %v\n", err)
 			}
 			r.startSessionMetrics()
@@ -489,7 +490,13 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 				if validate == nil {
 					validate = r.validatePhoneNumberConsent
 				}
-				return validate(ctx, client, phoneConsentTarget(event))
+				if err := validate(ctx, client, phoneConsentTarget(event)); err != nil {
+					return err
+				}
+				if err := r.resetStatementStats(ctx); err != nil {
+					return fmt.Errorf("reset workload statement stats: %w", err)
+				}
+				return nil
 			}) {
 				return
 			}
@@ -505,6 +512,17 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 			}
 		}
 	}
+}
+
+func (r *runner) resetStatementStats(ctx context.Context) error {
+	if r.statementStatsReset != nil {
+		return r.statementStatsReset(ctx)
+	}
+	if r.db == nil {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, "SELECT pg_stat_statements_reset()")
+	return err
 }
 
 func (r *runner) startSessionMetrics() {
@@ -636,7 +654,6 @@ func (r *runner) runPhoneConsentSmoke(validate func() error) error {
 			r.phoneConsentValid.Store(true)
 			return
 		}
-		r.failed.Add(1)
 		r.recordFailure(r.phoneConsentErr)
 		fmt.Fprintf(os.Stderr, "validate phone number consent: %v\n", r.phoneConsentErr)
 		r.reportFatal(fmt.Errorf("validate phone number consent: %w", r.phoneConsentErr))

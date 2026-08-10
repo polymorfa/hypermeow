@@ -182,6 +182,44 @@ func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
 	if r.startedAt.Load() != 0 {
 		t.Fatal("failed phone consent validation started workload metrics")
 	}
+	if r.failed.Load() != 0 {
+		t.Fatalf("phone consent validation changed workload send failures to %d", r.failed.Load())
+	}
+}
+
+func TestPhoneConsentResetsDatabaseBeforeMeasuredMetrics(t *testing.T) {
+	jobs := make(chan *events.Message, 1)
+	var resetCalls atomic.Int64
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+		jobs:           []chan *events.Message{jobs},
+	}
+	r.phoneConsentValidator = func(context.Context, *whatsmeow.Client, types.JID) error {
+		if resetCalls.Load() != 0 {
+			t.Fatal("statement stats reset before phone consent validation")
+		}
+		return nil
+	}
+	r.statementStatsReset = func(context.Context) error {
+		if r.startedAt.Load() != 0 {
+			t.Fatal("statement stats reset after workload metrics started")
+		}
+		resetCalls.Add(1)
+		return nil
+	}
+	r.handler(context.Background(), &whatsmeow.Client{})(&events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("100000011111111", types.HiddenUserServer)}},
+		Message: &waE2E.Message{Conversation: proto.String("ping")},
+	})
+	t.Cleanup(r.stopMetricsSampler)
+	if resetCalls.Load() != 1 {
+		t.Fatalf("statement stats reset calls = %d, want 1", resetCalls.Load())
+	}
+	if r.startedAt.Load() == 0 {
+		t.Fatal("workload metrics did not start after statement stats reset")
+	}
 }
 
 func TestHandlerUsesRunContextForPhoneConsent(t *testing.T) {
