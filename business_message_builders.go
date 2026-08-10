@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 
@@ -91,6 +92,25 @@ type BusinessNativeFlowButtonsMessageParams struct {
 	Body        string
 	Footer      string
 	Buttons     []BusinessNativeFlowButton
+	ContextInfo *waE2E.ContextInfo
+}
+
+type BusinessAddressMessageParams struct {
+	Body        string
+	ButtonText  string
+	Footer      string
+	ContextInfo *waE2E.ContextInfo
+}
+
+type BusinessFlowMessageParams struct {
+	Body        string
+	ButtonText  string
+	Footer      string
+	FlowID      string
+	FlowToken   string
+	FlowAction  string
+	Screen      string
+	DataJSON    string
 	ContextInfo *waE2E.ContextInfo
 }
 
@@ -315,4 +335,84 @@ func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessa
 		message.Header = &waE2E.ButtonsMessage_Text{Text: params.Title}
 	}
 	return &waE2E.Message{ButtonsMessage: message}, nil
+}
+
+func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Message, error) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !utf8.ValidString(params.ButtonText) || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+		return nil, errors.New("invalid business address message text")
+	}
+	buttonParams, err := json.Marshal(struct {
+		DisplayText string `json:"display_text"`
+	}{DisplayText: params.ButtonText})
+	if err != nil {
+		return nil, fmt.Errorf("marshal business address message: %w", err)
+	}
+	return buildBusinessInteractiveNativeFlow(params.Body, params.Footer, "address_message", string(buttonParams), params.ContextInfo), nil
+}
+
+func BuildBusinessFlowMessage(params BusinessFlowMessageParams) (*waE2E.Message, error) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !utf8.ValidString(params.ButtonText) || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+		return nil, errors.New("invalid business flow message text")
+	}
+	if strings.TrimSpace(params.FlowID) == "" || !utf8.ValidString(params.FlowID) || !bounded(params.FlowID, 256) || strings.TrimSpace(params.FlowToken) == "" || !utf8.ValidString(params.FlowToken) || !bounded(params.FlowToken, 8192) {
+		return nil, errors.New("invalid business flow identity")
+	}
+	if params.FlowAction != "navigate" && params.FlowAction != "data_exchange" {
+		return nil, errors.New("invalid business flow action")
+	}
+	if !utf8.ValidString(params.Screen) || !bounded(params.Screen, 256) || (params.FlowAction == "navigate" && strings.TrimSpace(params.Screen) == "") {
+		return nil, errors.New("invalid business flow screen")
+	}
+	if params.FlowAction == "data_exchange" && (params.Screen != "" || params.DataJSON != "") {
+		return nil, errors.New("data-exchange flow messages cannot include an action payload")
+	}
+	if !utf8.ValidString(params.DataJSON) || !bounded(params.DataJSON, 16*1024) {
+		return nil, errors.New("business flow data is too large")
+	}
+	var data *map[string]json.RawMessage
+	if params.DataJSON != "" {
+		parsed := make(map[string]json.RawMessage)
+		if err := json.Unmarshal([]byte(params.DataJSON), &parsed); err != nil || parsed == nil {
+			return nil, errors.New("business flow data must be a JSON object")
+		}
+		data = &parsed
+	}
+	type actionPayload struct {
+		Screen string                      `json:"screen,omitempty"`
+		Data   *map[string]json.RawMessage `json:"data,omitempty"`
+	}
+	var payload *actionPayload
+	if params.FlowAction == "navigate" {
+		payload = &actionPayload{Screen: params.Screen, Data: data}
+	}
+	buttonParams, err := json.Marshal(struct {
+		Version       string         `json:"flow_message_version"`
+		Token         string         `json:"flow_token"`
+		ID            string         `json:"flow_id"`
+		CTA           string         `json:"flow_cta"`
+		Action        string         `json:"flow_action"`
+		ActionPayload *actionPayload `json:"flow_action_payload,omitempty"`
+	}{
+		Version: "3", Token: params.FlowToken, ID: params.FlowID, CTA: params.ButtonText, Action: params.FlowAction,
+		ActionPayload: payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal business flow message: %w", err)
+	}
+	return buildBusinessInteractiveNativeFlow(params.Body, params.Footer, "galaxy_message", string(buttonParams), params.ContextInfo), nil
+}
+
+func buildBusinessInteractiveNativeFlow(body, footer, name, buttonParams string, contextInfo *waE2E.ContextInfo) *waE2E.Message {
+	interactive := &waE2E.InteractiveMessage{
+		Body:        &waE2E.InteractiveMessage_Body{Text: proto.String(body)},
+		ContextInfo: contextInfo,
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			Buttons:        []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{{Name: proto.String(name), ButtonParamsJSON: proto.String(buttonParams)}},
+			MessageVersion: proto.Int32(1),
+		}},
+	}
+	if footer != "" {
+		interactive.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(footer)}
+	}
+	return &waE2E.Message{InteractiveMessage: interactive}
 }
