@@ -6,7 +6,7 @@ WORKDIR /src
 COPY . .
 COPY --from=library . /library
 WORKDIR /src/benchmark/barback
-RUN go mod edit -replace=github.com/polymorfa/hypermeow=/library
+RUN sh ./prepare-library-module.sh /library
 RUN --mount=type=cache,target=/go/pkg/mod go mod tidy
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.revision=${BUILD_REV}" -o /out/clientmem ./cmd/clientmem
