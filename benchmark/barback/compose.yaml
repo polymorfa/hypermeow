@@ -95,6 +95,7 @@ services:
       additional_contexts:
         library: ${LIBRARY_CONTEXT:-../..}
       args:
+        BENCH_BUILD_TAGS: ${BENCH_BUILD_TAGS:-}
         BUILD_REV: ${BUILD_REV:-working-tree}
     depends_on:
       barback:
