@@ -423,6 +423,11 @@ func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected non-object flow data to fail")
 	}
+	if _, err := BuildBusinessFlowMessage(BusinessFlowMessageParams{
+		Body: "Flow", ButtonText: "Open", FlowID: "flow", FlowToken: "token", FlowAction: "navigate", Screen: "START", DataJSON: `{} {}`,
+	}); err == nil {
+		t.Fatal("expected trailing flow JSON to fail")
+	}
 }
 
 func TestBusinessProductListAndNativeFlowTextLimits(t *testing.T) {
