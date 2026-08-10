@@ -337,7 +337,7 @@ func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessa
 }
 
 func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 4096) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 256) || !bounded(params.Footer, 256) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business address message text")
 	}
 	buttonParams, err := json.Marshal(struct {
