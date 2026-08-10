@@ -18,6 +18,7 @@ const WebVersion = "2.3000.1044776264"
 const (
 	BizCreateOrder               OperationName = "BizCreateOrder"
 	BizQueryOrder                OperationName = "BizQueryOrder"
+	DeleteNewsletter             OperationName = "DeleteNewsletter"
 	QueryCatalog                 OperationName = "QueryCatalog"
 	QueryCatalogProduct          OperationName = "QueryCatalogProduct"
 	QueryProductCollections      OperationName = "QueryProductCollections"
@@ -35,6 +36,7 @@ type Operation struct {
 var operations = map[OperationName]Operation{
 	BizCreateOrder:               {Name: BizCreateOrder, DocumentID: "26486627094287046", Kind: KindMutation, ResponseDiscriminator: "xwa_checkout_place_order"},
 	BizQueryOrder:                {Name: BizQueryOrder, DocumentID: "26593811266898374", Kind: KindQuery, ResponseDiscriminator: "xwa_checkout_get_order_info"},
+	DeleteNewsletter:             {Name: DeleteNewsletter, DocumentID: "30062808666639665", Kind: KindMutation, ResponseDiscriminator: "xwa2_newsletter_delete_v2"},
 	QueryCatalog:                 {Name: QueryCatalog, DocumentID: "30445081048424116", Kind: KindQuery, ResponseDiscriminator: "xwa_product_catalog_get_product_catalog"},
 	QueryCatalogProduct:          {Name: QueryCatalogProduct, DocumentID: "9660926520672123", Kind: KindQuery, ResponseDiscriminator: "xwa_product_catalog_get_product"},
 	QueryProductCollections:      {Name: QueryProductCollections, DocumentID: "9430970660362540", Kind: KindQuery, ResponseDiscriminator: "xwa_product_catalog_get_collections"},

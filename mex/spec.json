@@ -2,6 +2,11 @@
   "sourceRevision": "74509efe262b37b26bed05486c9f4160db5e841b",
   "waVersion": "2.3000.1044776264",
   "operations": {
+    "DeleteNewsletter": {
+      "documentId": "30062808666639665",
+      "kind": "mutation",
+      "responseDiscriminator": "xwa2_newsletter_delete_v2"
+    },
     "BizCreateOrder": {
       "documentId": "26486627094287046",
       "kind": "mutation",

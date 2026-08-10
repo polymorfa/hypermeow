@@ -1,0 +1,82 @@
+package whatsmeow
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"go.mau.fi/whatsmeow/proto/waWa6"
+	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
+)
+
+func TestBuildDeleteNewsletterVariablesRejectsNonNewsletterJID(t *testing.T) {
+	tests := []types.JID{
+		types.EmptyJID,
+		types.NewJID("15551234567", types.DefaultUserServer),
+		types.NewJID("120363000000000000", types.GroupServer),
+		types.NewJID("not-numeric", types.NewsletterServer),
+		types.NewJID(strings.Repeat("1", 257), types.NewsletterServer),
+	}
+	for _, jid := range tests {
+		if _, err := buildDeleteNewsletterVariables(jid); err == nil {
+			t.Errorf("expected %q to be rejected", jid)
+		}
+	}
+}
+
+func TestBuildDeleteNewsletterVariablesUsesCanonicalJID(t *testing.T) {
+	jid := types.NewJID("120363000000000001", types.NewsletterServer)
+	got, err := buildDeleteNewsletterVariables(jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NewsletterID != "120363000000000001@newsletter" {
+		t.Fatalf("newsletter_id = %q", got.NewsletterID)
+	}
+}
+
+func TestDecodeDeleteNewsletterResponseRequiresMatchingDeletedState(t *testing.T) {
+	want := types.NewJID("120363000000000001", types.NewsletterServer)
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"missing discriminator", `{"unexpected":{}}`},
+		{"null result", `{"xwa2_newsletter_delete_v2":null}`},
+		{"wrong id", `{"xwa2_newsletter_delete_v2":{"id":"120363000000000002@newsletter","state":{"type":"DELETED"}}}`},
+		{"active state", `{"xwa2_newsletter_delete_v2":{"id":"120363000000000001@newsletter","state":{"type":"ACTIVE"}}}`},
+		{"missing state", `{"xwa2_newsletter_delete_v2":{"id":"120363000000000001@newsletter"}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := decodeDeleteNewsletterResponse(json.RawMessage(tc.raw), want); err == nil {
+				t.Fatal("expected response validation error")
+			}
+		})
+	}
+}
+
+func TestDecodeDeleteNewsletterResponseAcceptsMatchingDeletedState(t *testing.T) {
+	want := types.NewJID("120363000000000001", types.NewsletterServer)
+	raw := json.RawMessage(`{"xwa2_newsletter_delete_v2":{"id":"120363000000000001@newsletter","state":{"type":"DELETED"}}}`)
+	if err := decodeDeleteNewsletterResponse(raw, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteNewsletterQueryIsRejectedForDesktopPayloads(t *testing.T) {
+	originalPayload := store.BaseClientPayload
+	store.BaseClientPayload = &waWa6.ClientPayload{
+		UserAgent: &waWa6.ClientPayload_UserAgent{},
+	}
+	t.Cleanup(func() {
+		store.BaseClientPayload = originalPayload
+	})
+
+	jid := types.NewJID("15551234567", types.DefaultUserServer)
+	client := &Client{Store: &store.Device{ID: &jid}}
+	if got := convertQueryID(client, "30062808666639665"); got != "" {
+		t.Fatalf("desktop query ID = %q, want unsupported", got)
+	}
+}
