@@ -257,11 +257,15 @@ func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
 		normalized.Attrs = nil
 	}
 	if children, ok := node.Content.([]waBinary.Node); ok {
-		normalizedChildren := make([]waBinary.Node, len(children))
-		for index := range children {
-			normalizedChildren[index] = *normalizeIQErrorNode(&children[index])
+		if len(children) == 0 {
+			normalized.Content = nil
+		} else {
+			normalizedChildren := make([]waBinary.Node, len(children))
+			for index := range children {
+				normalizedChildren[index] = *normalizeIQErrorNode(&children[index])
+			}
+			normalized.Content = normalizedChildren
 		}
-		normalized.Content = normalizedChildren
 	}
 	return &normalized
 }

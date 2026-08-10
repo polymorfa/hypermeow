@@ -30,3 +30,11 @@ func TestIQErrorIsNormalizesEquivalentAttributes(t *testing.T) {
 		t.Fatal("semantically equivalent IQ error nodes did not compare equal")
 	}
 }
+
+func TestIQErrorIsNormalizesEmptyChildLists(t *testing.T) {
+	decoded := &IQError{ErrorNode: &waBinary.Node{Tag: "error"}}
+	handBuilt := &IQError{ErrorNode: &waBinary.Node{Tag: "error", Content: []waBinary.Node{}}}
+	if !errors.Is(decoded, handBuilt) || !errors.Is(handBuilt, decoded) {
+		t.Fatal("empty and nil IQ error child lists did not compare equal")
+	}
+}
