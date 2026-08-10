@@ -84,6 +84,31 @@ func TestBuildBusinessOrderMessageMatchesWebGenerator(t *testing.T) {
 	}
 }
 
+func TestBusinessProductListDescriptionAndOrderTokenAreOptional(t *testing.T) {
+	owner := types.NewJID("15550001", types.DefaultUserServer)
+	list, err := BuildBusinessProductListMessage(BusinessProductListMessageParams{
+		BusinessOwnerJID: owner, Title: "Seasonal", ButtonText: "View products",
+		Sections: []BusinessProductSection{{ProductIDs: []string{"p-tea"}}},
+	})
+	if err != nil {
+		t.Fatalf("product list without description failed: %v", err)
+	}
+	if list.GetListMessage().Description != nil {
+		t.Fatalf("omitted description was encoded: %q", list.GetListMessage().GetDescription())
+	}
+
+	order, err := BuildBusinessOrderMessage(BusinessOrderMessageParams{
+		OrderID: "o-100", ItemCount: 1, Status: waE2E.OrderMessage_INQUIRY,
+		SellerJID: owner, TotalCurrencyCode: "USD",
+	})
+	if err != nil {
+		t.Fatalf("order without token failed: %v", err)
+	}
+	if order.GetOrderMessage().Token != nil {
+		t.Fatalf("omitted token was encoded: %q", order.GetOrderMessage().GetToken())
+	}
+}
+
 func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 	list, err := BuildBusinessListMessage(BusinessListMessageParams{
 		Title: "Support", Description: "Choose a topic", ButtonText: "View topics", Footer: "Synthetic support",
@@ -214,7 +239,6 @@ func TestBusinessProductListAndNativeFlowTextLimits(t *testing.T) {
 		Sections: []BusinessProductSection{{Title: "Section", ProductIDs: []string{"p"}}},
 	}
 	productMutations := map[string]func(*BusinessProductListMessageParams){
-		"missing body":  func(params *BusinessProductListMessageParams) { params.Description = "" },
 		"header":        func(params *BusinessProductListMessageParams) { params.Title = strings.Repeat("h", 61) },
 		"body":          func(params *BusinessProductListMessageParams) { params.Description = strings.Repeat("b", 1025) },
 		"button":        func(params *BusinessProductListMessageParams) { params.ButtonText = strings.Repeat("c", 21) },

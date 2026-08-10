@@ -182,7 +182,7 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 	if !validBusinessOwner(params.BusinessOwnerJID) {
 		return nil, errors.New("invalid business owner JID")
 	}
-	if strings.TrimSpace(params.Title) == "" || !bounded(params.Title, 60) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+	if strings.TrimSpace(params.Title) == "" || !bounded(params.Title, 60) || !bounded(params.Description, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business product list text")
 	}
 	if len(params.Sections) == 0 || len(params.Sections) > 10 {
@@ -223,7 +223,7 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 	if !validBusinessOwner(params.SellerJID) {
 		return nil, errors.New("invalid seller JID")
 	}
-	if strings.TrimSpace(params.OrderID) == "" || !bounded(params.OrderID, 256) || strings.TrimSpace(params.Token) == "" || params.ItemCount < 1 || params.ItemCount > 100 {
+	if strings.TrimSpace(params.OrderID) == "" || !bounded(params.OrderID, 256) || (params.Token != "" && strings.TrimSpace(params.Token) == "") || params.ItemCount < 1 || params.ItemCount > 100 {
 		return nil, errors.New("invalid business order identity")
 	}
 	if params.Status < waE2E.OrderMessage_INQUIRY || params.Status > waE2E.OrderMessage_DECLINED || params.TotalAmount1000 < 0 || !validCurrency(params.TotalCurrencyCode) {
