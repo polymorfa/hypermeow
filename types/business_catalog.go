@@ -28,6 +28,21 @@ type BusinessProduct struct {
 	VariantInfo        *BusinessProductVariant `json:"variant_info,omitempty"`
 }
 
+type BusinessProductInput struct {
+	Name               string                  `json:"name"`
+	Description        string                  `json:"description,omitempty"`
+	Currency           string                  `json:"currency,omitempty"`
+	Price              string                  `json:"price,omitempty"`
+	SalePrice          string                  `json:"sale_price,omitempty"`
+	URL                string                  `json:"url,omitempty"`
+	RetailerID         string                  `json:"retailer_id,omitempty"`
+	Hidden             bool                    `json:"is_hidden"`
+	ImageURLs          []string                `json:"image_urls"`
+	VideoURLs          []string                `json:"video_urls,omitempty"`
+	ComplianceCategory string                  `json:"compliance_category,omitempty"`
+	Compliance         *BusinessComplianceInfo `json:"compliance_info,omitempty"`
+}
+
 type BusinessComplianceInfo struct {
 	CountryCodeOrigin string           `json:"country_code_origin,omitempty"`
 	ImporterName      string           `json:"importer_name,omitempty"`

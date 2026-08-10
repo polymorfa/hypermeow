@@ -153,6 +153,7 @@ type Client struct {
 
 	responseWaiters     map[string]chan<- *waBinary.Node
 	responseWaitersLock sync.Mutex
+	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
 	handlerQueue      chan *waBinary.Node
 	eventHandlers     []wrappedEventHandler
@@ -902,6 +903,7 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		}
 	}
 	cli.recvLog.Debugf("%s", node)
+	cli.handleOutOfBandNode(node)
 	// Signal-disabled handoff: parse and dispatch UndecryptedMessage
 	// synchronously from the recv goroutine, so the event interleaves
 	// with [RawNodeHandler] callbacks in wire order. Going through the
@@ -931,6 +933,13 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		cli.enqueueNode(ctx, node)
 	} else if node.Tag != "ack" {
 		cli.Log.Debugf("Didn't handle WhatsApp node %s", node.Tag)
+	}
+}
+
+func (cli *Client) handleOutOfBandNode(node *waBinary.Node) {
+	if node.Tag == "notification" && node.Attrs["type"] == "business" {
+		cli.handleBusinessCatalogNotification(node)
+		node.Attrs[businessNonceDeliveredAttr] = true
 	}
 }
 
