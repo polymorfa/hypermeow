@@ -66,15 +66,17 @@ fi
 run_revision() {
 	local name=$1 context=$2 revision=$3 repeat=$4 scenario=$5 variant=$1
 	local build_tags=
+	local security_code_smoke=${BENCH_SECURITY_CODE_SMOKE:-false}
 	if [[ $name != hypermeow ]]; then
 		build_tags=benchmark_legacy
+		security_code_smoke=false
 	else
 		build_tags=$candidate_build_tags
 	fi
 	if ((repeats > 1)); then
 		variant="${name}-r${repeat}"
 	fi
-	LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="$variant" BENCH_BUILD_TAGS="$build_tags" ./run-system-matrix.sh "$scenario"
+	LIBRARY_CONTEXT="$context" BUILD_REV="$revision" BENCH_VARIANT="$variant" BENCH_BUILD_TAGS="$build_tags" BENCH_SECURITY_CODE_SMOKE="$security_code_smoke" ./run-system-matrix.sh "$scenario"
 }
 
 for ((repeat = repeat_start; repeat <= repeats; repeat++)); do
