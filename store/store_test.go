@@ -65,6 +65,40 @@ func TestDeviceDeleteWaitsForSave(t *testing.T) {
 	}
 }
 
+func TestDeviceDeleteWaitObservesCancellation(t *testing.T) {
+	container := &blockingDeviceContainer{
+		putStarted:    make(chan struct{}),
+		allowPut:      make(chan struct{}),
+		deleteStarted: make(chan struct{}),
+	}
+	id := types.NewJID("15551234567", types.DefaultUserServer)
+	device := &Device{ID: &id, Container: container}
+	saveDone := make(chan error, 1)
+	go func() { saveDone <- device.Save(context.Background()) }()
+	<-container.putStarted
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- device.Delete(ctx) }()
+	select {
+	case err := <-deleteDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("delete error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled delete remained blocked")
+	}
+	select {
+	case <-container.deleteStarted:
+		t.Fatal("canceled delete entered the container")
+	default:
+	}
+	close(container.allowPut)
+	if err := <-saveDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeviceSaveAfterDeleteFailsWithoutContainerWrite(t *testing.T) {
 	container := &blockingDeviceContainer{
 		putStarted:    make(chan struct{}),
