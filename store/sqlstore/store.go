@@ -256,9 +256,9 @@ const (
 		ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key
 	`
 	hasPNRowsToMigrateQuery = `
-		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2 || ':%')
-			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2 || ':%')
-			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2 || ':%')
+		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2)
+			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2)
+			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2)
 	`
 )
 
@@ -476,7 +476,7 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 		return nil
 	}
 	var hasPNRows bool
-	err := s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, pnSignal).Scan(&hasPNRows)
+	err := s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, pnSignal+":%").Scan(&hasPNRows)
 	if err != nil {
 		s.log.Warnf("Failed to check for PN rows to migrate from %s: %v", pnSignal, err)
 	} else if !hasPNRows {

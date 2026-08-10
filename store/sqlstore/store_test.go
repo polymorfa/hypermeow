@@ -150,7 +150,7 @@ func TestMigratePNToLIDCachesEmptyPreflightTemporarily(t *testing.T) {
 			t.Fatalf("existence query did not cover %s", table)
 		}
 	}
-	wantArgs := []string{store.JID, "15551234567"}
+	wantArgs := []string{store.JID, "15551234567:%"}
 	if len(state.args) != len(wantArgs) {
 		t.Fatalf("unexpected existence query argument count %d", len(state.args))
 	}
