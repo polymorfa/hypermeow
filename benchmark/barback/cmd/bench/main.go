@@ -52,6 +52,7 @@ type config struct {
 	BusinessSmoke     bool
 	PhoneConsentSmoke bool
 	SecurityCodeSmoke bool
+	SmokeOnly         bool
 	Total             int64
 	Timeout           time.Duration
 	Workload          workloadConfig
@@ -136,6 +137,7 @@ type result struct {
 	BusinessAppValidated  bool                 `json:"business_app_validated"`
 	PhoneConsentValidated bool                 `json:"phone_consent_validated"`
 	SecurityCodeValidated bool                 `json:"security_code_validated"`
+	SmokeOnly             bool                 `json:"smoke_only"`
 }
 
 type runner struct {
@@ -300,6 +302,16 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("invalid BENCH_SECURITY_CODE_SMOKE")
 	}
+	smokeOnly, err := strconv.ParseBool(env("BENCH_SMOKE_ONLY", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("invalid BENCH_SMOKE_ONLY")
+	}
+	if securityCodeSmoke && !smokeOnly {
+		return config{}, errors.New("BENCH_SECURITY_CODE_SMOKE requires BENCH_SMOKE_ONLY=true")
+	}
+	if smokeOnly && !phoneConsentSmoke && !securityCodeSmoke {
+		return config{}, errors.New("BENCH_SMOKE_ONLY requires a preflight smoke")
+	}
 	return config{
 		DatabaseURL:       env("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/hypermeow?sslmode=disable"),
 		BarbackURL:        env("BARBACK_URL", "http://barback:8080"),
@@ -312,6 +324,7 @@ func loadConfig() (config, error) {
 		BusinessSmoke:     businessSmoke,
 		PhoneConsentSmoke: phoneConsentSmoke,
 		SecurityCodeSmoke: securityCodeSmoke,
+		SmokeOnly:         smokeOnly,
 		Total:             total,
 		Timeout:           timeout,
 		Workload: workloadConfig{
@@ -518,6 +531,10 @@ func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeo
 					},
 				)
 			}) {
+				return
+			}
+			if r.cfg.SmokeOnly {
+				r.doneOnce.Do(func() { close(r.done) })
 				return
 			}
 			r.startOnce.Do(r.startMetrics)
@@ -736,7 +753,6 @@ func (r *runner) runSecurityCodeSmoke(validate func() error) error {
 			r.securityCodeValid.Store(true)
 			return
 		}
-		r.failed.Add(1)
 		r.recordFailure(r.securityCodeErr)
 		fmt.Fprintf(os.Stderr, "validate identity verification code: %v\n", r.securityCodeErr)
 		r.reportFatal(fmt.Errorf("validate identity verification code: %w", r.securityCodeErr))
@@ -855,12 +871,19 @@ func (r *runner) snapshot(completed bool) result {
 		}
 	}
 	runtimeNow := runtimeSnapshot()
+	targetMessages := r.cfg.Total
+	workloadCompleted := r.sent.Load() == r.cfg.Total
+	if r.cfg.SmokeOnly {
+		targetMessages = 0
+		workloadCompleted = (!r.cfg.PhoneConsentSmoke || r.phoneConsentValid.Load()) &&
+			(!r.cfg.SecurityCodeSmoke || r.securityCodeValid.Load())
+	}
 	res := result{
 		Variant:               r.cfg.Variant,
 		Revision:              revision,
 		StartedAt:             startedTime,
-		Completed:             completed && r.failed.Load() == 0 && r.sent.Load() == r.cfg.Total,
-		TargetMessages:        r.cfg.Total,
+		Completed:             completed && r.failed.Load() == 0 && workloadCompleted,
+		TargetMessages:        targetMessages,
 		Workload:              r.cfg.Workload,
 		MessagesReceived:      r.received.Load(),
 		MessagesSent:          r.sent.Load(),
@@ -880,6 +903,7 @@ func (r *runner) snapshot(completed bool) result {
 		BusinessAppValidated:  r.businessValid.Load(),
 		PhoneConsentValidated: r.phoneConsentValid.Load(),
 		SecurityCodeValidated: r.securityCodeValid.Load(),
+		SmokeOnly:             r.cfg.SmokeOnly,
 	}
 	r.metricsMu.Lock()
 	if r.sessionStarted {

@@ -136,7 +136,11 @@ const (
 		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) VALUES ($1, $2, $3)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity
 	`
-	deleteAllIdentitiesQuery     = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2`
+	ensureIdentityQuery = `
+		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) VALUES ($1, $2, $3)
+		ON CONFLICT (our_jid, their_id) DO NOTHING
+	`
+	deleteAllIdentitiesQuery     = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3`
 	deleteIdentityQuery          = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
 	getIdentityQuery             = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
 	getManyIdentityQueryPostgres = `SELECT their_id, identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id = ANY($2)`
@@ -165,7 +169,8 @@ func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte
 func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error {
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
-	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, phone+":%")
+	lower, upper := signalAddressRange(phone)
+	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, lower, upper)
 	if err == nil {
 		for address := range s.identityCache {
 			if strings.HasPrefix(address, phone+":") {
@@ -207,6 +212,27 @@ func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [3
 	} else if err != nil {
 		return false, err
 	} else if len(existingIdentity) != 32 {
+		return false, ErrInvalidLength
+	}
+	existingKey := *(*[32]byte)(existingIdentity)
+	s.setCachedIdentityLocked(address, identityCacheEntry{Key: existingKey, Present: true})
+	return existingKey == key, nil
+}
+
+func (s *SQLStore) EnsureIdentity(ctx context.Context, address string, key [32]byte) (bool, error) {
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	if cached, ok := s.identityCache[address]; ok && cached.Present {
+		return cached.Key == key, nil
+	}
+	if _, err := s.db.Exec(ctx, ensureIdentityQuery, s.JID, address, key[:]); err != nil {
+		return false, err
+	}
+	var existingIdentity []byte
+	if err := s.db.QueryRow(ctx, getIdentityQuery, s.JID, address).Scan(&existingIdentity); err != nil {
+		return false, err
+	}
+	if len(existingIdentity) != 32 {
 		return false, ErrInvalidLength
 	}
 	existingKey := *(*[32]byte)(existingIdentity)
@@ -339,7 +365,7 @@ const (
 		FROM UNNEST($2::text[], $3::bytea[]) AS batch(their_id, session)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
 	`
-	deleteAllSessionsQuery = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2`
+	deleteAllSessionsQuery = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3`
 	deleteSessionQuery     = `DELETE FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id=$2`
 
 	migratePNToLIDSessionsQuery = `
@@ -551,8 +577,13 @@ func (s *SQLStore) DeleteAllSessions(ctx context.Context, phone string) error {
 }
 
 func (s *SQLStore) deleteAllSessions(ctx context.Context, phone string) error {
-	_, err := s.db.Exec(ctx, deleteAllSessionsQuery, s.JID, phone+":%")
+	lower, upper := signalAddressRange(phone)
+	_, err := s.db.Exec(ctx, deleteAllSessionsQuery, s.JID, lower, upper)
 	return err
+}
+
+func signalAddressRange(user string) (string, string) {
+	return user + ":", user + ";"
 }
 
 func (s *SQLStore) deleteAllSenderKeys(ctx context.Context, phone string) error {

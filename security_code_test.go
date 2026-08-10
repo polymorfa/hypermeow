@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -16,6 +17,7 @@ import (
 )
 
 type identityReaderStore struct {
+	lock       sync.Mutex
 	keys       map[string][32]byte
 	includeAll bool
 }
@@ -27,6 +29,8 @@ func (*identityReaderStore) IsTrustedIdentity(context.Context, string, [32]byte)
 	return true, nil
 }
 func (irs *identityReaderStore) GetManyIdentities(_ context.Context, addresses []string) (map[string][32]byte, error) {
+	irs.lock.Lock()
+	defer irs.lock.Unlock()
 	result := make(map[string][32]byte, len(addresses))
 	if irs.includeAll {
 		for address, key := range irs.keys {
@@ -40,6 +44,18 @@ func (irs *identityReaderStore) GetManyIdentities(_ context.Context, addresses [
 		}
 	}
 	return result, nil
+}
+func (irs *identityReaderStore) EnsureIdentity(_ context.Context, address string, key [32]byte) (bool, error) {
+	irs.lock.Lock()
+	defer irs.lock.Unlock()
+	if existing, ok := irs.keys[address]; ok {
+		return existing == key, nil
+	}
+	if irs.keys == nil {
+		irs.keys = make(map[string][32]byte)
+	}
+	irs.keys[address] = key
+	return true, nil
 }
 
 func TestReadIdentityKeysIgnoresUnrequestedReaderEntries(t *testing.T) {

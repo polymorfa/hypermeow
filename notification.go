@@ -176,6 +176,10 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 		changedDeviceLID := deviceChild.AttrGetter().OptionalJID("lid")
 		switch child.Tag {
 		case "add":
+			if hasCachedLID && (changedDeviceLID == nil || deviceLIDHash == "") {
+				delete(cli.userDevicesCache, *fromLID)
+				hasCachedLID = false
+			}
 			if hasCachedPN {
 				cached.devices = append(cached.devices, changedDeviceJID)
 			}
@@ -183,6 +187,10 @@ func (cli *Client) handleDeviceNotification(ctx context.Context, node *waBinary.
 				cachedLID.devices = append(cachedLID.devices, *changedDeviceLID)
 			}
 		case "remove":
+			if hasCachedLID && (changedDeviceLID == nil || deviceLIDHash == "") {
+				delete(cli.userDevicesCache, *fromLID)
+				hasCachedLID = false
+			}
 			if hasCachedPN {
 				cached.devices = slices.DeleteFunc(cached.devices, func(existing types.JID) bool {
 					return existing == changedDeviceJID

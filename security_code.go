@@ -195,15 +195,12 @@ func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([
 			}
 			key := response.bundle.IdentityKey().PublicKey().PublicKey()
 			address := device.SignalAddress().String()
-			trusted, trustErr := cli.Store.Identities.IsTrustedIdentity(ctx, address, key)
+			trusted, trustErr := reader.EnsureIdentity(ctx, address, key)
 			if trustErr != nil {
-				return nil, fmt.Errorf("check identity key for %s: %w", device, trustErr)
+				return nil, fmt.Errorf("ensure identity key for %s: %w", device, trustErr)
 			}
 			if !trusted {
 				return nil, fmt.Errorf("identity key for %s is not trusted", device)
-			}
-			if putErr := cli.Store.Identities.PutIdentity(ctx, address, key); putErr != nil {
-				return nil, fmt.Errorf("store identity key for %s: %w", device, putErr)
 			}
 			stored[address] = key
 		}
