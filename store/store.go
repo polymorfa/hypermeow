@@ -285,6 +285,10 @@ func (device *Device) lockSaveDelete(ctx context.Context) error {
 	})
 	select {
 	case <-device.saveDeleteLock:
+		if err := ctx.Err(); err != nil {
+			device.unlockSaveDelete()
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

@@ -99,6 +99,22 @@ func TestDeviceDeleteWaitObservesCancellation(t *testing.T) {
 	}
 }
 
+func TestDeviceLockRejectsCanceledContextWhenAvailable(t *testing.T) {
+	device := &Device{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 100 {
+		err := device.lockSaveDelete(ctx)
+		if err == nil {
+			device.unlockSaveDelete()
+			t.Fatal("canceled context acquired the save/delete lock")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("lock error = %v, want context canceled", err)
+		}
+	}
+}
+
 func TestDeviceSaveAfterDeleteFailsWithoutContainerWrite(t *testing.T) {
 	container := &blockingDeviceContainer{
 		putStarted:    make(chan struct{}),
