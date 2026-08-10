@@ -8,8 +8,10 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 - Added an evidence-backed comparison with upstream WhatsMeow.
 - Consolidated the root white-box test suite into themed files without removing tests or changing coverage.
+- Consolidated handwritten business-app features into `business.go` without changing the exported API.
 - Moved committed benchmark reports and heap profiles into `benchmark/barback/testdata/results`; fresh run output remains under the ignored `benchmark/barback/results` workspace.
 - Retracted the accidental `v0.1.0` tag and its correction carrier; `@latest` selects `main`.
+- Established `main` as the sole package source; `dev` remains an integration branch.
 
 ## First public release - 2026-08-10
 

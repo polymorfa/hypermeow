@@ -49,6 +49,8 @@ HyperMeow uses commit pseudo-versions from its reviewed `main` branch:
 go get github.com/polymorfa/hypermeow@latest
 ```
 
+Only `main` is authoritative for package documentation and pseudo-version resolution. `dev` is an integration branch.
+
 The root package remains named `whatsmeow`, so use an explicit import alias:
 
 ```go
@@ -82,6 +84,8 @@ New exported functionality is additive unless called out in the [changelog](CHAN
 Go `_test.go` files stay beside the package they test. Most HyperMeow tests intentionally exercise unexported concurrency, cache, parser, and persistence behavior; moving them into a separate directory would stop Go from treating them as the same package.
 
 To keep the repository root navigable, the white-box suite is consolidated into five themed files—business, identity, app state/history, messaging, and client runtime—plus the external client contract suite. Consolidation changes file layout only; the complete test inventory and coverage remain intact.
+
+The handwritten business-app API is consolidated in `business.go`; generated protocol bindings remain separate.
 
 Versioned benchmark reports and heap profiles live under `benchmark/barback/testdata/results/`. Fresh local runs write to the ignored `benchmark/barback/results/` workspace.
 
