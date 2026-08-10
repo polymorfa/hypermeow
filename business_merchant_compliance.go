@@ -50,14 +50,17 @@ func normalizeBusinessMerchantCompliance(info types.BusinessMerchantCompliance) 
 	info.GrievanceOfficer.Email = strings.TrimSpace(info.GrievanceOfficer.Email)
 	info.GrievanceOfficer.LandlineNumber = strings.TrimSpace(info.GrievanceOfficer.LandlineNumber)
 	info.GrievanceOfficer.MobileNumber = strings.TrimSpace(info.GrievanceOfficer.MobileNumber)
-	if info.EntityType == "" {
-		info.EntityType = types.BusinessMerchantEntityOther
-	}
 	if info.EntityName == "" {
 		return info, fmt.Errorf("business merchant entity name is empty")
 	}
+	if info.EntityType == "" {
+		return info, fmt.Errorf("business merchant entity type is empty")
+	}
 	if err := validateBusinessMerchantEntityType(info.EntityType); err != nil {
 		return info, err
+	}
+	if info.EntityType == types.BusinessMerchantEntityOther && info.EntityTypeCustom == "" {
+		return info, fmt.Errorf("business merchant custom entity type is empty")
 	}
 	fields := []struct {
 		name  string

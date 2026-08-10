@@ -96,6 +96,11 @@ func TestBusinessMerchantComplianceRejectsInvalidInput(t *testing.T) {
 		mutate func(*types.BusinessMerchantCompliance)
 	}{
 		{name: "entity type", mutate: func(info *types.BusinessMerchantCompliance) { info.EntityType = "COOPERATIVE" }},
+		{name: "missing entity type", mutate: func(info *types.BusinessMerchantCompliance) { info.EntityType = "" }},
+		{name: "missing custom entity type", mutate: func(info *types.BusinessMerchantCompliance) {
+			info.EntityType = types.BusinessMerchantEntityOther
+			info.EntityTypeCustom = "   "
+		}},
 		{name: "empty entity name", mutate: func(info *types.BusinessMerchantCompliance) { info.EntityName = "   " }},
 		{name: "entity name length", mutate: func(info *types.BusinessMerchantCompliance) { info.EntityName = strings.Repeat("n", 257) }},
 		{name: "customer email length", mutate: func(info *types.BusinessMerchantCompliance) { info.CustomerCare.Email = strings.Repeat("e", 255) }},
