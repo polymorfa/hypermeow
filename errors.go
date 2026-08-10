@@ -232,10 +232,38 @@ func (iqe *IQError) Is(other error) bool {
 	} else if iqe.Code != 0 && otherIQE.Code != 0 {
 		return otherIQE.Code == iqe.Code && otherIQE.Text == iqe.Text
 	} else if iqe.ErrorNode != nil && otherIQE.ErrorNode != nil {
-		return reflect.DeepEqual(iqe.ErrorNode, otherIQE.ErrorNode)
+		return reflect.DeepEqual(normalizeIQErrorNode(iqe.ErrorNode), normalizeIQErrorNode(otherIQE.ErrorNode))
 	} else {
 		return false
 	}
+}
+
+func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
+	if node == nil {
+		return nil
+	}
+	normalized := *node
+	if len(node.Attrs) > 0 {
+		normalized.Attrs = make(waBinary.Attrs, len(node.Attrs))
+		for key, value := range node.Attrs {
+			if value != nil && value != "" {
+				normalized.Attrs[key] = value
+			}
+		}
+		if len(normalized.Attrs) == 0 {
+			normalized.Attrs = nil
+		}
+	} else {
+		normalized.Attrs = nil
+	}
+	if children, ok := node.Content.([]waBinary.Node); ok {
+		normalizedChildren := make([]waBinary.Node, len(children))
+		for index := range children {
+			normalizedChildren[index] = *normalizeIQErrorNode(&children[index])
+		}
+		normalized.Content = normalizedChildren
+	}
+	return &normalized
 }
 
 // ElementMissingError is returned by various functions that parse XML elements when a required element is missing.
