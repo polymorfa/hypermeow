@@ -29,8 +29,8 @@ type IdentityStore interface {
 }
 
 type IdentityKeyReader interface {
-	GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, error)
-	EnsureIdentity(ctx context.Context, address string, key [32]byte) (bool, error)
+	GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error)
+	EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error)
 }
 
 type SessionStore interface {

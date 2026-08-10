@@ -95,14 +95,14 @@ func TestGetManyIdentitiesUsesOneQueryAndCachesResults(t *testing.T) {
 	)
 	addresses := []string{"100000000000001:1", "100000000000001:2"}
 
-	got, err := store.GetManyIdentities(context.Background(), addresses)
+	got, _, err := store.GetManyIdentities(context.Background(), addresses)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[addresses[0]][0] != 0x11 || got[addresses[1]][0] != 0x22 {
 		t.Fatalf("unexpected identities: %#v", got)
 	}
-	if _, err = store.GetManyIdentities(context.Background(), addresses); err != nil {
+	if _, _, err = store.GetManyIdentities(context.Background(), addresses); err != nil {
 		t.Fatal(err)
 	}
 	if state.queries != 1 {

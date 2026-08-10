@@ -257,7 +257,7 @@ func TestEnsureIdentityRejectsDifferentCachedKey(t *testing.T) {
 		address: {Key: storedKey, Present: true},
 	}}
 
-	trusted, err := sqlStore.EnsureIdentity(context.Background(), address, [32]byte{2})
+	trusted, err := sqlStore.EnsureIdentity(context.Background(), address, [32]byte{2}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestEnsureIdentityDoesNotOverwriteDatabaseKeyAfterNegativeCache(t *testing.
 	sqlStore := NewSQLStore(NewWithDB(db, "postgres", nil), types.NewJID("15550000000", types.DefaultUserServer))
 	sqlStore.identityCache = map[string]identityCacheEntry{address: {}}
 
-	trusted, err := sqlStore.EnsureIdentity(context.Background(), address, [32]byte{2})
+	trusted, err := sqlStore.EnsureIdentity(context.Background(), address, [32]byte{2}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,6 +286,17 @@ func TestEnsureIdentityDoesNotOverwriteDatabaseKeyAfterNegativeCache(t *testing.
 	}
 	if got := sqlStore.identityCache[address]; !got.Present || got.Key != storedKey {
 		t.Fatalf("database identity was not retained: %#v", got)
+	}
+}
+
+func TestEnsureIdentityRejectsFetchStartedBeforeDeletion(t *testing.T) {
+	sqlStore := &SQLStore{identityDeleteGen: 2}
+	trusted, err := sqlStore.EnsureIdentity(context.Background(), "100000011111111_1:7", [32]byte{1}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		t.Fatal("identity fetched before deletion was trusted")
 	}
 }
 

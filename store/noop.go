@@ -61,11 +61,11 @@ func (n *NoopStore) IsTrustedIdentity(ctx context.Context, address string, key [
 	return false, n.Error
 }
 
-func (n *NoopStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, error) {
-	return nil, n.Error
+func (n *NoopStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error) {
+	return nil, 0, n.Error
 }
 
-func (n *NoopStore) EnsureIdentity(ctx context.Context, address string, key [32]byte) (bool, error) {
+func (n *NoopStore) EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error) {
 	return false, n.Error
 }
 

@@ -20,6 +20,7 @@ type identityReaderStore struct {
 	lock       sync.Mutex
 	keys       map[string][32]byte
 	includeAll bool
+	generation uint64
 }
 
 func (*identityReaderStore) PutIdentity(context.Context, string, [32]byte) error { return nil }
@@ -28,7 +29,7 @@ func (*identityReaderStore) DeleteIdentity(context.Context, string) error       
 func (*identityReaderStore) IsTrustedIdentity(context.Context, string, [32]byte) (bool, error) {
 	return true, nil
 }
-func (irs *identityReaderStore) GetManyIdentities(_ context.Context, addresses []string) (map[string][32]byte, error) {
+func (irs *identityReaderStore) GetManyIdentities(_ context.Context, addresses []string) (map[string][32]byte, uint64, error) {
 	irs.lock.Lock()
 	defer irs.lock.Unlock()
 	result := make(map[string][32]byte, len(addresses))
@@ -36,18 +37,21 @@ func (irs *identityReaderStore) GetManyIdentities(_ context.Context, addresses [
 		for address, key := range irs.keys {
 			result[address] = key
 		}
-		return result, nil
+		return result, irs.generation, nil
 	}
 	for _, address := range addresses {
 		if key, ok := irs.keys[address]; ok {
 			result[address] = key
 		}
 	}
-	return result, nil
+	return result, irs.generation, nil
 }
-func (irs *identityReaderStore) EnsureIdentity(_ context.Context, address string, key [32]byte) (bool, error) {
+func (irs *identityReaderStore) EnsureIdentity(_ context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error) {
 	irs.lock.Lock()
 	defer irs.lock.Unlock()
+	if deleteGeneration != irs.generation {
+		return false, nil
+	}
 	if existing, ok := irs.keys[address]; ok {
 		return existing == key, nil
 	}

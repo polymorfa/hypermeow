@@ -75,6 +75,7 @@ type SQLStore struct {
 	contactCacheLock  sync.Mutex
 	identityCache     map[string]identityCacheEntry
 	identityCacheLock sync.RWMutex
+	identityDeleteGen uint64
 
 	migratedPNSessionsCache     map[string]struct{}
 	emptyPNMigrationCache       map[string]time.Time
@@ -172,6 +173,7 @@ func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error 
 	lower, upper := signalAddressRange(phone)
 	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, lower, upper)
 	if err == nil {
+		s.identityDeleteGen++
 		for address := range s.identityCache {
 			if strings.HasPrefix(address, phone+":") {
 				s.setCachedIdentityLocked(address, identityCacheEntry{})
@@ -186,6 +188,7 @@ func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
 	defer s.identityCacheLock.Unlock()
 	_, err := s.db.Exec(ctx, deleteIdentityQuery, s.JID, address)
 	if err == nil {
+		s.identityDeleteGen++
 		s.setCachedIdentityLocked(address, identityCacheEntry{})
 	}
 	return err
@@ -219,9 +222,12 @@ func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [3
 	return existingKey == key, nil
 }
 
-func (s *SQLStore) EnsureIdentity(ctx context.Context, address string, key [32]byte) (bool, error) {
+func (s *SQLStore) EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error) {
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
+	if deleteGeneration != s.identityDeleteGen {
+		return false, nil
+	}
 	if cached, ok := s.identityCache[address]; ok && cached.Present {
 		return cached.Key == key, nil
 	}
@@ -264,14 +270,18 @@ func (s *SQLStore) queryManyIdentities(ctx context.Context, addresses []string) 
 	return s.db.Query(ctx, fmt.Sprintf(getManyIdentityQueryGeneric, strings.Join(placeholders, ",")), args...)
 }
 
-func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, error) {
+func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error) {
 	if len(addresses) == 0 {
-		return nil, nil
+		s.identityCacheLock.RLock()
+		generation := s.identityDeleteGen
+		s.identityCacheLock.RUnlock()
+		return nil, generation, nil
 	}
 	result := make(map[string][32]byte, len(addresses))
 	missing := make([]string, 0, len(addresses))
 	seen := make(map[string]struct{}, len(addresses))
 	s.identityCacheLock.RLock()
+	generation := s.identityDeleteGen
 	for _, address := range addresses {
 		if _, duplicate := seen[address]; duplicate {
 			continue
@@ -287,11 +297,12 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 	}
 	s.identityCacheLock.RUnlock()
 	if len(missing) == 0 {
-		return result, nil
+		return result, generation, nil
 	}
 
 	s.identityCacheLock.Lock()
 	defer s.identityCacheLock.Unlock()
+	generation = s.identityDeleteGen
 	stillMissing := missing[:0]
 	for _, address := range missing {
 		if cached, ok := s.identityCache[address]; ok {
@@ -304,7 +315,7 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 	}
 	missing = stillMissing
 	if len(missing) == 0 {
-		return result, nil
+		return result, generation, nil
 	}
 
 	rows, err := s.queryManyIdentities(ctx, missing)
@@ -322,10 +333,10 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 		return true, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	s.cacheFetchedIdentitiesLocked(result, fetched)
-	return result, nil
+	return result, generation, nil
 }
 
 func (s *SQLStore) cacheFetchedIdentities(result map[string][32]byte, fetched map[string]identityCacheEntry) {

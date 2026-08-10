@@ -167,7 +167,7 @@ func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([
 		addresses = append(addresses, address)
 		deviceByAddress[address] = device
 	}
-	stored, err := reader.GetManyIdentities(ctx, addresses)
+	stored, deleteGeneration, err := reader.GetManyIdentities(ctx, addresses)
 	if err != nil {
 		return nil, fmt.Errorf("read identity keys: %w", err)
 	}
@@ -195,7 +195,7 @@ func (cli *Client) readIdentityKeys(ctx context.Context, devices []types.JID) ([
 			}
 			key := response.bundle.IdentityKey().PublicKey().PublicKey()
 			address := device.SignalAddress().String()
-			trusted, trustErr := reader.EnsureIdentity(ctx, address, key)
+			trusted, trustErr := reader.EnsureIdentity(ctx, address, key, deleteGeneration)
 			if trustErr != nil {
 				return nil, fmt.Errorf("ensure identity key for %s: %w", device, trustErr)
 			}
