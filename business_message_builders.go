@@ -200,6 +200,10 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 		if !bounded(section.Title, 24) || len(section.ProductIDs) == 0 || (len(params.Sections) > 1 && strings.TrimSpace(section.Title) == "") {
 			return nil, fmt.Errorf("invalid business product section %d", index)
 		}
+		if len(section.ProductIDs) > 30-productCount {
+			return nil, errors.New("business product list exceeds 30 products")
+		}
+		productCount += len(section.ProductIDs)
 		products := make([]*waE2E.ListMessage_Product, len(section.ProductIDs))
 		for productIndex, productID := range section.ProductIDs {
 			if strings.TrimSpace(productID) == "" || !bounded(productID, 256) {
@@ -210,12 +214,8 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 			}
 			seen[productID] = struct{}{}
 			products[productIndex] = &waE2E.ListMessage_Product{ProductID: proto.String(productID)}
-			productCount++
 		}
 		sections[index] = &waE2E.ListMessage_ProductSection{Title: optionalString(section.Title), Products: products}
-	}
-	if productCount > 30 {
-		return nil, errors.New("business product list exceeds 30 products")
 	}
 	return &waE2E.Message{ListMessage: &waE2E.ListMessage{
 		Title: proto.String(params.Title), Description: optionalString(params.Description), ButtonText: proto.String(params.ButtonText),
@@ -259,6 +259,10 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 		if !bounded(section.Title, 24) || len(section.Rows) == 0 || (len(params.Sections) > 1 && strings.TrimSpace(section.Title) == "") {
 			return nil, fmt.Errorf("invalid business list section %d", sectionIndex)
 		}
+		if len(section.Rows) > 10-rowCount {
+			return nil, errors.New("business list exceeds 10 rows")
+		}
+		rowCount += len(section.Rows)
 		rows := make([]*waE2E.ListMessage_Row, len(section.Rows))
 		for rowIndex, row := range section.Rows {
 			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 200) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 24) || !bounded(row.Description, 72) {
@@ -269,12 +273,8 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 			}
 			seen[row.ID] = struct{}{}
 			rows[rowIndex] = &waE2E.ListMessage_Row{RowID: proto.String(row.ID), Title: proto.String(row.Title), Description: optionalString(row.Description)}
-			rowCount++
 		}
 		sections[sectionIndex] = &waE2E.ListMessage_Section{Title: optionalString(section.Title), Rows: rows}
-	}
-	if rowCount > 10 {
-		return nil, errors.New("business list exceeds 10 rows")
 	}
 	return &waE2E.Message{ListMessage: &waE2E.ListMessage{
 		Title: proto.String(params.Title), Description: optionalString(params.Description), ButtonText: proto.String(params.ButtonText),

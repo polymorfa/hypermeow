@@ -200,6 +200,39 @@ func TestBuildBusinessListRequiresBodyAndCapsRows(t *testing.T) {
 	}
 }
 
+func TestBusinessListBuildersRejectOversizedSectionsBeforeAllocating(t *testing.T) {
+	owner := types.NewJID("15550001", types.DefaultUserServer)
+	productIDs := make([]string, 1000)
+	rows := make([]BusinessListRow, 1000)
+	for index := range productIDs {
+		productIDs[index] = fmt.Sprintf("product-%d", index)
+		rows[index] = BusinessListRow{ID: fmt.Sprintf("row-%d", index), Title: "Row"}
+	}
+
+	productAllocs := testing.AllocsPerRun(1, func() {
+		_, _ = BuildBusinessProductListMessage(BusinessProductListMessageParams{
+			BusinessOwnerJID: owner,
+			Title:            "Products",
+			ButtonText:       "View",
+			Sections:         []BusinessProductSection{{ProductIDs: productIDs}},
+		})
+	})
+	if productAllocs > 50 {
+		t.Fatalf("oversized product section allocated %.0f objects", productAllocs)
+	}
+
+	rowAllocs := testing.AllocsPerRun(1, func() {
+		_, _ = BuildBusinessListMessage(BusinessListMessageParams{
+			Description: "Choose a row",
+			ButtonText:  "View",
+			Sections:    []BusinessListSection{{Rows: rows}},
+		})
+	})
+	if rowAllocs > 50 {
+		t.Fatalf("oversized row section allocated %.0f objects", rowAllocs)
+	}
+}
+
 func TestBusinessMessageBuildersRejectUnsafeInputs(t *testing.T) {
 	if _, err := BuildBusinessProductMessage(BusinessProductMessageParams{ProductID: "p", Title: "Tea", CurrencyCode: "USD"}); err == nil {
 		t.Fatal("expected missing owner to fail")
