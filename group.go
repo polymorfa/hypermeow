@@ -256,6 +256,7 @@ func (cli *Client) UpdateGroupParticipants(ctx context.Context, jid types.JID, p
 	for i, child := range requestParticipants {
 		participants[i] = parseParticipant(child.AttrGetter(), &child)
 	}
+	cli.storeContactUsernamesBestEffort(ctx, groupParticipantUsernames(participants))
 	return participants, nil
 }
 
@@ -321,6 +322,7 @@ func (cli *Client) UpdateGroupRequestParticipants(ctx context.Context, jid types
 	for i, child := range requestParticipants {
 		participants[i] = parseParticipant(child.AttrGetter(), &child)
 	}
+	cli.storeContactUsernamesBestEffort(ctx, groupParticipantUsernames(participants))
 	return participants, nil
 }
 
@@ -669,8 +671,12 @@ func (cli *Client) cacheGroupInfo(groupInfo *types.GroupInfo, lock bool) ([]stor
 }
 
 func groupContactUsernames(groupInfo *types.GroupInfo) []store.ContactUsernameEntry {
-	entries := make([]store.ContactUsernameEntry, 0, len(groupInfo.Participants))
-	for _, participant := range groupInfo.Participants {
+	return groupParticipantUsernames(groupInfo.Participants)
+}
+
+func groupParticipantUsernames(participants []types.GroupParticipant) []store.ContactUsernameEntry {
+	entries := make([]store.ContactUsernameEntry, 0, len(participants))
+	for _, participant := range participants {
 		if participant.Username == "" {
 			continue
 		}

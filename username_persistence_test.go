@@ -77,3 +77,13 @@ func TestGroupContactUsernamesUseStableLIDs(t *testing.T) {
 		t.Fatalf("unexpected group username entries: %#v", entries)
 	}
 }
+
+func TestGroupParticipantUsernamesUseStableLIDs(t *testing.T) {
+	lid := types.NewJID("100000011111111", types.HiddenUserServer)
+	entries := groupParticipantUsernames([]types.GroupParticipant{{
+		JID: types.NewJID("15550001111", types.DefaultUserServer), LID: lid, Username: "example",
+	}})
+	if len(entries) != 1 || entries[0].JID != lid || entries[0].Username != "example" {
+		t.Fatalf("unexpected participant username entries: %#v", entries)
+	}
+}
