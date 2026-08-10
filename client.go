@@ -88,8 +88,15 @@ type RawNode struct {
 }
 
 // DecryptedPayloadHandler is called for every <enc> child this library
-// decrypts, with the plaintext exactly as Signal produced it and before
-// anything interprets it.
+// decrypts, with the plaintext before anything interprets it.
+//
+// "Before anything interprets it" is the promise, not "byte for byte as the
+// cipher emitted it". Signal's padding is stripped first, because the padded
+// form is not the message and every caller would strip it again; what fires
+// here is what the protobuf unmarshal below is about to read. The one
+// exception is padding that will not strip, where no unpadded form exists and
+// the padded bytes are handed over instead — the alternative there is nothing
+// at all.
 //
 // It exists because decryption is irreversible. The ratchet has advanced
 // and a prekey may have been spent by the time the plaintext exists, so a
