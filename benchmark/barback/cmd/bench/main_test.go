@@ -147,6 +147,41 @@ func TestPhoneConsentFailureIsSharedAcrossWorkers(t *testing.T) {
 	}
 }
 
+func TestPhoneConsentSmokeRunsBeforeMeasuredMetrics(t *testing.T) {
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	if !r.beforeBenchmarkMessage(func() error {
+		if r.startedAt.Load() != 0 {
+			t.Fatal("workload metrics started before phone consent validation")
+		}
+		return nil
+	}) {
+		t.Fatal("phone consent validation failed")
+	}
+	r.startOnce.Do(r.startMetrics)
+	t.Cleanup(r.stopMetricsSampler)
+	if r.startedAt.Load() == 0 {
+		t.Fatal("workload metrics did not start after phone consent validation")
+	}
+}
+
+func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	if r.beforeBenchmarkMessage(func() error { return errors.New("failed") }) {
+		t.Fatal("failed phone consent validation allowed the workload to start")
+	}
+	if r.startedAt.Load() != 0 {
+		t.Fatal("failed phone consent validation started workload metrics")
+	}
+}
+
 func TestLoadConfigRejectsInvalidMessageProfile(t *testing.T) {
 	t.Setenv("BENCH_MESSAGE_PROFILE", "production")
 	if _, err := loadConfig(); err == nil {

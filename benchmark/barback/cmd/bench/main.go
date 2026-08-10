@@ -38,6 +38,8 @@ import (
 
 var revision = "working-tree"
 
+const phoneConsentSmokeTimeout = 5 * time.Second
+
 type config struct {
 	DatabaseURL       string
 	BarbackURL        string
@@ -481,6 +483,11 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 			if event.Message.GetConversation() != "ping" {
 				return
 			}
+			if !r.beforeBenchmarkMessage(func() error {
+				return r.validatePhoneNumberConsent(context.Background(), client, phoneConsentTarget(event))
+			}) {
+				return
+			}
 			r.startOnce.Do(r.startMetrics)
 			r.received.Add(1)
 			jobs := r.jobs[jobShard(event.Info.Chat, len(r.jobs))]
@@ -576,15 +583,6 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 		case <-ctx.Done():
 			return
 		case msg := <-jobs:
-			var consentErr error
-			if r.cfg.PhoneConsentSmoke {
-				consentErr = r.runPhoneConsentSmoke(func() error {
-					return r.validatePhoneNumberConsent(ctx, client, phoneConsentTarget(msg))
-				})
-			}
-			if consentErr != nil {
-				return
-			}
 			sequence := r.messageSequence.Add(1) - 1
 			outgoing, category, mediaBytes, uploadDuration, err := buildWorkloadMessage(ctx, client, string(msg.Info.ID), sequence, r.cfg.Workload.MessageProfile)
 			if uploadDuration > 0 {
@@ -617,6 +615,13 @@ func (r *runner) sendWorker(ctx context.Context, client *whatsmeow.Client, jobs 
 			r.checkDone()
 		}
 	}
+}
+
+func (r *runner) beforeBenchmarkMessage(validate func() error) bool {
+	if !r.cfg.PhoneConsentSmoke {
+		return true
+	}
+	return r.runPhoneConsentSmoke(validate) == nil
 }
 
 func (r *runner) runPhoneConsentSmoke(validate func() error) error {
@@ -688,19 +693,19 @@ func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsme
 	if chat.Server != types.HiddenUserServer {
 		return fmt.Errorf("synthetic phone consent target is not a LID")
 	}
-	if _, err := client.SendMessage(ctx, chat, buildRequestPhoneNumberMessage()); err != nil {
+	smokeCtx, cancel := context.WithTimeout(ctx, phoneConsentSmokeTimeout)
+	defer cancel()
+	if _, err := client.SendMessage(smokeCtx, chat, buildRequestPhoneNumberMessage()); err != nil {
 		return fmt.Errorf("send request phone number message: %w", err)
 	}
-	if _, err := client.SendMessage(ctx, chat, buildSharePhoneNumberMessage()); err != nil {
+	if _, err := client.SendMessage(smokeCtx, chat, buildSharePhoneNumberMessage()); err != nil {
 		return fmt.Errorf("send share phone number message: %w", err)
 	}
 
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.cfg.BarbackURL+"/admin/mock-phone/captured-messages", nil)
+		req, err := http.NewRequestWithContext(smokeCtx, http.MethodGet, r.cfg.BarbackURL+"/admin/mock-phone/captured-messages", nil)
 		if err != nil {
 			return err
 		}
@@ -714,10 +719,8 @@ func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsme
 			}
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline.C:
-			return fmt.Errorf("Barback did not capture request and share phone number messages")
+		case <-smokeCtx.Done():
+			return fmt.Errorf("Barback did not capture request and share phone number messages: %w", smokeCtx.Err())
 		case <-ticker.C:
 		}
 	}
