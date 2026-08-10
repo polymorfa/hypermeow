@@ -230,10 +230,14 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 			return output, fmt.Errorf("failed to store LID mappings: %w", err)
 		}
 	}
-	if err = putContactUsernames(ctx, cli.Store.Contacts, usernameEntries); err != nil {
-		return output, fmt.Errorf("failed to store usernames: %w", err)
-	}
+	cli.storeContactUsernamesBestEffort(ctx, usernameEntries)
 	return output, nil
+}
+
+func (cli *Client) storeContactUsernamesBestEffort(ctx context.Context, entries []store.ContactUsernameEntry) {
+	if err := putContactUsernames(ctx, cli.Store.Contacts, entries); err != nil {
+		cli.Log.Warnf("Failed to store usernames: %v", err)
+	}
 }
 
 func putContactUsernames(ctx context.Context, contacts store.ContactStore, entries []store.ContactUsernameEntry) error {

@@ -2,15 +2,27 @@ package whatsmeow
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
+	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
 type singleUsernameStore struct {
 	store.NoopStore
 	entries []store.ContactUsernameEntry
+}
+
+type failingUsernameStore struct {
+	store.NoopStore
+	called bool
+}
+
+func (failing *failingUsernameStore) PutContactUsername(context.Context, types.JID, string) error {
+	failing.called = true
+	return errors.New("synthetic username cache failure")
 }
 
 func (single *singleUsernameStore) PutContactUsername(_ context.Context, user types.JID, username string) error {
@@ -41,6 +53,17 @@ func TestPutContactUsernamesFallsBackToSingleWrites(t *testing.T) {
 		if contacts.entries[index] != entries[index] {
 			t.Fatalf("stored entry %d = %#v, want %#v", index, contacts.entries[index], entries[index])
 		}
+	}
+}
+
+func TestContactUsernamePersistenceIsBestEffort(t *testing.T) {
+	contacts := &failingUsernameStore{}
+	client := &Client{Store: &store.Device{Contacts: contacts}, Log: waLog.Noop}
+	client.storeContactUsernamesBestEffort(context.Background(), []store.ContactUsernameEntry{{
+		JID: types.NewJID("100000011111111", types.HiddenUserServer), Username: "example",
+	}})
+	if !contacts.called {
+		t.Fatal("username cache write was not attempted")
 	}
 }
 
