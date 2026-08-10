@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -113,5 +114,29 @@ func TestGroupParticipantUsernamesUseStableLIDs(t *testing.T) {
 	}})
 	if len(entries) != 1 || entries[0].JID != lid || entries[0].Username != "example" {
 		t.Fatalf("unexpected participant username entries: %#v", entries)
+	}
+}
+
+func TestParseGroupResponsePersistsParticipantUsernames(t *testing.T) {
+	contacts := &singleUsernameStore{}
+	client := &Client{Store: &store.Device{Contacts: contacts}, Log: waLog.Noop}
+	lid := types.NewJID("100000011111111", types.HiddenUserServer)
+	groupNode := &waBinary.Node{
+		Tag:   "group",
+		Attrs: waBinary.Attrs{"id": "120363000000000000"},
+		Content: []waBinary.Node{{
+			Tag:   "participant",
+			Attrs: waBinary.Attrs{"jid": lid, "username": "example"},
+		}},
+	}
+	info, err := client.parseGroupNodeAndStoreUsernames(context.Background(), groupNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Participants) != 1 || len(contacts.entries) != 1 {
+		t.Fatalf("parsed participants = %d, stored usernames = %#v", len(info.Participants), contacts.entries)
+	}
+	if contacts.entries[0].JID != lid || contacts.entries[0].Username != "example" {
+		t.Fatalf("stored username = %#v", contacts.entries[0])
 	}
 }

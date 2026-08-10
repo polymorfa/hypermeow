@@ -157,7 +157,7 @@ func (cli *Client) CreateGroup(ctx context.Context, req ReqCreateGroup) (*types.
 	if !ok {
 		return nil, &ElementMissingError{Tag: "group", In: "response to create group query"}
 	}
-	return cli.parseGroupNode(&groupNode)
+	return cli.parseGroupNodeAndStoreUsernames(ctx, &groupNode)
 }
 
 // UnlinkGroup removes a child group from a parent community.
@@ -474,7 +474,7 @@ func (cli *Client) GetGroupInfoFromInvite(ctx context.Context, jid, inviter type
 	if !ok {
 		return nil, &ElementMissingError{Tag: "group", In: "response to invite group info query"}
 	}
-	return cli.parseGroupNode(&groupNode)
+	return cli.parseGroupNodeAndStoreUsernames(ctx, &groupNode)
 }
 
 // JoinGroupWithInvite joins a group using an invite message.
@@ -512,7 +512,7 @@ func (cli *Client) GetGroupInfoFromLink(ctx context.Context, code string) (*type
 	if !ok {
 		return nil, &ElementMissingError{Tag: "group", In: "response to group link info query"}
 	}
-	return cli.parseGroupNode(&groupNode)
+	return cli.parseGroupNodeAndStoreUsernames(ctx, &groupNode)
 }
 
 // JoinGroupWithLink joins the group using the given invite link.
@@ -672,6 +672,15 @@ func (cli *Client) cacheGroupInfo(groupInfo *types.GroupInfo, lock bool) ([]stor
 
 func groupContactUsernames(groupInfo *types.GroupInfo) []store.ContactUsernameEntry {
 	return groupParticipantUsernames(groupInfo.Participants)
+}
+
+func (cli *Client) parseGroupNodeAndStoreUsernames(ctx context.Context, groupNode *waBinary.Node) (*types.GroupInfo, error) {
+	groupInfo, err := cli.parseGroupNode(groupNode)
+	if err != nil {
+		return groupInfo, err
+	}
+	cli.storeContactUsernamesBestEffort(ctx, groupContactUsernames(groupInfo))
+	return groupInfo, nil
 }
 
 func groupParticipantUsernames(participants []types.GroupParticipant) []store.ContactUsernameEntry {
