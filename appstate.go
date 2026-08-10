@@ -67,7 +67,7 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	wantSnapshot := fullSync
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if fullSync && !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync {
+	if fullSync && !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	for hasMore {
@@ -108,7 +108,7 @@ func (cli *Client) handleAppStateRecovery(
 	}
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync {
+	if !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	snapshot, err := appstate.ParseRecovery(result[0].GetSyncdSnapshotFatalRecoveryResponse())
@@ -202,7 +202,13 @@ func (cli *Client) shouldEmitFullSyncMutation(index []string) bool {
 	if cli.EmitAppStateEventsOnFullSync {
 		return true
 	}
-	if !cli.EmitLabelEventsOnFullSync || len(index) == 0 {
+	if len(index) == 0 {
+		return false
+	}
+	if cli.EmitQuickReplyEventsOnFullSync && index[0] == appstate.IndexQuickReply {
+		return true
+	}
+	if !cli.EmitLabelEventsOnFullSync {
 		return false
 	}
 	switch index[0] {
@@ -431,6 +437,16 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 			LabelID:      mutation.Index[1],
 			MessageID:    mutation.Index[3],
 			Action:       act,
+			FromFullSync: fullSync,
+		}
+	case appstate.IndexQuickReply:
+		if len(mutation.Index) < 2 {
+			return
+		}
+		eventToDispatch = &events.QuickReply{
+			Timestamp:    ts,
+			ID:           mutation.Index[1],
+			Action:       mutation.Action.GetQuickReplyAction(),
 			FromFullSync: fullSync,
 		}
 	}
