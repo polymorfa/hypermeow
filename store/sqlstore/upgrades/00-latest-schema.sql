@@ -1,4 +1,4 @@
--- v0 -> v17 (compatible with v8+): Latest schema
+-- v0 -> v18 (compatible with v8+): Latest schema
 CREATE TABLE whatsmeow_device (
 	jid TEXT PRIMARY KEY,
 	lid TEXT,
