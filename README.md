@@ -43,16 +43,11 @@ Use `-m`. Without it, `go mod why` asks about the *package* `go.mau.fi/whatsmeow
 A stricter check inspects the link graph directly:
 
 ```sh
-deps="$(go list -deps -test ./...)" &&
-  ! printf '%s\n' "$deps" | grep -q '^go\.mau\.fi/whatsmeow'
+deps="$(go list -deps -test ./...)" || exit 1
+case "$deps" in *go.mau.fi/whatsmeow*) exit 1 ;; esac
 ```
 
-Exit 0 means safe. Every part of that command is load-bearing in CI:
-
-- `-test` is needed because `go list -deps` omits test-only dependencies, and a project that imports upstream only from a `_test.go` file still links both copies when `go test` builds;
-- the `!` is needed because `grep` exits 0 when it *finds* a match, so without it the step would succeed exactly when the graph is unsafe;
-- `go list` is kept out of the negated pipeline because, piped directly, a failed `go list` produces no output, `grep` then exits nonzero for want of a match, and the `!` would turn "the graph could not be loaded" into a pass;
-- `printf` rather than a `<<<` here-string, so the snippet still parses under a POSIX `/bin/sh` such as dash.
+Exit 0 means safe. There is deliberately no pipeline and no external command here. `-test` matters because `go list -deps` omits test-only dependencies, and a project importing upstream only from a `_test.go` still links both copies under `go test`. Capturing the output first means a failed `go list` propagates through `||` instead of being mistaken for an empty result, and matching with `case` avoids `grep`, whose exit status is 0 on a match — so a naive form of this check passes precisely when the graph is unsafe.
 
 or assert it in a test via `debug.ReadBuildInfo()`, failing if any entry in `Deps` reports the module path `go.mau.fi/whatsmeow`.
 
