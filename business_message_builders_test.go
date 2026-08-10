@@ -231,6 +231,14 @@ func TestBusinessProductListAndNativeFlowTextLimits(t *testing.T) {
 			}
 		})
 	}
+	multipleProductSections := productList
+	multipleProductSections.Sections = []BusinessProductSection{
+		{ProductIDs: []string{"one"}},
+		{Title: "Second", ProductIDs: []string{"two"}},
+	}
+	if _, err := BuildBusinessProductListMessage(multipleProductSections); err == nil {
+		t.Fatal("multiple product sections with an empty title unexpectedly passed")
+	}
 
 	nativeFlow := BusinessNativeFlowButtonsMessageParams{
 		Title: "Title", Body: "Choose", Footer: "Footer",

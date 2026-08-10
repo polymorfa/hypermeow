@@ -192,7 +192,7 @@ func BuildBusinessProductListMessage(params BusinessProductListMessageParams) (*
 	seen := make(map[string]struct{})
 	productCount := 0
 	for index, section := range params.Sections {
-		if !bounded(section.Title, 24) || len(section.ProductIDs) == 0 {
+		if !bounded(section.Title, 24) || len(section.ProductIDs) == 0 || (len(params.Sections) > 1 && strings.TrimSpace(section.Title) == "") {
 			return nil, fmt.Errorf("invalid business product section %d", index)
 		}
 		products := make([]*waE2E.ListMessage_Product, len(section.ProductIDs))
