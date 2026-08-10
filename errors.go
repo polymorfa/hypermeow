@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 )
@@ -246,6 +247,7 @@ func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
 	if len(node.Attrs) > 0 {
 		normalized.Attrs = make(waBinary.Attrs, len(node.Attrs))
 		for key, value := range node.Attrs {
+			value = normalizeIQErrorAttribute(value)
 			if value != nil && value != "" {
 				normalized.Attrs[key] = value
 			}
@@ -268,6 +270,29 @@ func normalizeIQErrorNode(node *waBinary.Node) *waBinary.Node {
 		}
 	}
 	return &normalized
+}
+
+func normalizeIQErrorAttribute(value any) any {
+	switch typedValue := value.(type) {
+	case int:
+		return strconv.Itoa(typedValue)
+	case int32:
+		return strconv.FormatInt(int64(typedValue), 10)
+	case int64:
+		return strconv.FormatInt(typedValue, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typedValue), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typedValue), 10)
+	case uint64:
+		return strconv.FormatUint(typedValue, 10)
+	case bool:
+		return strconv.FormatBool(typedValue)
+	case []byte:
+		return string(typedValue)
+	default:
+		return value
+	}
 }
 
 // ElementMissingError is returned by various functions that parse XML elements when a required element is missing.
