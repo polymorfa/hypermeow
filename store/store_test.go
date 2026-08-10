@@ -15,6 +15,25 @@ type blockingDeviceContainer struct {
 	deleteStarted chan struct{}
 }
 
+type legacyLIDStore struct{}
+
+func (*legacyLIDStore) PutManyLIDMappings(context.Context, []LIDMapping) error { return nil }
+func (*legacyLIDStore) PutLIDMapping(context.Context, types.JID, types.JID) error {
+	return nil
+}
+func (*legacyLIDStore) GetPNForLID(context.Context, types.JID) (types.JID, error) {
+	return types.EmptyJID, nil
+}
+func (*legacyLIDStore) GetLIDForPN(context.Context, types.JID) (types.JID, error) {
+	return types.EmptyJID, nil
+}
+func (*legacyLIDStore) GetManyLIDsForPNs(context.Context, []types.JID) (map[types.JID]types.JID, error) {
+	return nil, nil
+}
+
+var _ LIDStore = (*legacyLIDStore)(nil)
+var _ LIDBatchReverseStore = (*NoopStore)(nil)
+
 func (c *blockingDeviceContainer) PutDevice(_ context.Context, device *Device) error {
 	close(c.putStarted)
 	<-c.allowPut

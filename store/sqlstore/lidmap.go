@@ -34,6 +34,7 @@ type CachedLIDMap struct {
 }
 
 var _ store.LIDStore = (*CachedLIDMap)(nil)
+var _ store.LIDBatchReverseStore = (*CachedLIDMap)(nil)
 
 const maxLIDCacheEntries = 65536
 
@@ -257,10 +258,16 @@ func (s *CachedLIDMap) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) 
 		if lid.Server != types.HiddenUserServer {
 			continue
 		}
-		if pnUser, ok := s.lidToPNCache[lid.User]; ok && pnUser != "" {
-			result[lid] = types.JID{User: pnUser, Device: lid.Device, Server: types.DefaultUserServer}
-		} else if !s.cacheFilled {
-			missingLIDs = append(missingLIDs, lid.User)
+		if pnUser, ok := s.lidToPNCache[lid.User]; ok {
+			if pnUser != "" {
+				result[lid] = types.JID{User: pnUser, Device: lid.Device, Server: types.DefaultUserServer}
+			}
+			continue
+		}
+		if !s.cacheFilled {
+			if _, exists := missingLIDDevices[lid.User]; !exists {
+				missingLIDs = append(missingLIDs, lid.User)
+			}
 			missingLIDDevices[lid.User] = append(missingLIDDevices[lid.User], lid)
 		}
 	}
@@ -272,6 +279,22 @@ func (s *CachedLIDMap) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) 
 
 	s.lidCacheLock.Lock()
 	defer s.lidCacheLock.Unlock()
+	queryLIDs := missingLIDs[:0]
+	for _, lid := range missingLIDs {
+		if pn, ok := s.lidToPNCache[lid]; ok {
+			if pn != "" {
+				for _, dev := range missingLIDDevices[lid] {
+					result[dev] = types.JID{User: pn, Device: dev.Device, Server: types.DefaultUserServer}
+				}
+			}
+		} else if !s.cacheFilled {
+			queryLIDs = append(queryLIDs, lid)
+		}
+	}
+	missingLIDs = queryLIDs
+	if len(missingLIDs) == 0 {
+		return result, nil
+	}
 
 	var res dbutil.RowIter[store.LIDMapping]
 	if wrapped, ok := wrapPostgresArray(s.db, missingLIDs); ok {
@@ -291,7 +314,9 @@ func (s *CachedLIDMap) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) 
 			exslices.CastToAny(missingLIDs)...,
 		))
 	}
+	found := make(map[string]struct{}, len(missingLIDs))
 	_, err := s.scanManyLids(res, func(lid, pn string) {
+		found[lid] = struct{}{}
 		for _, dev := range missingLIDDevices[lid] {
 			pnDev := dev
 			pnDev.Server = types.DefaultUserServer
@@ -299,6 +324,13 @@ func (s *CachedLIDMap) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) 
 			result[dev] = pnDev
 		}
 	})
+	if err == nil {
+		for _, lid := range missingLIDs {
+			if _, ok := found[lid]; !ok {
+				s.cacheMissLocked(s.lidToPNCache, s.pnToLIDCache, lid)
+			}
+		}
+	}
 	return result, err
 }
 

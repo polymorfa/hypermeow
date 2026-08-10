@@ -2,11 +2,44 @@ package sqlstore
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
 	"testing"
 
 	"go.mau.fi/whatsmeow/types"
 )
+
+type emptyLIDMapDB struct{ queries int }
+
+type emptyLIDMapConnector struct{ state *emptyLIDMapDB }
+
+func (connector *emptyLIDMapConnector) Connect(context.Context) (driver.Conn, error) {
+	return &emptyLIDMapConn{state: connector.state}, nil
+}
+
+func (*emptyLIDMapConnector) Driver() driver.Driver { return pnMigrationTestDriver{} }
+
+type emptyLIDMapConn struct{ state *emptyLIDMapDB }
+
+func (*emptyLIDMapConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (*emptyLIDMapConn) Close() error              { return nil }
+func (*emptyLIDMapConn) Begin() (driver.Tx, error) { return nil, errors.New("unexpected transaction") }
+func (conn *emptyLIDMapConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	conn.state.queries++
+	return emptyLIDMapRows{}, nil
+}
+
+type emptyLIDMapRows struct{}
+
+func (emptyLIDMapRows) Columns() []string         { return []string{"lid", "pn"} }
+func (emptyLIDMapRows) Close() error              { return nil }
+func (emptyLIDMapRows) Next([]driver.Value) error { return io.EOF }
 
 func TestLIDCacheIsBounded(t *testing.T) {
 	cache := NewCachedLIDMap(nil)
@@ -49,5 +82,26 @@ func TestGetManyPNsForLIDsUsesReverseCache(t *testing.T) {
 		if got[lid].String() != want {
 			t.Fatalf("phone for %s = %s, want %s", lid, got[lid], want)
 		}
+	}
+}
+
+func TestGetManyPNsForLIDsCachesMissingMappings(t *testing.T) {
+	state := &emptyLIDMapDB{}
+	db := sql.OpenDB(&emptyLIDMapConnector{state: state})
+	t.Cleanup(func() { _ = db.Close() })
+	cache := NewWithDB(db, "sqlite3", nil).LIDMap
+	lid := types.NewJID("100000000000001", types.HiddenUserServer)
+
+	for range 2 {
+		got, err := cache.GetManyPNsForLIDs(context.Background(), []types.JID{lid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("missing mapping returned %#v", got)
+		}
+	}
+	if state.queries != 1 {
+		t.Fatalf("missing mapping queried %d times, want 1", state.queries)
 	}
 }
