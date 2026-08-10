@@ -141,20 +141,21 @@ type runner struct {
 	db         *sql.DB
 	httpClient *http.Client
 
-	received          atomic.Int64
-	sent              atomic.Int64
-	failed            atomic.Int64
-	overflows         atomic.Int64
-	historySyncs      atomic.Int64
-	historyConvs      atomic.Int64
-	historyMessages   atomic.Int64
-	messageSequence   atomic.Int64
-	mediaUploads      atomic.Int64
-	mediaBytes        atomic.Int64
-	businessValid     atomic.Bool
-	phoneConsentValid atomic.Bool
-	phoneConsentOnce  sync.Once
-	phoneConsentErr   error
+	received              atomic.Int64
+	sent                  atomic.Int64
+	failed                atomic.Int64
+	overflows             atomic.Int64
+	historySyncs          atomic.Int64
+	historyConvs          atomic.Int64
+	historyMessages       atomic.Int64
+	messageSequence       atomic.Int64
+	mediaUploads          atomic.Int64
+	mediaBytes            atomic.Int64
+	businessValid         atomic.Bool
+	phoneConsentValid     atomic.Bool
+	phoneConsentOnce      sync.Once
+	phoneConsentErr       error
+	phoneConsentValidator func(context.Context, *whatsmeow.Client, types.JID) error
 
 	startOnce  sync.Once
 	doneOnce   sync.Once
@@ -393,7 +394,7 @@ func (r *runner) run() (result, error) {
 		NoiseCertificateAuthority: &root,
 	}
 	client.EnableAutoReconnect = true
-	client.AddEventHandler(r.handler(client))
+	client.AddEventHandler(r.handler(ctx, client))
 
 	workerCtx, stopWorkers := context.WithCancel(ctx)
 	defer stopWorkers()
@@ -454,7 +455,7 @@ func (r *runner) stopMetricsSampler() {
 	r.metricsMu.Unlock()
 }
 
-func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
+func (r *runner) handler(ctx context.Context, client *whatsmeow.Client) whatsmeow.EventHandler {
 	var scanOnce sync.Once
 	return func(evt any) {
 		switch event := evt.(type) {
@@ -484,7 +485,11 @@ func (r *runner) handler(client *whatsmeow.Client) whatsmeow.EventHandler {
 				return
 			}
 			if !r.beforeBenchmarkMessage(func() error {
-				return r.validatePhoneNumberConsent(context.Background(), client, phoneConsentTarget(event))
+				validate := r.phoneConsentValidator
+				if validate == nil {
+					validate = r.validatePhoneNumberConsent
+				}
+				return validate(ctx, client, phoneConsentTarget(event))
 			}) {
 				return
 			}

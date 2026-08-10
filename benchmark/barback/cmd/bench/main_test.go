@@ -12,6 +12,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -179,6 +181,31 @@ func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
 	}
 	if r.startedAt.Load() != 0 {
 		t.Fatal("failed phone consent validation started workload metrics")
+	}
+}
+
+func TestHandlerUsesRunContextForPhoneConsent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+		phoneConsentValidator: func(ctx context.Context, _ *whatsmeow.Client, _ types.JID) error {
+			return ctx.Err()
+		},
+	}
+	r.handler(ctx, &whatsmeow.Client{})(&events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("100000011111111", types.HiddenUserServer)}},
+		Message: &waE2E.Message{Conversation: proto.String("ping")},
+	})
+	select {
+	case err := <-r.fatalErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("phone consent error = %v, want context canceled", err)
+		}
+	default:
+		t.Fatal("canceled run context was not propagated to phone consent validation")
 	}
 }
 
