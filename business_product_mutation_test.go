@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -254,6 +255,56 @@ func TestBusinessAccessTokenInvalidationObservesCancellation(t *testing.T) {
 	cancel()
 	if err := client.invalidateBusinessAccessToken(ctx, "synthetic-token"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
+	}
+}
+
+func TestExecuteBusinessProductMutationUsesCurrentActorID(t *testing.T) {
+	client := &Client{}
+	state := client.getBusinessCatalogAuth()
+	<-state.tokenLock
+	state.token = businessAccessToken{accessToken: "old-token", actorID: "actor-old"}
+	state.tokenLock <- struct{}{}
+
+	var actors []string
+	var tokens []string
+	requests := 0
+	client.mediaHTTP = &http.Client{Transport: businessProductRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		var body struct {
+			AccessToken string         `json:"access_token"`
+			Variables   map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input := body.Variables["input"].(map[string]any)
+		actors = append(actors, input["actor_id"].(string))
+		tokens = append(tokens, body.AccessToken)
+		if requests == 1 {
+			<-state.tokenLock
+			state.token = businessAccessToken{accessToken: "new-token", actorID: "actor-new"}
+			state.tokenLock <- struct{}{}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"errors":[{"code":190}]}`)),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"ok":true}}`)),
+		}, nil
+	})}
+	variables := map[string]any{"input": map[string]any{"product": map[string]any{"name": "Tea"}}}
+	if _, err := client.executeBusinessProductMutation(context.Background(), businessAddProductDocumentID, variables); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(actors, []string{"actor-old", "actor-new"}) || !slices.Equal(tokens, []string{"old-token", "new-token"}) {
+		t.Fatalf("actors = %v, tokens = %v", actors, tokens)
+	}
+	if _, exists := variables["input"].(map[string]any)["actor_id"]; exists {
+		t.Fatal("mutation variables were modified in place")
 	}
 }
 

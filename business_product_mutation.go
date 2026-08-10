@@ -592,13 +592,38 @@ func (cli *Client) sendBusinessFacebookGraphQL(ctx context.Context, endpoint, do
 	return envelope.Data, nil
 }
 
+func businessProductMutationVariablesWithActor(variables map[string]any, actorID string) (map[string]any, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return nil, fmt.Errorf("business product mutation actor ID is empty")
+	}
+	input, ok := variables["input"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("business product mutation variables are missing input")
+	}
+	result := make(map[string]any, len(variables))
+	for key, value := range variables {
+		result[key] = value
+	}
+	actorInput := make(map[string]any, len(input)+1)
+	for key, value := range input {
+		actorInput[key] = value
+	}
+	actorInput["actor_id"] = actorID
+	result["input"] = actorInput
+	return result, nil
+}
+
 func (cli *Client) executeBusinessProductMutation(ctx context.Context, documentID string, variables map[string]any) (json.RawMessage, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		token, err := cli.businessAccessToken(ctx)
 		if err != nil {
 			return nil, err
 		}
-		data, err := cli.sendBusinessFacebookGraphQL(ctx, businessGraphQLEndpoint, documentID, token.accessToken, variables)
+		requestVariables, err := businessProductMutationVariablesWithActor(variables, token.actorID)
+		if err != nil {
+			return nil, err
+		}
+		data, err := cli.sendBusinessFacebookGraphQL(ctx, businessGraphQLEndpoint, documentID, token.accessToken, requestVariables)
 		if err == nil {
 			return data, nil
 		}
