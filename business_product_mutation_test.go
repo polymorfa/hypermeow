@@ -297,7 +297,7 @@ func TestExecuteBusinessProductMutationUsesCurrentActorID(t *testing.T) {
 		}, nil
 	})}
 	variables := map[string]any{"input": map[string]any{"product": map[string]any{"name": "Tea"}}}
-	if _, err := client.executeBusinessProductMutation(context.Background(), businessAddProductDocumentID, variables); err != nil {
+	if _, err := client.executeBusinessCatalogMutation(context.Background(), businessAddProductDocumentID, variables); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(actors, []string{"actor-old", "actor-new"}) || !slices.Equal(tokens, []string{"old-token", "new-token"}) {

@@ -599,13 +599,13 @@ func (cli *Client) sendBusinessFacebookGraphQL(ctx context.Context, endpoint, do
 	return envelope.Data, nil
 }
 
-func businessProductMutationVariablesWithActor(variables map[string]any, actorID string) (map[string]any, error) {
+func businessCatalogMutationVariablesWithActor(variables map[string]any, actorID string) (map[string]any, error) {
 	if strings.TrimSpace(actorID) == "" {
-		return nil, fmt.Errorf("business product mutation actor ID is empty")
+		return nil, fmt.Errorf("business catalog mutation actor ID is empty")
 	}
 	input, ok := variables["input"].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("business product mutation variables are missing input")
+		return nil, fmt.Errorf("business catalog mutation variables are missing input")
 	}
 	result := make(map[string]any, len(variables))
 	for key, value := range variables {
@@ -620,13 +620,13 @@ func businessProductMutationVariablesWithActor(variables map[string]any, actorID
 	return result, nil
 }
 
-func (cli *Client) executeBusinessProductMutation(ctx context.Context, documentID string, variables map[string]any) (json.RawMessage, error) {
+func (cli *Client) executeBusinessCatalogMutation(ctx context.Context, documentID string, variables map[string]any) (json.RawMessage, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		token, err := cli.businessAccessToken(ctx)
 		if err != nil {
 			return nil, err
 		}
-		requestVariables, err := businessProductMutationVariablesWithActor(variables, token.actorID)
+		requestVariables, err := businessCatalogMutationVariablesWithActor(variables, token.actorID)
 		if err != nil {
 			return nil, err
 		}
@@ -642,7 +642,7 @@ func (cli *Client) executeBusinessProductMutation(ctx context.Context, documentI
 		}
 		return nil, err
 	}
-	return nil, fmt.Errorf("business product mutation failed after token refresh")
+	return nil, fmt.Errorf("business catalog mutation failed after token refresh")
 }
 
 func (cli *Client) ownBusinessJID() (types.JID, error) {
@@ -665,7 +665,7 @@ func (cli *Client) CreateBusinessProduct(ctx context.Context, input types.Busine
 	if err != nil {
 		return nil, err
 	}
-	data, err := cli.executeBusinessProductMutation(ctx, businessAddProductDocumentID, variables)
+	data, err := cli.executeBusinessCatalogMutation(ctx, businessAddProductDocumentID, variables)
 	if err != nil {
 		return nil, fmt.Errorf("create business product: %w", err)
 	}
@@ -681,7 +681,7 @@ func (cli *Client) UpdateBusinessProduct(ctx context.Context, productID string, 
 	if err != nil {
 		return nil, err
 	}
-	data, err := cli.executeBusinessProductMutation(ctx, businessEditProductDocumentID, variables)
+	data, err := cli.executeBusinessCatalogMutation(ctx, businessEditProductDocumentID, variables)
 	if err != nil {
 		return nil, fmt.Errorf("update business product: %w", err)
 	}
@@ -697,7 +697,7 @@ func (cli *Client) DeleteBusinessProducts(ctx context.Context, productIDs []stri
 	if err != nil {
 		return 0, err
 	}
-	data, err := cli.executeBusinessProductMutation(ctx, businessDeleteProductDocumentID, variables)
+	data, err := cli.executeBusinessCatalogMutation(ctx, businessDeleteProductDocumentID, variables)
 	if err != nil {
 		return 0, fmt.Errorf("delete business products: %w", err)
 	}
