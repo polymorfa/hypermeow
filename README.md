@@ -35,10 +35,18 @@ The old `replace` arrangement made this impossible, because both import paths re
 The failure is loud and immediate rather than silent, but it surfaces at process start. Check for it at build time instead:
 
 ```sh
-go mod why go.mau.fi/whatsmeow   # should report the module is not needed
+go mod why -m go.mau.fi/whatsmeow   # should report the module is not needed
 ```
 
-or assert it in a test via `debug.ReadBuildInfo()`, failing if any dependency reports the path `go.mau.fi/whatsmeow`.
+Use `-m`. Without it, `go mod why` asks about the *package* `go.mau.fi/whatsmeow`, and a dependency that imports only a subpackage — say `go.mau.fi/whatsmeow/proto/waCommon` — makes it answer "main module does not need package" while the upstream module is linked and its descriptors still collide.
+
+A stricter check inspects the link graph directly:
+
+```sh
+go list -deps ./... | grep '^go\.mau\.fi/whatsmeow'   # must print nothing
+```
+
+or assert it in a test via `debug.ReadBuildInfo()`, failing if any entry in `Deps` reports the module path `go.mau.fi/whatsmeow`.
 
 Migrating from the previous `replace go.mau.fi/whatsmeow => github.com/polymorfa/hypermeow` setup: drop the `replace` line, add a normal `require` on `github.com/polymorfa/hypermeow`, and rewrite `go.mau.fi/whatsmeow` import paths to `github.com/polymorfa/hypermeow`. A `replace` directive is only honoured in the main module, so the previous arrangement did not carry to anything that depended on your module in turn; a direct requirement does.
 
