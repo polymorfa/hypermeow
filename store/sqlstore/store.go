@@ -915,6 +915,10 @@ func splitContactNameEntries(contacts []store.ContactEntry) ([]store.ContactEntr
 	return withUsername, withoutUsername
 }
 
+var putContactUsernamesMassInsertBuilder = dbutil.NewMassInsertBuilder[store.ContactUsernameEntry, [1]any](
+	putContactUsernameQuery, "($1, $%d, $%d)",
+)
+
 var putRedactedPhonesMassInsertBuilder = dbutil.NewMassInsertBuilder[store.RedactedPhoneEntry, [1]any](
 	putRedactedPhoneQuery, "($1, $%d, $%d)",
 )
@@ -997,6 +1001,48 @@ func (s *SQLStore) PutContactUsername(ctx context.Context, user types.JID, usern
 		cached.Found = true
 	}
 	return nil
+}
+
+func (s *SQLStore) PutManyContactUsernames(ctx context.Context, entries []store.ContactUsernameEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	entries = deduplicateContactUsernamesLastWriteWins(entries)
+	s.contactCacheLock.Lock()
+	defer s.contactCacheLock.Unlock()
+	if err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
+		for batch := range slices.Chunk(entries, contactBatchSize) {
+			query, vars := putContactUsernamesMassInsertBuilder.Build([1]any{s.JID}, batch)
+			if _, err := s.db.Exec(ctx, query, vars...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if cached, ok := s.contactCache[entry.JID]; ok {
+			cached.Username = entry.Username
+			cached.Found = true
+		}
+	}
+	return nil
+}
+
+func deduplicateContactUsernamesLastWriteWins(entries []store.ContactUsernameEntry) []store.ContactUsernameEntry {
+	positions := make(map[types.JID]int, len(entries))
+	out := entries[:0]
+	for _, entry := range entries {
+		if position, ok := positions[entry.JID]; ok {
+			out[position] = entry
+		} else {
+			positions[entry.JID] = len(out)
+			out = append(out, entry)
+		}
+	}
+	clear(entries[len(out):])
+	return out
 }
 
 const contactBatchSize = 300

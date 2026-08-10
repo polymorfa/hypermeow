@@ -116,6 +116,19 @@ type ContactUsernameStore interface {
 	PutContactUsername(ctx context.Context, user types.JID, username string) error
 }
 
+type ContactUsernameBatchStore interface {
+	PutManyContactUsernames(ctx context.Context, entries []ContactUsernameEntry) error
+}
+
+type ContactUsernameEntry struct {
+	JID      types.JID
+	Username string
+}
+
+func (cue ContactUsernameEntry) GetMassInsertValues() [2]any {
+	return [...]any{cue.JID.String(), cue.Username}
+}
+
 var MutedForever = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 
 type ChatSettingsStore interface {
