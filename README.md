@@ -13,7 +13,14 @@ import whatsmeow "github.com/polymorfa/hypermeow"
 go get github.com/polymorfa/hypermeow
 ```
 
-Package names are unchanged from upstream (the root package is still `whatsmeow`), so only import paths differ. Import the root package under its package name, as above, when your tooling expects the path's last element to match.
+### The module is `hypermeow`, the package is `whatsmeow`
+
+Only the *module path* moved. The Go *package* names are unchanged from upstream, so the root package is still declared `package whatsmeow`. Both of these are expected:
+
+- godoc renders the title as **"whatsmeow package - github.com/polymorfa/hypermeow"**;
+- the import path's last element (`hypermeow`) does not match the package name (`whatsmeow`), so import the root package under an explicit alias as shown above.
+
+This is deliberate. Keeping the upstream package names means no call site changes when migrating - `whatsmeow.Client`, `whatsmeow.NewClient` and friends all still resolve - and merges from tulir's upstream do not conflict on the package clause of every file. Sub-packages are unaffected, since their path element already matches their package name (`.../store` is `package store`, and so on).
 
 Migrating from the previous `replace go.mau.fi/whatsmeow => github.com/polymorfa/hypermeow` setup: drop the `replace` line, add a normal `require` on `github.com/polymorfa/hypermeow`, and rewrite `go.mau.fi/whatsmeow` import paths to `github.com/polymorfa/hypermeow`. A `replace` directive is only honoured in the main module, so the previous arrangement did not carry to anything that depended on your module in turn; a direct requirement does.
 
