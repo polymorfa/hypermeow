@@ -53,6 +53,9 @@ func normalizeBusinessMerchantCompliance(info types.BusinessMerchantCompliance) 
 	if info.EntityType == "" {
 		info.EntityType = types.BusinessMerchantEntityOther
 	}
+	if info.EntityName == "" {
+		return info, fmt.Errorf("business merchant entity name is empty")
+	}
 	if err := validateBusinessMerchantEntityType(info.EntityType); err != nil {
 		return info, err
 	}
