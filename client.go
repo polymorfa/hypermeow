@@ -142,6 +142,8 @@ type Client struct {
 	DisableHistorySyncReceipt       bool
 	DisableHistorySyncStorage       bool
 	DisableHistorySyncMediaDelete   bool
+	historySyncNonce                atomic.Pointer[string]
+	historySyncNonceSaveLock        sync.Mutex
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time

@@ -1127,14 +1127,21 @@ func (cli *Client) storeGlobalSettings(ctx context.Context, settings *waHistoryS
 }
 
 func (cli *Client) updateCompanionMetaNonce(nonce string) bool {
-	if nonce == "" || nonce == cli.Store.CompanionMetaNonce {
+	if nonce == "" || nonce == cli.currentCompanionMetaNonce() {
 		return false
 	}
-	cli.Store.CompanionMetaNonce = nonce
+	cli.historySyncNonce.Store(&nonce)
 	return true
 }
 
 func (cli *Client) persistCompanionMetaNonce(ctx context.Context) {
+	cli.historySyncNonceSaveLock.Lock()
+	defer cli.historySyncNonceSaveLock.Unlock()
+	nonce := cli.currentCompanionMetaNonce()
+	if nonce == "" || nonce == cli.Store.CompanionMetaNonce {
+		return
+	}
+	cli.Store.CompanionMetaNonce = nonce
 	if err := cli.Store.Save(ctx); err != nil {
 		zerolog.Ctx(ctx).Err(err).
 			Msg("Failed to save companion meta nonce")
@@ -1142,6 +1149,13 @@ func (cli *Client) persistCompanionMetaNonce(ctx context.Context) {
 		zerolog.Ctx(ctx).Debug().
 			Msg("Saved companion meta nonce")
 	}
+}
+
+func (cli *Client) currentCompanionMetaNonce() string {
+	if nonce := cli.historySyncNonce.Load(); nonce != nil {
+		return *nonce
+	}
+	return cli.Store.CompanionMetaNonce
 }
 
 func (cli *Client) storeHistoricalPNLIDMappings(ctx context.Context, mappings []*waHistorySync.PhoneNumberToLIDMapping) {

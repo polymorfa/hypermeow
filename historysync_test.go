@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,75 @@ func (container *historySyncDeviceContainer) PutDevice(ctx context.Context, _ *s
 }
 
 func (*historySyncDeviceContainer) DeleteDevice(context.Context, *store.Device) error { return nil }
+
+type orderedHistorySyncDeviceContainer struct {
+	lock            sync.Mutex
+	calls           int
+	persisted       string
+	firstEntered    chan struct{}
+	secondEntered   chan struct{}
+	secondCommitted chan struct{}
+	committed       chan struct{}
+}
+
+func (container *orderedHistorySyncDeviceContainer) PutDevice(_ context.Context, device *store.Device) error {
+	container.lock.Lock()
+	container.calls++
+	call := container.calls
+	nonce := device.CompanionMetaNonce
+	container.lock.Unlock()
+
+	if call == 1 {
+		close(container.firstEntered)
+		select {
+		case <-container.secondEntered:
+			<-container.secondCommitted
+		case <-time.After(time.Second):
+		}
+	} else {
+		close(container.secondEntered)
+	}
+
+	container.lock.Lock()
+	container.persisted = nonce
+	container.lock.Unlock()
+	if call == 2 {
+		close(container.secondCommitted)
+	}
+	container.committed <- struct{}{}
+	return nil
+}
+
+func (*orderedHistorySyncDeviceContainer) DeleteDevice(context.Context, *store.Device) error {
+	return nil
+}
+
+func (container *orderedHistorySyncDeviceContainer) persistedNonce() string {
+	container.lock.Lock()
+	defer container.lock.Unlock()
+	return container.persisted
+}
+
+func historySyncNotificationWithNonce(t *testing.T, nonce string) *waE2E.HistorySyncNotification {
+	t.Helper()
+	syncType := waHistorySync.HistorySync_INITIAL_BOOTSTRAP
+	historyBytes, err := proto.Marshal(&waHistorySync.HistorySync{
+		SyncType:           &syncType,
+		CompanionMetaNonce: proto.String(nonce),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compressed bytes.Buffer
+	writer := zlib.NewWriter(&compressed)
+	if _, err = writer.Write(historyBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &waE2E.HistorySyncNotification{InitialHistBootstrapInlinePayload: compressed.Bytes()}
+}
 
 func TestHistorySyncReceiptPolicy(t *testing.T) {
 	for _, test := range []struct {
@@ -79,23 +149,6 @@ func TestHistorySyncDeletionKeepsCompanionNonce(t *testing.T) {
 }
 
 func TestAsyncHistorySyncNoncePersistenceIgnoresCallerCancellation(t *testing.T) {
-	syncType := waHistorySync.HistorySync_INITIAL_BOOTSTRAP
-	historyBytes, err := proto.Marshal(&waHistorySync.HistorySync{
-		SyncType:           &syncType,
-		CompanionMetaNonce: proto.String("fresh"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var compressed bytes.Buffer
-	writer := zlib.NewWriter(&compressed)
-	if _, err = writer.Write(historyBytes); err != nil {
-		t.Fatal(err)
-	}
-	if err = writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	container := &historySyncDeviceContainer{putContextErr: make(chan error, 1)}
 	client := &Client{
 		DisableHistorySyncStorage: true,
@@ -104,9 +157,7 @@ func TestAsyncHistorySyncNoncePersistenceIgnoresCallerCancellation(t *testing.T)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = client.DownloadHistorySync(ctx, &waE2E.HistorySyncNotification{
-		InitialHistBootstrapInlinePayload: compressed.Bytes(),
-	}, false)
+	_, err := client.DownloadHistorySync(ctx, historySyncNotificationWithNonce(t, "fresh"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,23 +167,6 @@ func TestAsyncHistorySyncNoncePersistenceIgnoresCallerCancellation(t *testing.T)
 }
 
 func TestAsyncHistorySyncNoncePersistenceDoesNotBlockDownload(t *testing.T) {
-	syncType := waHistorySync.HistorySync_INITIAL_BOOTSTRAP
-	historyBytes, err := proto.Marshal(&waHistorySync.HistorySync{
-		SyncType:           &syncType,
-		CompanionMetaNonce: proto.String("fresh"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var compressed bytes.Buffer
-	writer := zlib.NewWriter(&compressed)
-	if _, err = writer.Write(historyBytes); err != nil {
-		t.Fatal(err)
-	}
-	if err = writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	container := &historySyncDeviceContainer{
 		putContextErr: make(chan error, 1),
 		putRelease:    make(chan struct{}),
@@ -143,31 +177,65 @@ func TestAsyncHistorySyncNoncePersistenceDoesNotBlockDownload(t *testing.T) {
 		Log:                       waLog.Noop,
 		Store:                     &store.Device{Container: container},
 	}
+	notification := historySyncNotificationWithNonce(t, "fresh")
 	done := make(chan error, 1)
 	go func() {
-		_, err := client.DownloadHistorySync(context.Background(), &waE2E.HistorySyncNotification{
-			InitialHistBootstrapInlinePayload: compressed.Bytes(),
-		}, false)
+		_, err := client.DownloadHistorySync(context.Background(), notification, false)
 		done <- err
 	}()
 
 	select {
-	case err = <-done:
+	case err := <-done:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("asynchronous nonce persistence blocked history sync download")
 	}
-	if client.Store.CompanionMetaNonce != "fresh" {
-		t.Fatalf("companion meta nonce = %q", client.Store.CompanionMetaNonce)
+	if nonce := client.currentCompanionMetaNonce(); nonce != "fresh" {
+		t.Fatalf("companion meta nonce = %q", nonce)
 	}
 	select {
-	case err = <-container.putContextErr:
+	case err := <-container.putContextErr:
 		if err != nil {
 			t.Fatalf("nonce persistence inherited caller cancellation: %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("asynchronous nonce persistence did not start")
+	}
+}
+
+func TestAsyncHistorySyncNoncePersistenceKeepsNewestNonce(t *testing.T) {
+	container := &orderedHistorySyncDeviceContainer{
+		firstEntered:    make(chan struct{}),
+		secondEntered:   make(chan struct{}),
+		secondCommitted: make(chan struct{}),
+		committed:       make(chan struct{}, 2),
+	}
+	client := &Client{
+		DisableHistorySyncStorage: true,
+		Log:                       waLog.Noop,
+		Store:                     &store.Device{Container: container},
+	}
+	if _, err := client.DownloadHistorySync(context.Background(), historySyncNotificationWithNonce(t, "older"), false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-container.firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first nonce persistence did not start")
+	}
+	if _, err := client.DownloadHistorySync(context.Background(), historySyncNotificationWithNonce(t, "newest"), false); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case <-container.committed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("nonce persistence did not complete")
+		}
+	}
+	if nonce := container.persistedNonce(); nonce != "newest" {
+		t.Fatalf("persisted companion meta nonce = %q", nonce)
 	}
 }
