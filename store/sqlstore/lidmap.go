@@ -34,6 +34,7 @@ type CachedLIDMap struct {
 }
 
 var _ store.LIDStore = (*CachedLIDMap)(nil)
+var _ store.LIDBatchReverseStore = (*CachedLIDMap)(nil)
 
 const maxLIDCacheEntries = 65536
 
@@ -242,6 +243,104 @@ func (s *CachedLIDMap) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (
 	})
 	return result, err
 }
+
+func (s *CachedLIDMap) GetManyPNsForLIDs(ctx context.Context, lids []types.JID) (map[types.JID]types.JID, error) {
+	if len(lids) == 0 {
+		return nil, nil
+	}
+
+	result := make(map[types.JID]types.JID, len(lids))
+
+	s.lidCacheLock.RLock()
+	missingLIDs := make([]string, 0, len(lids))
+	missingLIDDevices := make(map[string][]types.JID)
+	for _, lid := range lids {
+		if lid.Server != types.HiddenUserServer {
+			continue
+		}
+		if pnUser, ok := s.lidToPNCache[lid.User]; ok {
+			if pnUser != "" {
+				result[lid] = types.JID{User: pnUser, Device: lid.Device, Server: types.DefaultUserServer}
+			}
+			continue
+		}
+		if !s.cacheFilled {
+			if _, exists := missingLIDDevices[lid.User]; !exists {
+				missingLIDs = append(missingLIDs, lid.User)
+			}
+			missingLIDDevices[lid.User] = append(missingLIDDevices[lid.User], lid)
+		}
+	}
+	s.lidCacheLock.RUnlock()
+
+	if len(missingLIDs) == 0 {
+		return result, nil
+	}
+
+	s.lidCacheLock.Lock()
+	defer s.lidCacheLock.Unlock()
+	queryLIDs := missingLIDs[:0]
+	for _, lid := range missingLIDs {
+		if pn, ok := s.lidToPNCache[lid]; ok {
+			if pn != "" {
+				for _, dev := range missingLIDDevices[lid] {
+					result[dev] = types.JID{User: pn, Device: dev.Device, Server: types.DefaultUserServer}
+				}
+			}
+		} else if !s.cacheFilled {
+			queryLIDs = append(queryLIDs, lid)
+		}
+	}
+	missingLIDs = queryLIDs
+	if len(missingLIDs) == 0 {
+		return result, nil
+	}
+
+	found := make(map[string]struct{}, len(missingLIDs))
+	scanResults := func(res dbutil.RowIter[store.LIDMapping]) error {
+		_, err := s.scanManyLids(res, func(lid, pn string) {
+			found[lid] = struct{}{}
+			for _, dev := range missingLIDDevices[lid] {
+				pnDev := dev
+				pnDev.Server = types.DefaultUserServer
+				pnDev.User = pn
+				result[dev] = pnDev
+			}
+		})
+		return err
+	}
+	if wrapped, ok := wrapPostgresArray(s.db, missingLIDs); ok {
+		if err := scanResults(convertLIDRow.NewRowIter(s.db.Query(
+			ctx,
+			`SELECT lid, pn FROM whatsmeow_lid_map WHERE lid = ANY($1)`,
+			wrapped,
+		))); err != nil {
+			return result, err
+		}
+	} else {
+		for lids := range slices.Chunk(missingLIDs, lidQueryBatchSize) {
+			placeholders := make([]string, len(lids))
+			for i := range lids {
+				placeholders[i] = fmt.Sprintf("$%d", i+1)
+			}
+			if err := scanResults(convertLIDRow.NewRowIter(s.db.Query(
+				ctx,
+				fmt.Sprintf(`SELECT lid, pn FROM whatsmeow_lid_map WHERE lid IN (%s)`, strings.Join(placeholders, ",")),
+				exslices.CastToAny(lids)...,
+			))); err != nil {
+				return result, err
+			}
+		}
+	}
+	for _, lid := range missingLIDs {
+		if _, ok := found[lid]; !ok {
+			s.cacheMissLocked(s.lidToPNCache, s.pnToLIDCache, lid)
+		}
+	}
+	return result, nil
+}
+
+const lidQueryBatchSize = 300
 
 func (s *CachedLIDMap) PutLIDMapping(ctx context.Context, lid, pn types.JID) error {
 	if lid.Server != types.HiddenUserServer || pn.Server != types.DefaultUserServer {

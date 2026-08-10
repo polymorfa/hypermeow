@@ -210,6 +210,10 @@ type LIDStore interface {
 	GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (map[types.JID]types.JID, error)
 }
 
+type LIDBatchReverseStore interface {
+	GetManyPNsForLIDs(ctx context.Context, lids []types.JID) (map[types.JID]types.JID, error)
+}
+
 type AllSessionSpecificStores interface {
 	IdentityStore
 	SessionStore
