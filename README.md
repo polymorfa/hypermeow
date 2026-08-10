@@ -22,6 +22,24 @@ Only the *module path* moved. The Go *package* names are unchanged from upstream
 
 This is deliberate. Keeping the upstream package names means no call site changes when migrating - `whatsmeow.Client`, `whatsmeow.NewClient` and friends all still resolve - and merges from tulir's upstream do not conflict on the package clause of every file. Sub-packages are unaffected, since their path element already matches their package name (`.../store` is `package store`, and so on).
 
+### Only one whatsmeow may be linked into a binary
+
+HyperMeow keeps upstream's generated protobuf descriptor paths (`waCommon/WACommon.proto` and friends) and their symbol namespaces. Those are registered in a process-global registry, so linking HyperMeow **and** upstream `go.mau.fi/whatsmeow` into the same binary panics before `main`:
+
+```
+proto: file "waCommon/WACommon.proto" is already registered
+```
+
+The old `replace` arrangement made this impossible, because both import paths resolved to one module. A distinct module path removes that guarantee, so a partially migrated dependency graph — where one of your dependencies still requires `go.mau.fi/whatsmeow` — is not safe.
+
+The failure is loud and immediate rather than silent, but it surfaces at process start. Check for it at build time instead:
+
+```sh
+go mod why go.mau.fi/whatsmeow   # should report the module is not needed
+```
+
+or assert it in a test via `debug.ReadBuildInfo()`, failing if any dependency reports the path `go.mau.fi/whatsmeow`.
+
 Migrating from the previous `replace go.mau.fi/whatsmeow => github.com/polymorfa/hypermeow` setup: drop the `replace` line, add a normal `require` on `github.com/polymorfa/hypermeow`, and rewrite `go.mau.fi/whatsmeow` import paths to `github.com/polymorfa/hypermeow`. A `replace` directive is only honoured in the main module, so the previous arrangement did not carry to anything that depended on your module in turn; a direct requirement does.
 
 The reproducible Barback and PostgreSQL benchmark is documented in [`benchmark/barback`](benchmark/barback/README.md).
