@@ -4,6 +4,7 @@ set -euo pipefail
 benchmark_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$benchmark_dir/../.." && pwd)
 temp_dir=$(mktemp -d)
+. "$benchmark_dir/comparison-matrix-env.sh"
 
 cleanup() {
 	rm -rf -- "$temp_dir"
@@ -66,13 +67,13 @@ fi
 run_revision() {
 	local name=$1 context=$2 revision=$3 repeat=$4 scenario=$5 variant=$1
 	local build_tags=
-	local security_code_smoke=${BENCH_SECURITY_CODE_SMOKE:-false}
 	if [[ $name != hypermeow ]]; then
 		build_tags=benchmark_legacy
-		security_code_smoke=false
 	else
 		build_tags=$candidate_build_tags
 	fi
+	local security_code_smoke
+	security_code_smoke=$(comparison_security_code_smoke "$name" "$build_tags" "${BENCH_SECURITY_CODE_SMOKE:-false}")
 	if ((repeats > 1)); then
 		variant="${name}-r${repeat}"
 	fi
