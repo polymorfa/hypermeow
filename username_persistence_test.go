@@ -20,6 +20,19 @@ type failingUsernameStore struct {
 	called bool
 }
 
+type partiallyFailingUsernameStore struct {
+	store.NoopStore
+	entries []store.ContactUsernameEntry
+}
+
+func (partial *partiallyFailingUsernameStore) PutContactUsername(_ context.Context, user types.JID, username string) error {
+	if username == "first" {
+		return errors.New("synthetic first-write failure")
+	}
+	partial.entries = append(partial.entries, store.ContactUsernameEntry{JID: user, Username: username})
+	return nil
+}
+
 func (failing *failingUsernameStore) PutContactUsername(context.Context, types.JID, string) error {
 	failing.called = true
 	return errors.New("synthetic username cache failure")
@@ -53,6 +66,21 @@ func TestPutContactUsernamesFallsBackToSingleWrites(t *testing.T) {
 		if contacts.entries[index] != entries[index] {
 			t.Fatalf("stored entry %d = %#v, want %#v", index, contacts.entries[index], entries[index])
 		}
+	}
+}
+
+func TestPutContactUsernamesContinuesAfterSingleWriteFailure(t *testing.T) {
+	contacts := &partiallyFailingUsernameStore{}
+	second := store.ContactUsernameEntry{JID: types.NewJID("100000022222222", types.HiddenUserServer), Username: "second"}
+	err := putContactUsernames(context.Background(), contacts, []store.ContactUsernameEntry{
+		{JID: types.NewJID("100000011111111", types.HiddenUserServer), Username: "first"},
+		second,
+	})
+	if err == nil {
+		t.Fatal("single-write failure was not returned")
+	}
+	if len(contacts.entries) != 1 || contacts.entries[0] != second {
+		t.Fatalf("writes after the first failure were skipped: %#v", contacts.entries)
 	}
 }
 

@@ -251,12 +251,13 @@ func putContactUsernames(ctx context.Context, contacts store.ContactStore, entri
 	if !ok {
 		return nil
 	}
+	var firstErr error
 	for _, entry := range entries {
-		if err := single.PutContactUsername(ctx, entry.JID, entry.Username); err != nil {
-			return err
+		if err := single.PutContactUsername(ctx, entry.JID, entry.Username); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func parseUSyncUsername(user waBinary.Node) string {
