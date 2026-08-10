@@ -12,6 +12,8 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 		Content: []Node{
 			{Tag: "access_token", Content: []byte("catalog-token")},
 			{Tag: "session_cookies", Content: []byte("catalog-cookie")},
+			{Tag: "wa_ad_account_nonce", Content: []byte("catalog-nonce")},
+			{Tag: "code", Content: []byte("exchange-code")},
 			{Tag: "address", Content: []byte("12 Private Street")},
 			{Tag: "email", Content: []byte("owner@example.test")},
 			{Tag: "description", Content: []byte("Private description")},
@@ -22,6 +24,8 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 			{Tag: "website", Content: "https://other-private.example.test"},
 			{Tag: "access_token", Content: "other-catalog-token"},
 			{Tag: "session_cookies", Content: "other-catalog-cookie"},
+			{Tag: "wa_ad_account_nonce", Content: "other-catalog-nonce"},
+			{Tag: "code", Content: "other-exchange-code"},
 		},
 	}
 
@@ -31,6 +35,8 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 		"upload-secret",
 		"catalog-token",
 		"catalog-cookie",
+		"catalog-nonce",
+		"exchange-code",
 		"12 Private Street",
 		"owner@example.test",
 		"Private description",
@@ -41,12 +47,14 @@ func TestNodeStringRedactsBusinessProfileAndCredentials(t *testing.T) {
 		"https://other-private.example.test",
 		"other-catalog-token",
 		"other-catalog-cookie",
+		"other-catalog-nonce",
+		"other-exchange-code",
 	} {
 		if strings.Contains(logged, sensitive) {
 			t.Fatalf("logged sensitive value %q: %s", sensitive, logged)
 		}
 	}
-	if strings.Count(logged, "[redacted]") != 14 {
+	if strings.Count(logged, "[redacted]") != 18 {
 		t.Fatalf("unexpected redacted node: %s", logged)
 	}
 }
