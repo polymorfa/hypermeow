@@ -10,6 +10,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -252,6 +253,9 @@ type Device struct {
 	EventBuffer   EventBuffer
 	LIDs          LIDStore
 	Container     DeviceContainer
+
+	saveDeleteLockInit sync.Once
+	saveDeleteLock     chan struct{}
 }
 
 func (device *Device) GetJID() types.JID {
@@ -274,7 +278,32 @@ func (device *Device) GetLID() types.JID {
 
 var ErrDeviceDeleted = errors.New("invalid use of deleted device")
 
+func (device *Device) lockSaveDelete(ctx context.Context) error {
+	device.saveDeleteLockInit.Do(func() {
+		device.saveDeleteLock = make(chan struct{}, 1)
+		device.saveDeleteLock <- struct{}{}
+	})
+	select {
+	case <-device.saveDeleteLock:
+		if err := ctx.Err(); err != nil {
+			device.unlockSaveDelete()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (device *Device) unlockSaveDelete() {
+	device.saveDeleteLock <- struct{}{}
+}
+
 func (device *Device) Save(ctx context.Context) error {
+	if err := device.lockSaveDelete(ctx); err != nil {
+		return err
+	}
+	defer device.unlockSaveDelete()
 	if device.Deleted {
 		return ErrDeviceDeleted
 	}
@@ -282,6 +311,10 @@ func (device *Device) Save(ctx context.Context) error {
 }
 
 func (device *Device) Delete(ctx context.Context) error {
+	if err := device.lockSaveDelete(ctx); err != nil {
+		return err
+	}
+	defer device.unlockSaveDelete()
 	if device.Deleted {
 		return nil
 	}
