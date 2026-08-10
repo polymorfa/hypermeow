@@ -223,6 +223,28 @@ func TestBusinessNonceIsNotRedeliveredFromHandlerQueue(t *testing.T) {
 	}
 }
 
+func TestBusinessAccessTokenLockObservesCancellation(t *testing.T) {
+	client := &Client{}
+	state := client.getBusinessCatalogAuth()
+	<-state.tokenLock
+	defer func() { state.tokenLock <- struct{}{} }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.businessAccessToken(ctx)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled token waiter remained blocked")
+	}
+}
+
 func TestSendBusinessFacebookGraphQL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {

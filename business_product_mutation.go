@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +49,7 @@ type businessNonceWaiter struct {
 }
 
 type businessCatalogAuthState struct {
-	tokenMu     sync.Mutex
+	tokenLock   chan struct{}
 	token       businessAccessToken
 	nonceWaiter atomic.Pointer[businessNonceWaiter]
 }
@@ -392,7 +391,8 @@ func (cli *Client) getBusinessCatalogAuth() *businessCatalogAuthState {
 	if existing := cli.businessCatalogAuth.Load(); existing != nil {
 		return existing
 	}
-	created := &businessCatalogAuthState{}
+	created := &businessCatalogAuthState{tokenLock: make(chan struct{}, 1)}
+	created.tokenLock <- struct{}{}
 	if cli.businessCatalogAuth.CompareAndSwap(nil, created) {
 		return created
 	}
@@ -491,8 +491,12 @@ func (cli *Client) acquireBusinessAccessToken(ctx context.Context, state *busine
 
 func (cli *Client) businessAccessToken(ctx context.Context) (businessAccessToken, error) {
 	state := cli.getBusinessCatalogAuth()
-	state.tokenMu.Lock()
-	defer state.tokenMu.Unlock()
+	select {
+	case <-state.tokenLock:
+		defer func() { state.tokenLock <- struct{}{} }()
+	case <-ctx.Done():
+		return businessAccessToken{}, ctx.Err()
+	}
 	if state.token.accessToken != "" {
 		return state.token, nil
 	}
@@ -516,11 +520,11 @@ func (cli *Client) invalidateBusinessAccessToken(token string) {
 	if state == nil {
 		return
 	}
-	state.tokenMu.Lock()
+	<-state.tokenLock
 	if state.token.accessToken == token {
 		state.token = businessAccessToken{}
 	}
-	state.tokenMu.Unlock()
+	state.tokenLock <- struct{}{}
 }
 
 func (cli *Client) sendBusinessFacebookGraphQL(ctx context.Context, endpoint, documentID, accessToken string, variables map[string]any) (json.RawMessage, error) {
