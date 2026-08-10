@@ -1,19 +1,19 @@
 diff --git a/client.go b/client.go
-index 313970d..17a33c3 100644
+index 9e333f8..d2b995b 100644
 --- a/client.go
 +++ b/client.go
-@@ -206,6 +206,7 @@ type Client struct {
+@@ -207,6 +207,7 @@ type Client struct {
  	// separate library for all the non-e2ee-related stuff like logging in.
  	// The library is currently embedded in mautrix-meta (https://github.com/mautrix/meta), but may be separated later.
  	MessengerConfig *MessengerConfig
 +	SocketConfig    *SocketConfig
  	RefreshCAT      func(context.Context) error
- }
-
-@@ -221,6 +222,13 @@ type MessengerConfig struct {
+ 	// The user agent to use (for non-Messenger connections).
+ 	UserAgent        string
+@@ -225,6 +226,13 @@ type MessengerConfig struct {
  	WebsocketURL string
  }
-
+ 
 +// SocketConfig overrides the WebSocket endpoint or Noise certificate authority.
 +type SocketConfig struct {
 +	URL                       string
@@ -24,9 +24,9 @@ index 313970d..17a33c3 100644
  // Size of buffer for the channel that all incoming XML nodes go through.
  // In general it shouldn't go past a few buffered messages, but the channel is big to be safe.
  const handlerQueueSize = 2048
-@@ -557,6 +565,14 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
- 		//fs.HTTPHeaders.Set("Sec-Fetch-Mode", "websocket")
- 		//fs.HTTPHeaders.Set("Sec-Fetch-Site", "cross-site")
+@@ -568,6 +576,14 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
+ 		fs.URL = cli.MessengerConfig.WebsocketURL
+ 		fs.HTTPHeaders.Set("Origin", cli.MessengerConfig.BaseURL)
  	}
 +	if cli.SocketConfig != nil {
 +		if cli.SocketConfig.URL != "" {
@@ -36,9 +36,9 @@ index 313970d..17a33c3 100644
 +			fs.HTTPHeaders.Set("Origin", cli.SocketConfig.Origin)
 +		}
 +	}
+ 	maps.Copy(fs.HTTPHeaders, cli.WebSocketHeaders)
  	if err := fs.Connect(ctx); err != nil {
  		fs.Close(0)
- 		return err
 diff --git a/handshake.go b/handshake.go
 index 8badf1a..8f9d86c 100644
 --- a/handshake.go
@@ -56,11 +56,11 @@ index 8badf1a..8f9d86c 100644
 +	if err = verifyServerCert(certDecrypted, staticDecrypted, certAuthority); err != nil {
  		return fmt.Errorf("failed to verify server cert: %w", err)
  	}
-
+ 
 @@ -140,7 +145,7 @@ func checkCertValidity(cert *waCert.CertChain_NoiseCertificate_Details) error {
  	return nil
  }
-
+ 
 -func verifyServerCert(certDecrypted, staticDecrypted []byte) error {
 +func verifyServerCert(certDecrypted, staticDecrypted []byte, certAuthority [32]byte) error {
  	var certChain waCert.CertChain
