@@ -10,6 +10,10 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
+func businessAppSmokeSupported() bool {
+	return true
+}
+
 func validateBusinessApp(ctx context.Context, client *whatsmeow.Client) error {
 	business := types.NewJID("15551234567", types.DefaultUserServer)
 	catalog, err := client.GetCatalog(ctx, business, whatsmeow.GetCatalogParams{Limit: 50})

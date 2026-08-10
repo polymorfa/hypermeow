@@ -387,7 +387,7 @@ func (r *runner) run() (result, error) {
 		return r.snapshot(false), fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
-	if r.cfg.BusinessSmoke {
+	if r.cfg.BusinessSmoke && businessAppSmokeSupported() {
 		connectionTimer := time.NewTimer(30 * time.Second)
 		defer connectionTimer.Stop()
 		select {
