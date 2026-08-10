@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 
@@ -337,7 +338,7 @@ func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessa
 }
 
 func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !utf8.ValidString(params.ButtonText) || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business address message text")
 	}
 	buttonParams, err := json.Marshal(struct {
@@ -350,7 +351,7 @@ func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Me
 }
 
 func BuildBusinessFlowMessage(params BusinessFlowMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || strings.TrimSpace(params.ButtonText) == "" || !utf8.ValidString(params.ButtonText) || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
 		return nil, errors.New("invalid business flow message text")
 	}
 	if strings.TrimSpace(params.FlowID) == "" || !bounded(params.FlowID, 256) || strings.TrimSpace(params.FlowToken) == "" || !bounded(params.FlowToken, 8192) {

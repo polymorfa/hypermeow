@@ -258,9 +258,10 @@ func TestBuildBusinessAddressMessageMatchesWebGenerator(t *testing.T) {
 func TestBusinessAddressMessageEnforcesInteractiveTextLimits(t *testing.T) {
 	valid := BusinessAddressMessageParams{Body: "Address", ButtonText: "Share", Footer: "Footer"}
 	tests := map[string]BusinessAddressMessageParams{
-		"body":   {Body: strings.Repeat("b", 1025), ButtonText: valid.ButtonText, Footer: valid.Footer},
-		"button": {Body: valid.Body, ButtonText: strings.Repeat("c", 21), Footer: valid.Footer},
-		"footer": {Body: valid.Body, ButtonText: valid.ButtonText, Footer: strings.Repeat("f", 61)},
+		"body":        {Body: strings.Repeat("b", 1025), ButtonText: valid.ButtonText, Footer: valid.Footer},
+		"button":      {Body: valid.Body, ButtonText: strings.Repeat("c", 21), Footer: valid.Footer},
+		"button-utf8": {Body: valid.Body, ButtonText: string([]byte{0xff}), Footer: valid.Footer},
+		"footer":      {Body: valid.Body, ButtonText: valid.ButtonText, Footer: strings.Repeat("f", 61)},
 	}
 	for name, params := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -283,6 +284,10 @@ func TestBusinessFlowMessageEnforcesInteractiveTextLimits(t *testing.T) {
 		},
 		"button": {
 			Body: valid.Body, ButtonText: strings.Repeat("c", 21), Footer: valid.Footer,
+			FlowID: valid.FlowID, FlowToken: valid.FlowToken, FlowAction: valid.FlowAction, Screen: valid.Screen,
+		},
+		"button-utf8": {
+			Body: valid.Body, ButtonText: string([]byte{0xff}), Footer: valid.Footer,
 			FlowID: valid.FlowID, FlowToken: valid.FlowToken, FlowAction: valid.FlowAction, Screen: valid.Screen,
 		},
 		"footer": {
