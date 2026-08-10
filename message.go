@@ -794,10 +794,18 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 	if !synchronousStorage {
 		storageCtx = context.WithoutCancel(ctx)
 	}
+	nonceChanged := false
 	if historySync.CompanionMetaNonce != nil && cli.shouldStoreHistorySyncNonce() {
-		cli.storeCompanionMetaNonce(storageCtx, historySync.GetCompanionMetaNonce())
+		nonceChanged = cli.updateCompanionMetaNonce(historySync.GetCompanionMetaNonce())
 	}
+	storeHistorySync := cli.shouldStoreHistorySync()
 	doStorage := func(ctx context.Context) {
+		if nonceChanged {
+			cli.persistCompanionMetaNonce(ctx)
+		}
+		if !storeHistorySync {
+			return
+		}
 		if err := cli.storeNCTSalt(ctx, historySync.GetNctSalt()); err != nil {
 			cli.Log.Warnf("Failed to store NCT salt from history sync: %v", err)
 		}
@@ -813,7 +821,7 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 			cli.storeGlobalSettings(ctx, historySync.GlobalSettings)
 		}
 	}
-	if !cli.shouldStoreHistorySync() {
+	if !storeHistorySync && !nonceChanged {
 		return &historySync, nil
 	} else if synchronousStorage {
 		doStorage(storageCtx)
@@ -1118,17 +1126,21 @@ func (cli *Client) storeGlobalSettings(ctx context.Context, settings *waHistoryS
 	}
 }
 
-func (cli *Client) storeCompanionMetaNonce(ctx context.Context, nonce string) {
-	if nonce != "" && nonce != cli.Store.CompanionMetaNonce {
-		cli.Store.CompanionMetaNonce = nonce
-		err := cli.Store.Save(ctx)
-		if err != nil {
-			zerolog.Ctx(ctx).Err(err).
-				Msg("Failed to save companion meta nonce")
-		} else {
-			zerolog.Ctx(ctx).Debug().
-				Msg("Saved companion meta nonce")
-		}
+func (cli *Client) updateCompanionMetaNonce(nonce string) bool {
+	if nonce == "" || nonce == cli.Store.CompanionMetaNonce {
+		return false
+	}
+	cli.Store.CompanionMetaNonce = nonce
+	return true
+}
+
+func (cli *Client) persistCompanionMetaNonce(ctx context.Context) {
+	if err := cli.Store.Save(ctx); err != nil {
+		zerolog.Ctx(ctx).Err(err).
+			Msg("Failed to save companion meta nonce")
+	} else {
+		zerolog.Ctx(ctx).Debug().
+			Msg("Saved companion meta nonce")
 	}
 }
 

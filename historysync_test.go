@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -16,10 +17,14 @@ import (
 
 type historySyncDeviceContainer struct {
 	putContextErr chan error
+	putRelease    chan struct{}
 }
 
 func (container *historySyncDeviceContainer) PutDevice(ctx context.Context, _ *store.Device) error {
 	container.putContextErr <- ctx.Err()
+	if container.putRelease != nil {
+		<-container.putRelease
+	}
 	return nil
 }
 
@@ -107,5 +112,62 @@ func TestAsyncHistorySyncNoncePersistenceIgnoresCallerCancellation(t *testing.T)
 	}
 	if err = <-container.putContextErr; err != nil {
 		t.Fatalf("nonce persistence inherited caller cancellation: %v", err)
+	}
+}
+
+func TestAsyncHistorySyncNoncePersistenceDoesNotBlockDownload(t *testing.T) {
+	syncType := waHistorySync.HistorySync_INITIAL_BOOTSTRAP
+	historyBytes, err := proto.Marshal(&waHistorySync.HistorySync{
+		SyncType:           &syncType,
+		CompanionMetaNonce: proto.String("fresh"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compressed bytes.Buffer
+	writer := zlib.NewWriter(&compressed)
+	if _, err = writer.Write(historyBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	container := &historySyncDeviceContainer{
+		putContextErr: make(chan error, 1),
+		putRelease:    make(chan struct{}),
+	}
+	t.Cleanup(func() { close(container.putRelease) })
+	client := &Client{
+		DisableHistorySyncStorage: true,
+		Log:                       waLog.Noop,
+		Store:                     &store.Device{Container: container},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.DownloadHistorySync(context.Background(), &waE2E.HistorySyncNotification{
+			InitialHistBootstrapInlinePayload: compressed.Bytes(),
+		}, false)
+		done <- err
+	}()
+
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous nonce persistence blocked history sync download")
+	}
+	if client.Store.CompanionMetaNonce != "fresh" {
+		t.Fatalf("companion meta nonce = %q", client.Store.CompanionMetaNonce)
+	}
+	select {
+	case err = <-container.putContextErr:
+		if err != nil {
+			t.Fatalf("nonce persistence inherited caller cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous nonce persistence did not start")
 	}
 }
