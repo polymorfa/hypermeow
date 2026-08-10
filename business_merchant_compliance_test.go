@@ -123,7 +123,7 @@ func TestDecodeBusinessMerchantComplianceRejectsMissingPayload(t *testing.T) {
 func TestBusinessMerchantComplianceMethodsUseMatchingGraphEnvironments(t *testing.T) {
 	jid := types.NewJID("15550001111", types.DefaultUserServer)
 	client := NewClient(&store.Device{ID: &jid}, waLog.Noop)
-	client.getBusinessCatalogAuth().token = businessAccessToken{accessToken: "synthetic-ad-token"}
+	client.getBusinessCatalogAuth().token = businessAccessToken{accessToken: "synthetic-ad-token", actorID: "synthetic-actor"}
 	client.mediaHTTP = &http.Client{Transport: merchantComplianceRoundTripper(func(request *http.Request) (*http.Response, error) {
 		var body struct {
 			AccessToken string         `json:"access_token"`
@@ -141,7 +141,8 @@ func TestBusinessMerchantComplianceMethodsUseMatchingGraphEnvironments(t *testin
 			}
 			payload = `{"data":{"xfb_whatsapp_biz_merchant_compliance_info":{"merchant_info":{"entity_name":"Polymorfa Labs","entity_type":"PRIVATE_COMPANY","is_registered":true,"entity_type_custom":"","customer_care_details":{},"grievance_officer_details":{}}}}}`
 		case businessSetMerchantComplianceDocumentID:
-			if request.URL.String() != businessGraphQLEndpoint || body.AccessToken != "synthetic-ad-token" || body.Variables["input"] == nil {
+			input, _ := body.Variables["input"].(map[string]any)
+			if request.URL.String() != businessGraphQLEndpoint || body.AccessToken != "synthetic-ad-token" || input["actor_id"] != "synthetic-actor" {
 				return nil, fmt.Errorf("unexpected Facebook mutation: %s %#v", request.URL, body)
 			}
 			payload = `{"data":{"xfb_whatsapp_biz_merchant_set_compliance_info":{"merchant_info":{"entity_name":"Polymorfa Labs","entity_type":"PRIVATE_COMPANY","is_registered":true,"entity_type_custom":"","customer_care_details":{},"grievance_officer_details":{}}}}}`
