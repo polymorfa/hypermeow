@@ -80,6 +80,9 @@ func isBusinessGraphQLAuthError(err error) bool {
 	if !errors.As(err, &graphErr) {
 		return false
 	}
+	if graphErr.StatusCode == http.StatusUnauthorized || graphErr.StatusCode == http.StatusForbidden {
+		return true
+	}
 	for _, item := range graphErr.Errors {
 		if item.Code == 190 || item.Code == 400 {
 			return true
@@ -577,13 +580,17 @@ func (cli *Client) sendBusinessFacebookGraphQL(ctx context.Context, endpoint, do
 		Errors []businessGraphQLErrorItem `json:"errors"`
 		Error  *businessGraphQLErrorItem  `json:"error"`
 	}
-	if err = json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("decode business GraphQL response: %w", err)
-	}
-	if envelope.Error != nil {
+	err = json.Unmarshal(raw, &envelope)
+	if err == nil && envelope.Error != nil {
 		envelope.Errors = append(envelope.Errors, *envelope.Error)
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 || len(envelope.Errors) > 0 {
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, &businessGraphQLError{StatusCode: response.StatusCode, Errors: envelope.Errors}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("decode business GraphQL response: %w", err)
+	}
+	if len(envelope.Errors) > 0 {
 		return nil, &businessGraphQLError{StatusCode: response.StatusCode, Errors: envelope.Errors}
 	}
 	if len(envelope.Data) == 0 || bytes.Equal(envelope.Data, []byte("null")) {

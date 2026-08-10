@@ -352,6 +352,18 @@ func TestSendBusinessFacebookGraphQLClassifiesAuthErrors(t *testing.T) {
 	}
 }
 
+func TestSendBusinessFacebookGraphQLClassifiesHTTPAuthErrorsWithoutJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client := &Client{mediaHTTP: server.Client()}
+	_, err := client.sendBusinessFacebookGraphQL(context.Background(), server.URL, businessAddProductDocumentID, "synthetic-token", map[string]any{"input": map[string]any{}})
+	if err == nil || !isBusinessGraphQLAuthError(err) || strings.Contains(err.Error(), "decode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestUploadBusinessProductImageUsesPlaintextProductPath(t *testing.T) {
 	image := append([]byte("\x89PNG\r\n\x1a\n"), []byte("synthetic-product-image")...)
 	hash := sha256.Sum256(image)
