@@ -70,6 +70,8 @@ services:
       - ${HISTORY_CONVERSATIONS:-100}
       - --history-sync-messages
       - ${HISTORY_MESSAGES:-20}
+      - --capture-messages
+      - ${BARBACK_CAPTURE_MESSAGES:-0}
     depends_on:
       cert-init:
         condition: service_completed_successfully
@@ -112,6 +114,7 @@ services:
       BENCH_VARIANT: ${BENCH_VARIANT:-candidate}
       BENCH_GROUP_SIZE: ${BENCH_GROUP_SIZE:-128}
       BENCH_BUSINESS_SMOKE: ${BENCH_BUSINESS_SMOKE:-false}
+      BENCH_PHONE_CONSENT_SMOKE: ${BENCH_PHONE_CONSENT_SMOKE:-false}
       BENCH_MODE: ${BENCH_MODE:-group}
       BENCH_MESSAGE_PROFILE: ${BENCH_MESSAGE_PROFILE:-text}
       BENCH_RATE: ${BENCH_RATE:-50}

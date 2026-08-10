@@ -311,6 +311,10 @@ func (int *DangerousInternalClient) HandleEncryptedMessage(ctx context.Context, 
 	int.c.handleEncryptedMessage(ctx, node)
 }
 
+func (int *DangerousInternalClient) SetSynchronousMessageNameUpdates(enabled bool) {
+	int.c.setSynchronousMessageNameUpdates(enabled)
+}
+
 func (int *DangerousInternalClient) HandleUnencryptedMessage(ctx context.Context, node *waBinary.Node) {
 	int.c.handleUnencryptedMessage(ctx, node)
 }

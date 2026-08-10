@@ -52,12 +52,7 @@ func (cli *Client) handleEncryptedMessage(ctx context.Context, node *waBinary.No
 	} else if !info.RecipientAlt.IsEmpty() {
 		cli.StoreLIDPNMapping(ctx, info.RecipientAlt, info.Chat)
 	}
-	if info.VerifiedName != nil && len(info.VerifiedName.Details.GetVerifiedName()) > 0 {
-		go cli.updateBusinessName(ctx, info.Sender, info.SenderAlt, info, info.VerifiedName.Details.GetVerifiedName())
-	}
-	if len(info.PushName) > 0 && info.PushName != "-" && (cli.MessengerConfig == nil || info.PushName != "username") {
-		go cli.updatePushName(ctx, info.Sender, info.SenderAlt, info, info.PushName)
-	}
+	cli.updateMessageContactNames(ctx, info)
 	if info.Sender.Server == types.NewsletterServer {
 		var cancelled bool
 		defer cli.maybeDeferredAck(ctx, node)(&cancelled)
@@ -67,6 +62,32 @@ func (cli *Client) handleEncryptedMessage(ctx context.Context, node *waBinary.No
 		cli.dispatchEvent(&events.UndecryptedMessage{Info: *info, Raw: node})
 	} else {
 		cli.decryptMessages(ctx, info, node)
+	}
+}
+
+func (cli *Client) setSynchronousMessageNameUpdates(enabled bool) {
+	cli.synchronousMessageNameUpdates.Store(enabled)
+}
+
+func (cli *Client) updateMessageContactNames(ctx context.Context, info *types.MessageInfo) {
+	synchronous := cli.synchronousMessageNameUpdates.Load()
+	var verifiedName string
+	if info.VerifiedName != nil {
+		verifiedName = info.VerifiedName.Details.GetVerifiedName()
+	}
+	if len(verifiedName) > 0 {
+		if synchronous {
+			cli.updateBusinessName(ctx, info.Sender, info.SenderAlt, info, verifiedName)
+		} else {
+			go cli.updateBusinessName(ctx, info.Sender, info.SenderAlt, info, verifiedName)
+		}
+	}
+	if len(info.PushName) > 0 && info.PushName != "-" && (cli.MessengerConfig == nil || info.PushName != "username") {
+		if synchronous {
+			cli.updatePushName(ctx, info.Sender, info.SenderAlt, info, info.PushName)
+		} else {
+			go cli.updatePushName(ctx, info.Sender, info.SenderAlt, info, info.PushName)
+		}
 	}
 }
 

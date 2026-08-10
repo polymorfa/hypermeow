@@ -1,11 +1,21 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
+	"errors"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 func TestLoadConfigWorkload(t *testing.T) {
@@ -21,6 +31,7 @@ func TestLoadConfigWorkload(t *testing.T) {
 	t.Setenv("HISTORY_CONVERSATIONS", "10")
 	t.Setenv("HISTORY_MESSAGES", "5")
 	t.Setenv("BENCH_BUSINESS_SMOKE", "1")
+	t.Setenv("BENCH_PHONE_CONSENT_SMOKE", "1")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -37,6 +48,9 @@ func TestLoadConfigWorkload(t *testing.T) {
 	}
 	if !cfg.BusinessSmoke {
 		t.Fatal("business smoke validation was not enabled")
+	}
+	if !cfg.PhoneConsentSmoke {
+		t.Fatal("phone consent smoke validation was not enabled")
 	}
 }
 
@@ -66,6 +80,256 @@ func TestLoadConfigRejectsInvalidMode(t *testing.T) {
 	t.Setenv("BENCH_MODE", "broadcast")
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("expected invalid benchmark mode to fail")
+	}
+}
+
+func TestRunnerReportsFatalSmokeFailure(t *testing.T) {
+	r := &runner{fatalErr: make(chan error, 1)}
+	sentinel := errors.New("phone consent failed")
+	r.reportFatal(sentinel)
+	select {
+	case err := <-r.fatalErr:
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("fatal error = %v", err)
+		}
+	default:
+		t.Fatal("fatal smoke failure was not propagated")
+	}
+}
+
+func TestWaitForRunCompletionWakesOnFatalSmokeFailure(t *testing.T) {
+	r := &runner{done: make(chan struct{}), fatalErr: make(chan error, 1)}
+	sentinel := errors.New("phone consent failed")
+	r.reportFatal(sentinel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.waitForRunCompletion(ctx); !errors.Is(err, sentinel) {
+		t.Fatalf("completion error = %v, want %v", err, sentinel)
+	}
+}
+
+func TestPhoneConsentFailureIsSharedAcrossWorkers(t *testing.T) {
+	r := &runner{
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	sentinel := errors.New("phone consent failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	validate := func() error {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return sentinel
+	}
+
+	var workers sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			errs <- r.runPhoneConsentSmoke(validate)
+		}()
+	}
+	<-entered
+	close(release)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("worker error = %v, want %v", err, sentinel)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("validation calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestPhoneConsentSmokeRunsBeforeMeasuredMetrics(t *testing.T) {
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	if !r.beforeBenchmarkMessage(func() error {
+		if r.startedAt.Load() != 0 {
+			t.Fatal("workload metrics started before phone consent validation")
+		}
+		return nil
+	}) {
+		t.Fatal("phone consent validation failed")
+	}
+	r.startOnce.Do(r.startMetrics)
+	t.Cleanup(r.stopMetricsSampler)
+	if r.startedAt.Load() == 0 {
+		t.Fatal("workload metrics did not start after phone consent validation")
+	}
+}
+
+func TestPhoneConsentFailureDoesNotStartMeasuredMetrics(t *testing.T) {
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+	}
+	if r.beforeBenchmarkMessage(func() error { return errors.New("failed") }) {
+		t.Fatal("failed phone consent validation allowed the workload to start")
+	}
+	if r.startedAt.Load() != 0 {
+		t.Fatal("failed phone consent validation started workload metrics")
+	}
+	if r.failed.Load() != 0 {
+		t.Fatalf("phone consent validation changed workload send failures to %d", r.failed.Load())
+	}
+}
+
+func TestPhoneConsentPreservesTriggeringPingDatabaseStats(t *testing.T) {
+	jobs := make(chan *events.Message, 1)
+	var resetCalls atomic.Int64
+	phase := 0
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true, Total: 1},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+		jobs:           []chan *events.Message{jobs},
+	}
+	r.statementStatsSnapshot = func() databaseStats {
+		switch phase {
+		case 0:
+			phase = 1
+			return databaseStats{
+				Calls: 2, TotalExecMS: 3, Rows: 4, SizeBytes: 100,
+				Queries: []queryStat{{Query: "SELECT whatsmeow_session", Calls: 2, TotalExecMS: 3, Rows: 4}},
+			}
+		case 3:
+			phase = 4
+			return databaseStats{
+				Calls: 5, TotalExecMS: 7, Rows: 11, SizeBytes: 200,
+				Queries: []queryStat{
+					{Query: "SELECT whatsmeow_session", Calls: 1, TotalExecMS: 2, Rows: 3},
+					{Query: "UPDATE whatsmeow_device", Calls: 4, TotalExecMS: 5, Rows: 8},
+				},
+			}
+		default:
+			t.Fatalf("statement stats snapshot at phase %d", phase)
+			return databaseStats{}
+		}
+	}
+	r.phoneConsentValidator = func(context.Context, *whatsmeow.Client, types.JID) error {
+		if phase != 1 || resetCalls.Load() != 0 {
+			t.Fatalf("phone consent validation at phase %d after %d resets", phase, resetCalls.Load())
+		}
+		phase = 2
+		return nil
+	}
+	r.statementStatsReset = func(context.Context) error {
+		if phase != 2 || r.startedAt.Load() != 0 {
+			t.Fatalf("statement stats reset at phase %d after workload metrics started", phase)
+		}
+		phase = 3
+		resetCalls.Add(1)
+		return nil
+	}
+	r.handler(context.Background(), &whatsmeow.Client{})(&events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("100000011111111", types.HiddenUserServer)}},
+		Message: &waE2E.Message{Conversation: proto.String("ping")},
+	})
+	t.Cleanup(r.stopMetricsSampler)
+	if resetCalls.Load() != 1 {
+		t.Fatalf("statement stats reset calls = %d, want 1", resetCalls.Load())
+	}
+	if r.startedAt.Load() == 0 {
+		t.Fatal("workload metrics did not start after statement stats reset")
+	}
+	result := r.snapshot(false)
+	if phase != 4 {
+		t.Fatalf("final statement stats snapshot left phase at %d", phase)
+	}
+	if result.Database.Calls != 7 || result.Database.TotalExecMS != 10 || result.Database.Rows != 15 {
+		t.Fatalf("database totals omitted triggering ping: %+v", result.Database)
+	}
+	if result.Database.SizeBytes != 200 {
+		t.Fatalf("database size = %d, want final size 200", result.Database.SizeBytes)
+	}
+	if len(result.Database.Queries) != 2 || result.Database.Queries[0].Query != "UPDATE whatsmeow_device" ||
+		result.Database.Queries[1].Calls != 3 || result.Database.Queries[1].TotalExecMS != 5 || result.Database.Queries[1].Rows != 7 {
+		t.Fatalf("database query stats were not merged: %+v", result.Database.Queries)
+	}
+}
+
+func TestPhoneConsentFailureExcludesValidationDatabaseStats(t *testing.T) {
+	phase := 0
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+		phoneConsentValidator: func(context.Context, *whatsmeow.Client, types.JID) error {
+			if phase != 1 {
+				t.Fatalf("validation at phase %d", phase)
+			}
+			phase = 2
+			return errors.New("capture failed")
+		},
+	}
+	r.statementStatsSnapshot = func() databaseStats {
+		switch phase {
+		case 0:
+			phase = 1
+			return databaseStats{Calls: 3, Queries: []queryStat{{Query: "SELECT whatsmeow_session", Calls: 3}}}
+		case 3:
+			phase = 4
+			return databaseStats{}
+		default:
+			t.Fatalf("statement stats snapshot at phase %d", phase)
+			return databaseStats{}
+		}
+	}
+	r.statementStatsReset = func(context.Context) error {
+		if phase != 2 {
+			t.Fatalf("reset at phase %d", phase)
+		}
+		phase = 3
+		return nil
+	}
+	r.handler(context.Background(), &whatsmeow.Client{})(&events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("100000011111111", types.HiddenUserServer)}},
+		Message: &waE2E.Message{Conversation: proto.String("ping")},
+	})
+	result := r.snapshot(false)
+	if phase != 4 || result.Database.Calls != 3 || len(result.Database.Queries) != 1 {
+		t.Fatalf("failed consent polluted database stats at phase %d: %+v", phase, result.Database)
+	}
+	if r.failed.Load() != 0 {
+		t.Fatalf("failed consent changed workload failures to %d", r.failed.Load())
+	}
+}
+
+func TestHandlerUsesRunContextForPhoneConsent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := &runner{
+		cfg:            config{PhoneConsentSmoke: true},
+		fatalErr:       make(chan error, 1),
+		failureReasons: make(map[string]int64),
+		phoneConsentValidator: func(ctx context.Context, _ *whatsmeow.Client, _ types.JID) error {
+			return ctx.Err()
+		},
+	}
+	r.handler(ctx, &whatsmeow.Client{})(&events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("100000011111111", types.HiddenUserServer)}},
+		Message: &waE2E.Message{Conversation: proto.String("ping")},
+	})
+	select {
+	case err := <-r.fatalErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("phone consent error = %v, want context canceled", err)
+		}
+	default:
+		t.Fatal("canceled run context was not propagated to phone consent validation")
 	}
 }
 
@@ -110,5 +374,63 @@ func TestJobShardDistributesChats(t *testing.T) {
 	}
 	if len(seen) < 32 {
 		t.Fatalf("chat sharding is too concentrated: %d shards", len(seen))
+	}
+}
+
+func TestContainsPhoneNumberConsentCaptures(t *testing.T) {
+	requestPayload, err := proto.Marshal(buildRequestPhoneNumberMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharePayload, err := proto.Marshal(buildSharePhoneNumberMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	captures := []capturedMessage{{PlaintextBase64: base64.StdEncoding.EncodeToString(requestPayload)}}
+	if containsPhoneNumberConsentCaptures(captures) {
+		t.Fatal("request-only capture passed phone consent validation")
+	}
+	captures = append(captures, capturedMessage{PlaintextBase64: base64.StdEncoding.EncodeToString(sharePayload)})
+	if !containsPhoneNumberConsentCaptures(captures) {
+		t.Fatal("request and share messages were not detected")
+	}
+}
+
+func TestPhoneConsentTargetPrefersSenderLID(t *testing.T) {
+	message := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{
+		Chat:      types.NewJID("15550001111", types.DefaultUserServer),
+		Sender:    types.NewJID("15550001111", types.DefaultUserServer),
+		SenderAlt: types.NewJID("100000011111111", types.HiddenUserServer),
+	}}}
+	if got := phoneConsentTarget(message); got.String() != "100000011111111@lid" {
+		t.Fatalf("target = %s", got)
+	}
+}
+
+func TestMergeDatabaseStatsRanksAfterCombiningAllQueries(t *testing.T) {
+	preflight := databaseStats{Queries: make([]queryStat, 31)}
+	workload := databaseStats{Queries: make([]queryStat, 31)}
+	for index := range 30 {
+		preflight.Queries[index] = queryStat{Query: "preflight-" + strconv.Itoa(index), Calls: 2}
+		workload.Queries[index] = queryStat{Query: "workload-" + strconv.Itoa(index), Calls: 2}
+	}
+	preflight.Queries[30] = queryStat{Query: "combined", Calls: 1}
+	workload.Queries[30] = queryStat{Query: "combined", Calls: 1}
+
+	merged := mergeDatabaseStats(preflight, workload)
+	if len(merged.Queries) != 30 {
+		t.Fatalf("merged query count = %d, want 30", len(merged.Queries))
+	}
+	found := false
+	for _, query := range merged.Queries {
+		if query.Query == "combined" {
+			found = true
+			if query.Calls != 2 {
+				t.Fatalf("combined calls = %d, want 2", query.Calls)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("combined phase-local tail query was dropped before final ranking")
 	}
 }
