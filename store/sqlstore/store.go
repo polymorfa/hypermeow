@@ -1007,9 +1007,7 @@ func (s *SQLStore) PutManyContactUsernames(ctx context.Context, entries []store.
 	if len(entries) == 0 {
 		return nil
 	}
-	entries = exslices.DeduplicateUnsortedOverwriteFunc(entries, func(entry store.ContactUsernameEntry) types.JID {
-		return entry.JID
-	})
+	entries = deduplicateContactUsernamesLastWriteWins(entries)
 	s.contactCacheLock.Lock()
 	defer s.contactCacheLock.Unlock()
 	if err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
@@ -1030,6 +1028,21 @@ func (s *SQLStore) PutManyContactUsernames(ctx context.Context, entries []store.
 		}
 	}
 	return nil
+}
+
+func deduplicateContactUsernamesLastWriteWins(entries []store.ContactUsernameEntry) []store.ContactUsernameEntry {
+	positions := make(map[types.JID]int, len(entries))
+	out := entries[:0]
+	for _, entry := range entries {
+		if position, ok := positions[entry.JID]; ok {
+			out[position] = entry
+		} else {
+			positions[entry.JID] = len(out)
+			out = append(out, entry)
+		}
+	}
+	clear(entries[len(out):])
+	return out
 }
 
 const contactBatchSize = 300

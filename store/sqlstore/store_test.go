@@ -203,6 +203,25 @@ func TestPutManyContactUsernamesSerializesSingleWrites(t *testing.T) {
 	}
 }
 
+func TestDeduplicateContactUsernamesUsesLastAlias(t *testing.T) {
+	firstJID := types.NewJID("100000011111111", types.HiddenUserServer)
+	secondJID := types.NewJID("100000022222222", types.HiddenUserServer)
+	entries := deduplicateContactUsernamesLastWriteWins([]store.ContactUsernameEntry{
+		{JID: firstJID, Username: "old"},
+		{JID: secondJID, Username: "other"},
+		{JID: firstJID, Username: "new"},
+	})
+	if len(entries) != 2 {
+		t.Fatalf("deduplicated entries = %#v", entries)
+	}
+	if entries[0].JID != firstJID || entries[0].Username != "new" {
+		t.Fatalf("first entry = %#v, want latest alias for %s", entries[0], firstJID)
+	}
+	if entries[1].JID != secondJID || entries[1].Username != "other" {
+		t.Fatalf("second entry = %#v", entries[1])
+	}
+}
+
 func TestMigratePNToLIDCachesEmptyPreflightTemporarily(t *testing.T) {
 	state := &pnMigrationTestDB{}
 	db := sql.OpenDB(&pnMigrationTestConnector{state: state})
