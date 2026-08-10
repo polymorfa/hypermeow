@@ -43,8 +43,10 @@ Use `-m`. Without it, `go mod why` asks about the *package* `go.mau.fi/whatsmeow
 A stricter check inspects the link graph directly:
 
 ```sh
-go list -deps ./... | grep '^go\.mau\.fi/whatsmeow'   # must print nothing
+! go list -deps ./... | grep -q '^go\.mau\.fi/whatsmeow'
 ```
+
+The negation matters if you put this in CI. `grep` exits 0 when it *finds* a match, so without the `!` the step would succeed exactly when the graph is unsafe and fail when it is clean. As written, exit 0 means safe.
 
 or assert it in a test via `debug.ReadBuildInfo()`, failing if any entry in `Deps` reports the module path `go.mau.fi/whatsmeow`.
 
