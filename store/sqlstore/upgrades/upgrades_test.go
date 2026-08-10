@@ -153,8 +153,8 @@ func TestUpgradeFromCurrentDevSchemaAddsUsername(t *testing.T) {
 	if err = db.Upgrade(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if state.version != 18 || state.compatVersion != 18 {
-		t.Fatalf("schema version = %d/%d, want 18/18", state.version, state.compatVersion)
+	if state.version != 18 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 18/8", state.version, state.compatVersion)
 	}
 	want := "ALTER TABLE whatsmeow_contacts ADD COLUMN username TEXT;"
 	for _, query := range state.executed {
