@@ -10,6 +10,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 func TestFilterContactsPreservesUsername(t *testing.T) {
@@ -61,7 +62,7 @@ func TestDispatchLIDContactPersistsNamesAndUsername(t *testing.T) {
 	contacts := &recordingLIDContactStore{}
 	client := &Client{Store: &store.Device{Contacts: contacts}}
 	lid := types.NewJID("100000011111111", types.HiddenUserServer)
-	client.dispatchAppState(context.Background(), appstate.WAPatchCriticalUnblockLow, appstate.Mutation{
+	event := client.dispatchAppState(context.Background(), appstate.WAPatchCriticalUnblockLow, appstate.Mutation{
 		Index: []string{appstate.IndexLIDContact, lid.String()},
 		Action: &waSyncAction.SyncActionValue{LidContactAction: &waSyncAction.LidContactAction{
 			FullName: proto.String("LID User"), Username: proto.String("lid-example"),
@@ -69,5 +70,9 @@ func TestDispatchLIDContactPersistsNamesAndUsername(t *testing.T) {
 	}, false)
 	if contacts.jid != lid || contacts.fullName != "LID User" || contacts.username != "lid-example" {
 		t.Fatalf("unexpected persisted contact: %#v", contacts)
+	}
+	lidEvent, ok := event.(*events.LIDContact)
+	if !ok || lidEvent.JID != lid || lidEvent.Action.GetUsername() != "lid-example" {
+		t.Fatalf("unexpected LID contact event: %#v", event)
 	}
 }

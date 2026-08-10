@@ -23,6 +23,15 @@ type Contact struct {
 	FromFullSync bool                        // Whether the action is emitted because of a fullSync
 }
 
+// LIDContact is emitted when a LID-keyed contact is modified from another device.
+type LIDContact struct {
+	JID       types.JID
+	Timestamp time.Time
+
+	Action       *waSyncAction.LidContactAction
+	FromFullSync bool
+}
+
 // PushName is emitted when a message is received with a different push name than the previous value cached for the same user.
 type PushName struct {
 	JID         types.JID // The user whose push name changed.

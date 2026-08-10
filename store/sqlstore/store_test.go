@@ -83,6 +83,12 @@ func TestBuildSharedMassInsertQuery(t *testing.T) {
 	}
 }
 
+func TestBulkContactNamesPreserveMissingUsername(t *testing.T) {
+	if !strings.Contains(putContactNamesQuery, "CASE WHEN excluded.username <> '' THEN excluded.username ELSE whatsmeow_contacts.username END") {
+		t.Fatal("bulk contact-name update does not preserve an omitted username")
+	}
+}
+
 func TestIdentityCacheIsBounded(t *testing.T) {
 	store := &SQLStore{identityCache: make(map[string]identityCacheEntry, maxIdentityCacheEntries)}
 	for i := 0; i < maxIdentityCacheEntries; i++ {

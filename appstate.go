@@ -329,6 +329,7 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		}
 	case appstate.IndexLIDContact:
 		act := mutation.Action.GetLidContactAction()
+		eventToDispatch = &events.LIDContact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
 		if cli.Store.Contacts != nil {
 			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
 			if usernameStore, ok := cli.Store.Contacts.(store.ContactUsernameStore); ok && storeUpdateError == nil {

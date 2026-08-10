@@ -857,7 +857,8 @@ const (
 	`
 	putContactNamesQuery = `
 		INSERT INTO whatsmeow_contacts (our_jid, their_jid, first_name, full_name, username) VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name, username=excluded.username
+		ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name,
+			username=CASE WHEN excluded.username <> '' THEN excluded.username ELSE whatsmeow_contacts.username END
 	`
 	putContactUsernameQuery = `
 		INSERT INTO whatsmeow_contacts (our_jid, their_jid, username) VALUES ($1, $2, $3)
