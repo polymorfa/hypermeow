@@ -5,8 +5,9 @@ go 1.25.0
 toolchain go1.26.5
 
 retract (
-	v0.1.1 // Retraction carrier only; use @main or v0.0.0.
-	v0.1.0 // Published accidentally; use @main or v0.0.0.
+	v0.1.1 // Retraction carrier only; use @main.
+	v0.1.0 // Published accidentally; use @main.
+	v0.0.0 // Historical initial tag; use @main.
 )
 
 require (

@@ -49,9 +49,20 @@ Install the newest reviewed commit from the authoritative `main` branch:
 go get github.com/polymorfa/hypermeow@main
 ```
 
-The `main` query resolves to a commit pseudo-version. After the version correction,
-`v0.0.0` is the only selectable tagged version. `dev` is an integration branch and
-is never a publication source.
+The `main` query resolves to a commit pseudo-version. Pin the resulting
+pseudo-version in `go.mod` for reproducible builds. Every published semantic
+version is retracted: do not install HyperMeow with `@latest`, a version tag, or
+any feature branch.
+
+To experiment with changes that have not reached `main`, use the integration
+branch explicitly:
+
+```sh
+go get github.com/polymorfa/hypermeow@dev
+```
+
+`dev` is unstable and may be rebased. Do not use it in production or publish a
+library that depends on it.
 
 The root package remains named `whatsmeow`, so use an explicit import alias:
 
