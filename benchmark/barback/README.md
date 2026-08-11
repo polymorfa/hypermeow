@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # HyperMeow Barback benchmark
 
 This benchmark pairs a real WhatsMeow client with Barback, stores its device and Signal state in PostgreSQL, and drives DM or group messages through the full Noise, Signal, receipt, sender-key, and history-sync paths.

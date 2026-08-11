@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # Direct-message benchmark matrix
 
 On 2026-08-06, the baseline library at `61888a0` and the refined HyperMeow working tree were run against Barback `9e7d0dc` with the same PostgreSQL image, verified TLS and Noise certificates, and 2-vCPU/3.5-GB Compose limits. Every scenario started with a new database, device, and certificate set.

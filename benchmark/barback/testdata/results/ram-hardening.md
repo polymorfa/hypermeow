@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # RAM hardening results
 
 On 2026-08-06, the PR #3 working tree was profiled again after the direct-message refinement. The comparison uses the same Barback revision, PostgreSQL image, verified TLS and Noise certificates, and 2-vCPU/3.5-GB Compose limits. Each run used a new PostgreSQL volume and paired device.

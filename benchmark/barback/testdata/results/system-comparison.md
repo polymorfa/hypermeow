@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # HyperMeow system comparison
 
 On 2026-08-06, 45 clean Barback workloads compared upstream WhatsMeow, the state before PR #3, and the frozen HyperMeow candidate. Every revision completed three repetitions of five scenarios. All 45 runs reached their message target with zero send failures, zero queue overflows, and zero temporary files remaining.

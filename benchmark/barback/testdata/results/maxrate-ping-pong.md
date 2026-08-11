@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # Ping-pong saturation comparison
 
 Measured on 2026-08-07 with the Compose stack capped at 2 vCPU and 3.5 GB of service memory. Each run used a fresh PostgreSQL volume and device, 64 DM senders, 64 chat-affine workers, a 3-second Signal-session warmup, and a 10-second text-message flood. TLS, Noise verification, Signal encryption/decryption, PostgreSQL persistence, server acknowledgements, and Barback pong decryption remained enabled.

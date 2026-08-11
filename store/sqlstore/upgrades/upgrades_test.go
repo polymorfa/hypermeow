@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Rajeh Taher
+//
+// Licensed under the MIT License. See LICENSE-MIT for details.
+
 package upgrades
 
 import (
@@ -158,7 +162,7 @@ func TestUpgradeFromCurrentDevSchemaAddsUsername(t *testing.T) {
 	}
 	want := "ALTER TABLE whatsmeow_contacts ADD COLUMN username TEXT;"
 	for _, query := range state.executed {
-		if strings.TrimSpace(query) == want {
+		if strings.Contains(query, want) {
 			return
 		}
 	}

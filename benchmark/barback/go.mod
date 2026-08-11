@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Rajeh Taher
+//
+// Licensed under the MIT License. See LICENSE-MIT for details.
+
 module github.com/polymorfa/hypermeow/benchmark/barback
 
 go 1.25.0

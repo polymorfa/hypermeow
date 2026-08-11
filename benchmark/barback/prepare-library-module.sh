@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright (c) 2026 Rajeh Taher
+#
+# Licensed under the MIT License. See LICENSE-MIT for details.
+
 set -eu
 
 library_dir=${1:?library directory is required}

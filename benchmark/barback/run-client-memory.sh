@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Rajeh Taher
+#
+# Licensed under the MIT License. See LICENSE-MIT for details.
+
 set -euo pipefail
 
 benchmark_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

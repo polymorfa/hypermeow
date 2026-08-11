@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# Copyright (c) 2026 Rajeh Taher
+#
+# Licensed under the MIT License. See LICENSE-MIT for details.
 
 FROM golang:1.26-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS build
 ARG BUILD_REV=working-tree

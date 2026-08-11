@@ -43,13 +43,15 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 
 ## Install
 
-HyperMeow uses commit pseudo-versions from its reviewed `main` branch:
+Install the newest reviewed commit from the authoritative `main` branch:
 
 ```sh
-go get github.com/polymorfa/hypermeow@latest
+go get github.com/polymorfa/hypermeow@main
 ```
 
-Only `main` is authoritative for package documentation and pseudo-version resolution. `dev` is an integration branch.
+The `main` query resolves to a commit pseudo-version. After the version correction,
+`v0.0.0` is the only selectable tagged version. `dev` is an integration branch and
+is never a publication source.
 
 The root package remains named `whatsmeow`, so use an explicit import alias:
 
@@ -63,7 +65,7 @@ Replace `go.mau.fi/whatsmeow` imports with `github.com/polymorfa/hypermeow` and 
 
 ```sh
 go mod edit -dropreplace=go.mau.fi/whatsmeow
-go get github.com/polymorfa/hypermeow@latest
+go get github.com/polymorfa/hypermeow@main
 go mod tidy
 ```
 
@@ -114,7 +116,10 @@ If you'd like to financially support this project, you can do so
 
 ## License
 
-Copyright (c) 2025 Tulir Asokan<br>
-Copyright (c) 2026 Rajeh Taher
+Upstream-derived files retain their original Tulir Asokan and contributor
+copyright notices and remain licensed under [MPL-2.0](LICENSE).
 
-Licensed under the Mozilla Public License 2.0. See [LICENSE](LICENSE) for the full text.
+Polymorfa-added files: Copyright (c) 2026 Rajeh Taher, licensed under the
+[MIT License](LICENSE-MIT).
+
+See [LICENSING.md](LICENSING.md) for the file-level boundary.
