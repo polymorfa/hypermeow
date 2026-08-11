@@ -1,84 +1,125 @@
 # HyperMeow
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/polymorfa/hypermeow.svg)](https://pkg.go.dev/github.com/polymorfa/hypermeow)
+[![Go](https://github.com/polymorfa/hypermeow/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/polymorfa/hypermeow/actions/workflows/go.yml)
 
-HyperMeow is a library used at Polymorfa to ship WhatsApp at scale. We forked from tulir's project since these performance changes are somewhat experimental and diverge from tulir's minimalist philosophy. For Polymorfa to succeed, we needed all the WhatsApp Web functions in one place, meanwhile tulir prefers the core functionalities / messaging be the scope of whatsmeow.
+HyperMeow is Polymorfa's production-focused fork of [tulir/whatsmeow](https://github.com/tulir/whatsmeow). It keeps the upstream Go package names and protocol foundation while adding the business-app surface, LID-first identity model, bounded state, PostgreSQL efficiency, and reliability controls needed for large multi-session deployments.
 
-HyperMeow is its own Go module, imported directly as `github.com/polymorfa/hypermeow`. It no longer requires a `replace` directive:
+The upstream project remains the smaller choice for applications that only need its core WhatsApp messaging scope. HyperMeow deliberately accepts a broader API and maintenance surface in exchange for the capabilities below.
+
+## Why HyperMeow instead of upstream WhatsMeow?
+
+This comparison was last verified against upstream `main` at [`a23afe3`](https://github.com/tulir/whatsmeow/commit/a23afe3171803f34d6761979988b9d2275e961c7) on 2026-08-11. Each upstream sync must update this section when the difference changes.
+
+| Area | HyperMeow advantage over upstream `main` |
+| --- | --- |
+| Business app | Adds linked-account and eligibility reads, business-profile and cover-photo mutation, product and collection mutation, catalog creation, cart and visibility controls, appeal and merchant-compliance operations, and validated business message builders. |
+| Native Flows | Adds typed address, list, order, and Flow message builders with payload limits, exact JSON-number preservation, UTF-8 validation, and response metadata handling. |
+| Identity | Treats LIDs as the stable Signal identity, persists PN and username aliases, resolves aliases in batches, exposes phone-number consent messages, and generates LID identity verification codes. |
+| App state | Adds atomic label replacement, label and quick-reply events, full-sync event controls, and independent history-sync receipt, storage, and media-deletion policies. |
+| Channels | Adds newsletter deletion through generated MEX bindings. |
+| Reliability | Hardens malformed binary-node handling, serializes device save/delete operations, surfaces participant-hash mismatches, bounds attacker-influenced caches, and redacts sensitive business payloads from node logs. |
+| PostgreSQL | Batches Signal and metadata work, avoids empty PN-to-LID transactions, adds indexed alias lookups, and keeps PostgreSQL authoritative after bounded cache eviction. |
+| Validation | Ships a reproducible Barback/PostgreSQL harness covering DM, group, history, media, mixed-message, security-code, phone-consent, resource, and saturation workloads. |
+
+### Measured system advantages
+
+The repository retains the raw reports and methodology behind these numbers in [`benchmark/barback/testdata/results`](benchmark/barback/testdata/results). They compare frozen revisions under the same local Barback, PostgreSQL, TLS, Noise, CPU, and memory constraints. They are engineering comparisons, not WhatsApp WAN or account-rate-limit claims.
+
+| Measurement | Upstream WhatsMeow | HyperMeow | Result |
+| --- | ---: | ---: | ---: |
+| Disconnected constructor heap, 2,000 clients | 78,929 B/client | 4,240 B/client | 94.6% less Go heap |
+| Group-128 send p95 | 33.998 ms | 7.024 ms | 79.3% lower |
+| Group-128 client CPU | 5.502 s | 2.301 s | 58.2% lower |
+| Group-128 SQL calls | 165,053 | 3,456 | 97.9% fewer |
+| Highest healthy encrypted ping-pong rate | 900 pairs/s | 1,700 pairs/s | 1.89x the rate |
+
+The complete three-repeat system matrix documents allocation, RSS, CPU, latency, PostgreSQL, network, and I/O results across five workloads. It also records the trade-offs: history-heavy peak RSS was slightly higher in one comparison, and active-session capacity depends on contacts, groups, media, handlers, and application queues rather than constructor memory alone.
+
+- [System comparison](benchmark/barback/testdata/results/system-comparison.md)
+- [RAM hardening](benchmark/barback/testdata/results/ram-hardening.md)
+- [Ping-pong saturation](benchmark/barback/testdata/results/maxrate-ping-pong.md)
+- [Benchmark instructions](benchmark/barback/README.md)
+
+## Install
+
+Install the newest reviewed commit from the authoritative `main` branch:
+
+```sh
+go get github.com/polymorfa/hypermeow@main
+```
+
+The `main` query resolves to a commit pseudo-version. After the version correction,
+`v0.0.0` is the only selectable tagged version. `dev` is an integration branch and
+is never a publication source.
+
+The root package remains named `whatsmeow`, so use an explicit import alias:
 
 ```go
 import whatsmeow "github.com/polymorfa/hypermeow"
 ```
 
-```sh
-go get github.com/polymorfa/hypermeow
-```
+## Migrating from WhatsMeow
 
-### The module is `hypermeow`, the package is `whatsmeow`
-
-Only the *module path* moved. The Go *package* names are unchanged from upstream, so the root package is still declared `package whatsmeow`. Both of these are expected:
-
-- godoc renders the title as **"whatsmeow package - github.com/polymorfa/hypermeow"**;
-- the import path's last element (`hypermeow`) does not match the package name (`whatsmeow`), so import the root package under an explicit alias as shown above.
-
-This is deliberate. Keeping the upstream package names means no call site changes when migrating - `whatsmeow.Client`, `whatsmeow.NewClient` and friends all still resolve - and merges from tulir's upstream do not conflict on the package clause of every file. Sub-packages are unaffected, since their path element already matches their package name (`.../store` is `package store`, and so on).
-
-### Only one whatsmeow may be linked into a binary
-
-HyperMeow keeps upstream's generated protobuf descriptor paths (`waCommon/WACommon.proto` and friends) and their symbol namespaces. Those are registered in a process-global registry, so linking HyperMeow **and** upstream `go.mau.fi/whatsmeow` into the same binary panics before `main`:
-
-```
-proto: file "waCommon/WACommon.proto" is already registered
-```
-
-The old `replace` arrangement made this impossible, because both import paths resolved to one module. A distinct module path removes that guarantee, so a partially migrated dependency graph — where one of your dependencies still requires `go.mau.fi/whatsmeow` — is not safe.
-
-The failure is loud and immediate rather than silent, but it surfaces at process start. Check for it at build time instead:
+Replace `go.mau.fi/whatsmeow` imports with `github.com/polymorfa/hypermeow` and remove any old module replacement:
 
 ```sh
-go mod why -m go.mau.fi/whatsmeow   # should report the module is not needed
+go mod edit -dropreplace=go.mau.fi/whatsmeow
+go get github.com/polymorfa/hypermeow@main
+go mod tidy
 ```
 
-Use `-m`. Without it, `go mod why` asks about the *package* `go.mau.fi/whatsmeow`, and a dependency that imports only a subpackage — say `go.mau.fi/whatsmeow/proto/waCommon` — makes it answer "main module does not need package" while the upstream module is linked and its descriptors still collide.
+## Core compatibility
 
-A stricter check inspects the link graph directly:
+HyperMeow retains upstream's core support for:
 
-```sh
-deps="$(go list -deps -test ./...)" || exit 1
-case "$deps" in *go.mau.fi/whatsmeow*) exit 1 ;; esac
-```
+- private, group, media, and status messages;
+- group management and invite links;
+- typing, delivery, and read receipts;
+- app-state synchronization;
+- retry receipts and message decryption recovery.
 
-Exit 0 means safe. There is deliberately no pipeline and no external command here. `-test` matters because `go list -deps` omits test-only dependencies, and a project importing upstream only from a `_test.go` still links both copies under `go test`. Capturing the output first means a failed `go list` propagates through `||` instead of being mistaken for an empty result, and matching with `case` avoids `grep`, whose exit status is 0 on a match — so a naive form of this check passes precisely when the graph is unsafe.
+New exported functionality is additive unless called out in the [changelog](CHANGELOG.md).
 
-or assert it in a test via `debug.ReadBuildInfo()`, failing if any entry in `Deps` reports the module path `go.mau.fi/whatsmeow`.
+## Discord
 
-Migrating from the previous `replace go.mau.fi/whatsmeow => github.com/polymorfa/hypermeow` setup: drop the `replace` line, add a normal `require` on `github.com/polymorfa/hypermeow`, and rewrite `go.mau.fi/whatsmeow` import paths to `github.com/polymorfa/hypermeow`. A `replace` directive is only honoured in the main module, so the previous arrangement did not carry to anything that depended on your module in turn; a direct requirement does.
+Join the [WhatsApp Web ecosystem Discord](https://whiskey.so/discord) and visit
+`#hypermeow` for project discussion.
 
-The reproducible Barback and PostgreSQL benchmark is documented in [`benchmark/barback`](benchmark/barback/README.md).
+## Get support
 
-## Discussion
+If you'd like business to enterprise-level support from Rajeh, you can book a video
+chat. Book a 1 hour time slot by contacting him on Discord or pre-ordering
+[here](https://purpshell.dev/book). The earlier you pre-order the better, as his
+time slots usually fill up very quickly.
 
-Discord server (#hypermeow channel): https://whiskey.so/discord
+If you are a business, we encourage you to contribute back to the development costs
+of the project. You can do so by booking meetings or sponsoring below. All support
+is welcome from businesses of all sizes.
 
-## Usage
+## Sponsor
 
-The [godoc](https://pkg.go.dev/github.com/polymorfa/hypermeow) includes docs for all methods and event types.
-There's also a [simple example](https://pkg.go.dev/github.com/polymorfa/hypermeow#example-package) at the top.
+If you'd like to financially support this project, you can do so
+[here](https://purpshell.dev/sponsor).
 
-## Features
+## Disclaimer
 
-Most core features are already present:
+> [!CAUTION]
+> This project is not affiliated, associated, authorized, endorsed by, or in any way
+> officially connected with WhatsApp or any of its subsidiaries or its affiliates.
+> The official WhatsApp website can be found at whatsapp.com. "WhatsApp" as well as
+> related names, marks, emblems and images are registered trademarks of their
+> respective owners.
+>
+> The maintainers do not condone using this project in practices that violate the
+> Terms of Service of WhatsApp, and call upon users to use it fairly.
 
-* Sending messages to private chats and groups (both text and media)
-* Receiving all messages
-* Managing groups and receiving group change events
-* Joining via invite messages, using and creating invite links
-* Sending and receiving typing notifications
-* Sending and receiving delivery and read receipts
-* Reading and writing app state (contact list, chat pin/mute status, etc)
-* Sending and handling retry receipts if message decryption fails
-* Sending status messages (experimental, may not work for large contact lists)
+## License
 
-Things that are not yet implemented:
+Upstream-derived files retain their original Tulir Asokan and contributor
+copyright notices and remain licensed under [MPL-2.0](LICENSE).
 
-* Sending broadcast list messages (this is not supported on WhatsApp web either)
-* Calls
+Polymorfa-added files: Copyright (c) 2026 Rajeh Taher, licensed under the
+[MIT License](LICENSE-MIT).
+
+See [LICENSING.md](LICENSING.md) for the file-level boundary.

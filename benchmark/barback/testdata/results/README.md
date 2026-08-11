@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # Group-128 secure benchmark
 
 Two clean runs per revision used the same Barback revision, PostgreSQL image, TLS and Noise verification, 2-vCPU/3.5-GB Compose limits, 128 additional group members, 200 messages at 50 messages per second, and four history-sync payloads containing 8,000 messages total. Every run sent and received all 200 messages with no send failures or queue overflows.

@@ -4,6 +4,11 @@ go 1.25.0
 
 toolchain go1.26.5
 
+retract (
+	v0.1.1 // Retraction carrier only; use @main or v0.0.0.
+	v0.1.0 // Published accidentally; use @main or v0.0.0.
+)
+
 require (
 	github.com/beeper/argo-go v1.1.2
 	github.com/coder/websocket v1.8.15

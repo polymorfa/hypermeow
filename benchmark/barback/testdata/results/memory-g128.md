@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Rajeh Taher
+Licensed under the MIT License. See LICENSE-MIT for details.
+-->
+
 # Group-128 memory profile
 
 The unchanged baseline and HyperMeow ran the same secure workload with full-rate Go memory profiling: 128 additional group members, 200 messages, and four history-sync payloads containing 8,000 messages. Both runs completed without send failures or queue overflows.

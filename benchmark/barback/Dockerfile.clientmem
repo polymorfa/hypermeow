@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1.7
+# Copyright (c) 2026 Rajeh Taher
+#
+# Licensed under the MIT License. See LICENSE-MIT for details.
 
 FROM golang:1.26-bookworm AS build
 ARG BUILD_REV=working-tree
