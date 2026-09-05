@@ -12,13 +12,13 @@ import (
 	"fmt"
 	"time"
 
-	"go.mau.fi/libsignal/keys/prekey"
+	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 // ErrShadowClientNoConnect is returned when Connect (or any code path that
