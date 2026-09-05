@@ -157,7 +157,13 @@ type Client struct {
 	responseWaitersLock sync.Mutex
 	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
-	handlerQueue      chan *waBinary.Node
+	handlerQueue chan *waBinary.Node
+	// nodeHandlers maps a top-level stanza tag to its handler. Upstream
+	// whatsmeow exposes the same unexported map; keeping it (instead of a
+	// closed switch) lets a headless shadow Client dispatch injected nodes
+	// synchronously and lets embedders that reach for it via reflection keep
+	// working.
+	nodeHandlers      map[string]nodeHandler
 	eventHandlers     []wrappedEventHandler
 	eventHandlersLock sync.RWMutex
 
@@ -350,6 +356,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		WebSocketHeaders: http.Header{},
 	}
 	cli.paired.Store(deviceStore.ID != nil)
+	cli.nodeHandlers = cli.defaultNodeHandlers()
 	return cli
 }
 
@@ -1006,40 +1013,34 @@ Loop:
 }
 
 func (cli *Client) hasNodeHandler(tag string) bool {
-	switch tag {
-	case "message", "status", "appdata", "receipt", "call", "chatstate", "presence", "notification", "success", "failure", "stream:error", "iq", "ib":
-		return true
-	default:
-		return false
+	_, ok := cli.nodeHandlers[tag]
+	return ok
+}
+
+type nodeHandler func(ctx context.Context, node *waBinary.Node)
+
+// defaultNodeHandlers returns the built-in top-level stanza dispatch table.
+func (cli *Client) defaultNodeHandlers() map[string]nodeHandler {
+	return map[string]nodeHandler{
+		"message":      cli.handleEncryptedMessage,
+		"appdata":      cli.handleEncryptedMessage,
+		"status":       cli.handleUnencryptedMessage,
+		"receipt":      cli.handleReceipt,
+		"call":         cli.handleCallEvent,
+		"chatstate":    cli.handleChatState,
+		"presence":     cli.handlePresence,
+		"notification": cli.handleNotification,
+		"success":      cli.handleConnectSuccess,
+		"failure":      cli.handleConnectFailure,
+		"stream:error": cli.handleStreamError,
+		"iq":           cli.handleIQ,
+		"ib":           cli.handleIB,
 	}
 }
 
 func (cli *Client) handleNode(ctx context.Context, node *waBinary.Node) {
-	switch node.Tag {
-	case "message", "appdata":
-		cli.handleEncryptedMessage(ctx, node)
-	case "status":
-		cli.handleUnencryptedMessage(ctx, node)
-	case "receipt":
-		cli.handleReceipt(ctx, node)
-	case "call":
-		cli.handleCallEvent(ctx, node)
-	case "chatstate":
-		cli.handleChatState(ctx, node)
-	case "presence":
-		cli.handlePresence(ctx, node)
-	case "notification":
-		cli.handleNotification(ctx, node)
-	case "success":
-		cli.handleConnectSuccess(ctx, node)
-	case "failure":
-		cli.handleConnectFailure(ctx, node)
-	case "stream:error":
-		cli.handleStreamError(ctx, node)
-	case "iq":
-		cli.handleIQ(ctx, node)
-	case "ib":
-		cli.handleIB(ctx, node)
+	if handler, ok := cli.nodeHandlers[node.Tag]; ok {
+		handler(ctx, node)
 	}
 }
 
@@ -1060,7 +1061,7 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal node: %w", err)
 			}
-			cli.sendLog.Debugf("%s", node.XMLString())
+			cli.sendLog.Debugf("%s", &node)
 			return payload, cli.shadowRelay.SendNode(ctx, payload)
 		}
 		return nil, ErrNotConnected

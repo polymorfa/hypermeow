@@ -154,14 +154,14 @@ func (cli *Client) InjectNode(ctx context.Context, node *waBinary.Node) error {
 	if h := cli.RawNodeHandler; h != nil {
 		modified, drop := h(ctx, node)
 		if drop {
-			cli.recvLog.Debugf("RawNodeHandler dropped injected node: %s", node.XMLString())
+			cli.recvLog.Debugf("RawNodeHandler dropped injected node: %s", node.String())
 			return nil
 		}
 		if modified != nil {
 			node = modified
 		}
 	}
-	cli.recvLog.Debugf("%s", node.XMLString())
+	cli.recvLog.Debugf("%s", node.String())
 	// Mirror handleFrame's Signal-disabled handoff so injected `<message>`
 	// envelopes reach the caller that owns the Signal session.
 	if node.Tag == "message" && cli.DisabledFeatures.Signal {
