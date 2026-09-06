@@ -65,6 +65,17 @@ func (fs *FrameSocket) IsConnected() bool {
 }
 
 func (fs *FrameSocket) Close(code websocket.StatusCode) {
+	fs.CloseWithReason(code, "")
+}
+
+// CloseWithReason closes the socket with an explicit close reason.
+//
+// WhatsApp Web races two websockets on every connect and closes the one that
+// loses with code 1000 and the reason "loser socket"
+// (WAWebOpenSocket.js:44-52). A close with an empty reason where the client
+// sends one is observable, so the reason is part of the wire behaviour and not
+// a log detail.
+func (fs *FrameSocket) CloseWithReason(code websocket.StatusCode, reason string) {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 
@@ -75,7 +86,7 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 
 	fs.closed.Store(true)
 	if code > 0 {
-		err := conn.Close(code, "")
+		err := conn.Close(code, reason)
 		if err != nil {
 			fs.log.Warnf("Error sending close to websocket: %v", err)
 		}
