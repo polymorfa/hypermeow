@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
@@ -126,7 +127,7 @@ type ShadowRelay interface {
 // errors when nil and panic: a nil relay would otherwise yield a client that
 // is not a shadow at all and could open a real socket.
 func NewShadowClient(deviceStore *store.Device, relay ShadowRelay, log waLog.Logger) *Client {
-	if relay == nil {
+	if relay == nil || isTypedNil(relay) {
 		panic("whatsmeow: NewShadowClient requires a non-nil ShadowRelay")
 	}
 	if deviceStore == nil {
@@ -307,4 +308,17 @@ func (s *shadowPrivacyTokenStore) DeleteExpiredPrivacyTokens(ctx context.Context
 		return s.inner.DeleteExpiredPrivacyTokens(ctx, cutoff)
 	}
 	return 0, nil
+}
+
+// isTypedNil reports whether an interface value wraps a nil pointer/map/etc.
+// (a "typed nil"), which `== nil` does not catch but whose methods would panic
+// on a nil receiver.
+func isTypedNil(v any) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }

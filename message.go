@@ -437,6 +437,20 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		} else if errors.Is(err, signalerror.ErrOldCounter) {
 			cli.Log.Warnf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
+		} else if errors.Is(err, ErrShadowGroupUnsupported) {
+			// A shadow can never make group ciphertext decryptable, so a retry
+			// receipt would only provoke redeliveries. Acknowledge, surface the
+			// message as undecryptable, and move on.
+			cli.Log.Warnf("Ignoring group message %s from %s: %v", info.ID, info.SourceString(), err)
+			cli.backgroundIfAsyncAck(func() {
+				cli.sendAck(ctx, node, 0)
+			})
+			cli.dispatchEvent(&events.UndecryptableMessage{
+				Info:            *info,
+				IsUnavailable:   true,
+				DecryptFailMode: events.DecryptFailMode(ag.OptionalString("decrypt-fail")),
+			})
+			continue
 		} else if err != nil {
 			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
