@@ -30,6 +30,13 @@ var ErrShadowClientNoConnect = errors.New("shadow client cannot open a socket; o
 // ErrNilNode is returned by [Client.InjectNode] when passed a nil node.
 var ErrNilNode = errors.New("cannot inject nil node")
 
+// ErrShadowGroupUnsupported is returned when a headless shadow client is asked
+// to encrypt or decrypt group (sender-key) traffic. The relay oracle covers
+// direct-message cryptography only; a shadow must never create or hold sender
+// keys locally, so group paths fail closed instead of silently using the seeded
+// snapshot's Signal stores.
+var ErrShadowGroupUnsupported = errors.New("shadow client does not process group (sender-key) traffic; the relay covers direct messages only")
+
 // ShadowRelay is the pluggable backend that a headless ("shadow") [Client]
 // delegates real-session work to.
 //
@@ -60,6 +67,13 @@ type ShadowRelay interface {
 	// The return values mirror the library's own decrypt entry point: the
 	// plaintext, the 32-byte ciphertext hash (used for the decrypted-event
 	// buffer; may be nil), and an error.
+	//
+	// The plaintext MUST already be unpadded (the raw protobuf bytes of the
+	// waE2E.Message): the client hands it straight to the message parser and
+	// does not run its own unpadding on relay output.
+	//
+	// Group (sender-key) traffic is not delegated: a shadow client rejects
+	// `skmsg` decryption and group sends with [ErrShadowGroupUnsupported].
 	DecryptDM(ctx context.Context, child *waBinary.Node, from types.JID, isPreKey bool) (plaintext []byte, ciphertextHash *[32]byte, err error)
 
 	// EncryptForDevice encrypts plaintext for a single recipient device.
@@ -108,18 +122,24 @@ type ShadowRelay interface {
 //     them locally.
 //
 // deviceStore must be non-nil (it holds the seeded snapshot). relay must be
-// non-nil; it is what makes the client a shadow.
+// non-nil; it is what makes the client a shadow. Both are programming
+// errors when nil and panic: a nil relay would otherwise yield a client that
+// is not a shadow at all and could open a real socket.
 func NewShadowClient(deviceStore *store.Device, relay ShadowRelay, log waLog.Logger) *Client {
+	if relay == nil {
+		panic("whatsmeow: NewShadowClient requires a non-nil ShadowRelay")
+	}
+	if deviceStore == nil {
+		panic("whatsmeow: NewShadowClient requires a non-nil seeded device store")
+	}
 	cli := NewClient(deviceStore, log)
 	cli.shadowRelay = relay
 	// The device-store LID and privacy-token lookups are read directly by
 	// consumers (Store.LIDs.GetLIDForPN, Store.PrivacyTokens.GetPrivacyToken)
 	// and by the send path. Wrap the seeded stores so those reads fall back
 	// to the relay oracle when the seeded snapshot has no local answer.
-	if deviceStore != nil && relay != nil {
-		deviceStore.LIDs = &shadowLIDStore{inner: deviceStore.LIDs, relay: relay}
-		deviceStore.PrivacyTokens = &shadowPrivacyTokenStore{inner: deviceStore.PrivacyTokens, relay: relay}
-	}
+	deviceStore.LIDs = &shadowLIDStore{inner: deviceStore.LIDs, relay: relay}
+	deviceStore.PrivacyTokens = &shadowPrivacyTokenStore{inner: deviceStore.PrivacyTokens, relay: relay}
 	return cli
 }
 
@@ -162,6 +182,10 @@ func (cli *Client) InjectNode(ctx context.Context, node *waBinary.Node) error {
 		}
 	}
 	cli.recvLog.Debugf("%s", node.String())
+	// Same order as handleFrame: out-of-band handling (business-catalog nonce
+	// delivery) runs before any dispatch so the normal handler sees the
+	// delivered state.
+	cli.handleOutOfBandNode(node)
 	// Mirror handleFrame's Signal-disabled handoff so injected `<message>`
 	// envelopes reach the caller that owns the Signal session.
 	if node.Tag == "message" && cli.DisabledFeatures.Signal {
@@ -207,12 +231,26 @@ func (s *shadowLIDStore) GetLIDForPN(ctx context.Context, pn types.JID) (types.J
 	return s.relay.ResolveLID(ctx, pn)
 }
 
+// GetManyLIDsForPNs merges the seeded snapshot's mappings with relay
+// resolutions for every phone number the snapshot does not know, so a partial
+// local answer never leaves a device addressed by phone number.
 func (s *shadowLIDStore) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (map[types.JID]types.JID, error) {
-	if s.inner != nil {
-		return s.inner.GetManyLIDsForPNs(ctx, pns)
-	}
 	res := make(map[types.JID]types.JID, len(pns))
+	if s.inner != nil {
+		local, err := s.inner.GetManyLIDsForPNs(ctx, pns)
+		if err != nil {
+			return nil, err
+		}
+		for pn, lid := range local {
+			if !lid.IsEmpty() {
+				res[pn] = lid
+			}
+		}
+	}
 	for _, pn := range pns {
+		if _, ok := res[pn]; ok {
+			continue
+		}
 		if lid, err := s.relay.ResolveLID(ctx, pn); err == nil && !lid.IsEmpty() {
 			res[pn] = lid
 		}
