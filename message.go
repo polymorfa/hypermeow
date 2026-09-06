@@ -657,6 +657,11 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 }
 
 func (cli *Client) decryptGroupMsg(ctx context.Context, child *waBinary.Node, from types.JID, chat types.JID, serverTS time.Time) ([]byte, *[32]byte, error) {
+	if cli.isShadow() {
+		// Sender-key state must never be created or read in a headless shadow;
+		// the relay oracle covers direct messages only. Fail closed.
+		return nil, nil, ErrShadowGroupUnsupported
+	}
 	content, ok := child.Content.([]byte)
 	if !ok {
 		return nil, nil, fmt.Errorf("message content is not a byte slice")

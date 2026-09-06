@@ -646,8 +646,26 @@ func (cli *Client) GetUserDevices(ctx context.Context, jids []types.JID) ([]type
 	}
 	if cli.isShadow() {
 		// Headless clients have no socket to run the usync IQ; delegate to
-		// the relay oracle.
-		return cli.shadowRelay.GetUserDevices(ctx, jids)
+		// the relay oracle. Bots have no devices and are addressed as-is, so
+		// they never reach the relay (mirrors the local path below). Messenger
+		// (FB) JIDs are the relay's responsibility: it must resolve them the
+		// way getFBIDDevices does, or omit them.
+		var devices, others []types.JID
+		for _, jid := range jids {
+			if jid.IsBot() {
+				devices = append(devices, jid)
+			} else {
+				others = append(others, jid)
+			}
+		}
+		if len(others) > 0 {
+			resolved, err := cli.shadowRelay.GetUserDevices(ctx, others)
+			if err != nil {
+				return nil, err
+			}
+			devices = append(devices, resolved...)
+		}
+		return devices, nil
 	}
 	cli.userDevicesCacheLock.Lock()
 	defer cli.userDevicesCacheLock.Unlock()

@@ -758,6 +758,10 @@ func (cli *Client) sendGroup(
 	timings *MessageDebugTimings,
 	extraParams nodeExtraParams,
 ) (string, []byte, error) {
+	if cli.isShadow() {
+		// A shadow would otherwise mint a sender key into the seeded snapshot.
+		return "", nil, ErrShadowGroupUnsupported
+	}
 	start := time.Now()
 	plaintext, _, err := marshalMessage(to, message)
 	timings.Marshal = time.Since(start)
