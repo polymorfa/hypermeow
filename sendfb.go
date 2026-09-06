@@ -218,6 +218,9 @@ func (cli *Client) sendGroupV3(
 	frankingTag []byte,
 	timings *MessageDebugTimings,
 ) (string, []byte, error) {
+	if cli.isShadow() {
+		return "", nil, ErrShadowGroupUnsupported
+	}
 	var groupMeta *groupMetaCache
 	var err error
 	start := time.Now()

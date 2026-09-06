@@ -102,6 +102,16 @@ func (cli *Client) fetchPreKeysNoError(ctx context.Context, retryDevices []types
 	if len(retryDevices) == 0 {
 		return nil
 	}
+	if cli.isShadow() {
+		// A headless client has no socket to run the prekey IQ; delegate to
+		// the relay oracle.
+		bundles, err := cli.shadowRelay.FetchPreKeys(ctx, retryDevices)
+		if err != nil {
+			cli.Log.Warnf("Failed to fetch prekeys for %v via relay: %v", retryDevices, err)
+			return nil
+		}
+		return bundles
+	}
 	bundlesResp, err := cli.fetchPreKeys(ctx, retryDevices)
 	if err != nil {
 		cli.Log.Warnf("Failed to fetch prekeys for %v with no existing session: %v", retryDevices, err)

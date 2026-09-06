@@ -758,6 +758,10 @@ func (cli *Client) sendGroup(
 	timings *MessageDebugTimings,
 	extraParams nodeExtraParams,
 ) (string, []byte, error) {
+	if cli.isShadow() {
+		// A shadow would otherwise mint a sender key into the seeded snapshot.
+		return "", nil, ErrShadowGroupUnsupported
+	}
 	start := time.Now()
 	plaintext, _, err := marshalMessage(to, message)
 	timings.Marshal = time.Since(start)
@@ -1438,6 +1442,11 @@ func (cli *Client) encryptMessageForDevice(
 	extraAttrs waBinary.Attrs,
 	existingSessions map[string]bool,
 ) (*waBinary.Node, bool, error) {
+	if cli.isShadow() {
+		// A headless client holds no live Signal session; delegate
+		// per-device encryption to the relay oracle.
+		return cli.shadowRelay.EncryptForDevice(ctx, plaintext, to, bundle, extraAttrs)
+	}
 	builder := session.NewBuilderFromSignal(cli.Store, to.SignalAddress(), pbSerializer)
 	if bundle != nil {
 		cli.Log.Debugf("Processing prekey bundle for %s", to)

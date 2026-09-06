@@ -157,7 +157,13 @@ type Client struct {
 	responseWaitersLock sync.Mutex
 	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
-	handlerQueue      chan *waBinary.Node
+	handlerQueue chan *waBinary.Node
+	// nodeHandlers maps a top-level stanza tag to its handler. Upstream
+	// whatsmeow exposes the same unexported map; keeping it (instead of a
+	// closed switch) lets a headless shadow Client dispatch injected nodes
+	// synchronously and lets embedders that reach for it via reflection keep
+	// working.
+	nodeHandlers      map[string]nodeHandler
 	eventHandlers     []wrappedEventHandler
 	eventHandlersLock sync.RWMutex
 
@@ -225,6 +231,11 @@ type Client struct {
 	// RawNodeHandler, if non-nil, is called for every inbound node
 	// after decoding but before standard dispatch. See [RawNodeHandler].
 	RawNodeHandler RawNodeHandler
+
+	// shadowRelay, if non-nil, marks this client as a headless "shadow"
+	// client (see [NewShadowClient]): it has no socket, Connect is guarded,
+	// and outbound nodes plus Signal/keying oracle ops are delegated here.
+	shadowRelay ShadowRelay
 
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
@@ -345,6 +356,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		WebSocketHeaders: http.Header{},
 	}
 	cli.paired.Store(deviceStore.ID != nil)
+	cli.nodeHandlers = cli.defaultNodeHandlers()
 	return cli
 }
 
@@ -585,6 +597,12 @@ func (cli *Client) connect(ctx context.Context) error {
 }
 
 func (cli *Client) unlockedConnect(ctx context.Context) error {
+	if cli.shadowRelay != nil {
+		// Guard: a shadow client must never open a socket. All Connect
+		// paths (Connect, ConnectContext, autoReconnect) funnel through
+		// here, so failing closed here blocks every one of them.
+		return ErrShadowClientNoConnect
+	}
 	if cli.Store.Deleted {
 		return store.ErrDeviceDeleted
 	}
@@ -995,40 +1013,34 @@ Loop:
 }
 
 func (cli *Client) hasNodeHandler(tag string) bool {
-	switch tag {
-	case "message", "status", "appdata", "receipt", "call", "chatstate", "presence", "notification", "success", "failure", "stream:error", "iq", "ib":
-		return true
-	default:
-		return false
+	_, ok := cli.nodeHandlers[tag]
+	return ok
+}
+
+type nodeHandler func(ctx context.Context, node *waBinary.Node)
+
+// defaultNodeHandlers returns the built-in top-level stanza dispatch table.
+func (cli *Client) defaultNodeHandlers() map[string]nodeHandler {
+	return map[string]nodeHandler{
+		"message":      cli.handleEncryptedMessage,
+		"appdata":      cli.handleEncryptedMessage,
+		"status":       cli.handleUnencryptedMessage,
+		"receipt":      cli.handleReceipt,
+		"call":         cli.handleCallEvent,
+		"chatstate":    cli.handleChatState,
+		"presence":     cli.handlePresence,
+		"notification": cli.handleNotification,
+		"success":      cli.handleConnectSuccess,
+		"failure":      cli.handleConnectFailure,
+		"stream:error": cli.handleStreamError,
+		"iq":           cli.handleIQ,
+		"ib":           cli.handleIB,
 	}
 }
 
 func (cli *Client) handleNode(ctx context.Context, node *waBinary.Node) {
-	switch node.Tag {
-	case "message", "appdata":
-		cli.handleEncryptedMessage(ctx, node)
-	case "status":
-		cli.handleUnencryptedMessage(ctx, node)
-	case "receipt":
-		cli.handleReceipt(ctx, node)
-	case "call":
-		cli.handleCallEvent(ctx, node)
-	case "chatstate":
-		cli.handleChatState(ctx, node)
-	case "presence":
-		cli.handlePresence(ctx, node)
-	case "notification":
-		cli.handleNotification(ctx, node)
-	case "success":
-		cli.handleConnectSuccess(ctx, node)
-	case "failure":
-		cli.handleConnectFailure(ctx, node)
-	case "stream:error":
-		cli.handleStreamError(ctx, node)
-	case "iq":
-		cli.handleIQ(ctx, node)
-	case "ib":
-		cli.handleIB(ctx, node)
+	if handler, ok := cli.nodeHandlers[node.Tag]; ok {
+		handler(ctx, node)
 	}
 }
 
@@ -1040,6 +1052,18 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 	sock := cli.socket
 	cli.socketLock.RUnlock()
 	if sock == nil {
+		// A headless (shadow) client has no socket by design; route the
+		// outbound node to its relay instead. Fail closed if there is
+		// neither a socket nor a relay so a write can never silently
+		// escape or nil-panic on the absent socket.
+		if cli.shadowRelay != nil {
+			payload, err := waBinary.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal node: %w", err)
+			}
+			cli.sendLog.Debugf("%s", &node)
+			return payload, cli.shadowRelay.SendNode(ctx, payload)
+		}
 		return nil, ErrNotConnected
 	}
 

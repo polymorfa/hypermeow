@@ -437,6 +437,20 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		} else if errors.Is(err, signalerror.ErrOldCounter) {
 			cli.Log.Warnf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
+		} else if errors.Is(err, ErrShadowGroupUnsupported) {
+			// A shadow can never make group ciphertext decryptable, so a retry
+			// receipt would only provoke redeliveries. Acknowledge, surface the
+			// message as undecryptable, and move on.
+			cli.Log.Warnf("Ignoring group message %s from %s: %v", info.ID, info.SourceString(), err)
+			cli.backgroundIfAsyncAck(func() {
+				cli.sendAck(ctx, node, 0)
+			})
+			cli.dispatchEvent(&events.UndecryptableMessage{
+				Info:            *info,
+				IsUnavailable:   true,
+				DecryptFailMode: events.DecryptFailMode(ag.OptionalString("decrypt-fail")),
+			})
+			continue
 		} else if err != nil {
 			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
@@ -602,6 +616,11 @@ func (cli *Client) bufferedDecrypt(
 }
 
 func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from types.JID, isPreKey bool, serverTS time.Time) ([]byte, *[32]byte, error) {
+	if cli.isShadow() {
+		// A headless client holds no live Signal session; delegate
+		// decryption to the relay oracle.
+		return cli.shadowRelay.DecryptDM(ctx, child, from, isPreKey)
+	}
 	content, ok := child.Content.([]byte)
 	if !ok {
 		return nil, nil, fmt.Errorf("message content is not a byte slice")
@@ -652,6 +671,11 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 }
 
 func (cli *Client) decryptGroupMsg(ctx context.Context, child *waBinary.Node, from types.JID, chat types.JID, serverTS time.Time) ([]byte, *[32]byte, error) {
+	if cli.isShadow() {
+		// Sender-key state must never be created or read in a headless shadow;
+		// the relay oracle covers direct messages only. Fail closed.
+		return nil, nil, ErrShadowGroupUnsupported
+	}
 	content, ok := child.Content.([]byte)
 	if !ok {
 		return nil, nil, fmt.Errorf("message content is not a byte slice")
