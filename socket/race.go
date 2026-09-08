@@ -10,7 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	waLog "go.mau.fi/whatsmeow/util/log"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 // LoserSocketCloseReason is the close reason WhatsApp Web sends on the socket
@@ -68,11 +68,13 @@ func ConnectRace(
 		winner *FrameSocket
 		errs   []error
 	)
+	racerContexts := make([]context.Context, len(urls))
 	cancels := make([]context.CancelFunc, len(urls))
+	for i := range urls {
+		racerContexts[i], cancels[i] = context.WithCancel(ctx)
+	}
 	var wg sync.WaitGroup
 	for i, url := range urls {
-		racerCtx, cancel := context.WithCancel(ctx)
-		cancels[i] = cancel
 		wg.Add(1)
 		go func(i int, url string, racerCtx context.Context) {
 			defer wg.Done()
@@ -104,7 +106,7 @@ func ConnectRace(
 			// A socket that opened after the winner is closed with the
 			// client's own code and reason.
 			fs.CloseWithReason(websocket.StatusNormalClosure, LoserSocketCloseReason)
-		}(i, url, racerCtx)
+		}(i, url, racerContexts[i])
 	}
 	wg.Wait()
 

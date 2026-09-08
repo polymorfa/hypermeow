@@ -13,7 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	waLog "go.mau.fi/whatsmeow/util/log"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 // wsServer accepts websocket upgrades and records how each connection was
