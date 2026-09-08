@@ -113,6 +113,17 @@ func TestCloseWithReasonSendsTheClientsCloseFrame(t *testing.T) {
 	}
 }
 
+func TestNewRacerPreservesAllHeaderValues(t *testing.T) {
+	headers := http.Header{"X-Test-Value": {"first", "second"}}
+	fs := newRacer(waLog.Noop, http.DefaultClient, "ws://example.invalid", headers)
+	headers["X-Test-Value"][0] = "changed"
+
+	got := fs.HTTPHeaders.Values("X-Test-Value")
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("copied header values = %q, want [first second]", got)
+	}
+}
+
 // The socket that connects first is the one kept.
 func TestConnectRaceKeepsTheFirstToConnect(t *testing.T) {
 	fast := newWSServer(t, 0)
@@ -136,8 +147,11 @@ func TestConnectRaceKeepsTheFirstToConnect(t *testing.T) {
 	}
 }
 
-// With both endpoints answering at once, exactly one socket survives, and a
-// loser that did open is closed the client's way rather than dropped.
+// With both endpoints answering at once, exactly one client-visible socket
+// survives. A loser whose Dial returned is closed the client's way. The server
+// may also accept an upgrade just before the winner cancels that still-in-flight
+// Dial; coder/websocket then reports an abnormal close because no client socket
+// existed yet on which ConnectRace could send a close frame.
 func TestConnectRaceLeavesOneSocket(t *testing.T) {
 	a := newWSServer(t, 0)
 	b := newWSServer(t, 0)
@@ -157,13 +171,17 @@ func TestConnectRaceLeavesOneSocket(t *testing.T) {
 		t.Fatalf("the race returned an endpoint nobody offered: %s", fs.URL)
 	}
 
-	// ConnectRace has already waited for every racer, so any loser that
-	// opened has been closed by now.
+	// ConnectRace has already waited for every racer, so any client-visible
+	// loser has sent the explicit close frame by now. TestCloseWithReasonSendsTheClientsCloseFrame
+	// above pins that frame independently; this loop also permits cancellation
+	// of a server-accepted upgrade whose Dial had not returned to the racer.
 	for _, rec := range append(a.recorded(), b.recorded()...) {
-		if rec.code != websocket.StatusNormalClosure || rec.reason != LoserSocketCloseReason {
-			t.Errorf("a loser was closed with (%d, %q), want (%d, %q)",
-				rec.code, rec.reason, websocket.StatusNormalClosure, LoserSocketCloseReason)
+		explicitLoser := rec.code == websocket.StatusNormalClosure && rec.reason == LoserSocketCloseReason
+		canceledDial := rec.code == -1 && rec.reason == ""
+		if explicitLoser || canceledDial {
+			continue
 		}
+		t.Errorf("a loser was closed with unexpected code and reason (%d, %q)", rec.code, rec.reason)
 	}
 }
 

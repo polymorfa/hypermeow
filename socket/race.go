@@ -129,7 +129,7 @@ func newRacer(log waLog.Logger, httpClient *http.Client, url string, headers htt
 		if len(values) == 0 {
 			continue
 		}
-		fs.HTTPHeaders.Set(name, values[0])
+		fs.HTTPHeaders[name] = append([]string(nil), values...)
 	}
 	return fs
 }
