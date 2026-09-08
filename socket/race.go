@@ -46,6 +46,17 @@ func ConnectRace(
 	urls []string,
 	headers http.Header,
 ) (*FrameSocket, error) {
+	return connectRace(ctx, log, httpClient, urls, headers, nil)
+}
+
+func connectRace(
+	ctx context.Context,
+	log waLog.Logger,
+	httpClient *http.Client,
+	urls []string,
+	headers http.Header,
+	afterConnect func(int),
+) (*FrameSocket, error) {
 	if len(urls) == 0 {
 		return nil, ErrDialFailed
 	}
@@ -78,13 +89,17 @@ func ConnectRace(
 		wg.Add(1)
 		go func(i int, url string, racerCtx context.Context) {
 			defer wg.Done()
+			defer cancels[i]()
 			fs := newRacer(log, httpClient, url, headers)
-			if err := fs.Connect(racerCtx); err != nil {
+			if err := fs.connect(ctx, racerCtx); err != nil {
 				fs.Close(0)
 				mu.Lock()
 				errs = append(errs, err)
 				mu.Unlock()
 				return
+			}
+			if afterConnect != nil {
+				afterConnect(i)
 			}
 			mu.Lock()
 			if winner == nil {
@@ -93,8 +108,7 @@ func ConnectRace(
 				log.Debugf("Opened socket with %s (race winner)", url)
 				// Abort every dial still outstanding, exactly as the client
 				// aborts its AbortController on the first success. The
-				// winner's own context stays live: it is the parent of the
-				// socket's context.
+				// dial contexts do not own sockets after their upgrades complete.
 				for j, cancel := range cancels {
 					if j != i {
 						cancel()

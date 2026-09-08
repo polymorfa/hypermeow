@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,11 +148,9 @@ func TestConnectRaceKeepsTheFirstToConnect(t *testing.T) {
 	}
 }
 
-// With both endpoints answering at once, exactly one client-visible socket
-// survives. A loser whose Dial returned is closed the client's way. The server
-// may also accept an upgrade just before the winner cancels that still-in-flight
-// Dial; coder/websocket then reports an abnormal close because no client socket
-// existed yet on which ConnectRace could send a close frame.
+// With both upgrades completed before winner selection, exactly one
+// client-visible socket survives and the opened loser is closed the client's
+// way.
 func TestConnectRaceLeavesOneSocket(t *testing.T) {
 	a := newWSServer(t, 0)
 	b := newWSServer(t, 0)
@@ -159,7 +158,21 @@ func TestConnectRaceLeavesOneSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	fs, err := ConnectRace(ctx, waLog.Noop, http.DefaultClient, []string{a.wsURL(), b.wsURL()}, nil)
+	// Hold both racers after their upgrades complete. This forces winner
+	// selection to happen with two opened sockets, so the loser must send the
+	// explicit close frame rather than being an in-flight canceled dial.
+	bothConnected := make(chan struct{})
+	var connected atomic.Int32
+	afterConnect := func(int) {
+		if connected.Add(1) == 2 {
+			close(bothConnected)
+		}
+		select {
+		case <-bothConnected:
+		case <-ctx.Done():
+		}
+	}
+	fs, err := connectRace(ctx, waLog.Noop, http.DefaultClient, []string{a.wsURL(), b.wsURL()}, nil, afterConnect)
 	if err != nil {
 		t.Fatalf("race: %v", err)
 	}
@@ -167,21 +180,24 @@ func TestConnectRaceLeavesOneSocket(t *testing.T) {
 	if !fs.IsConnected() {
 		t.Fatal("the winner is not connected")
 	}
+	if err := fs.Context().Err(); err != nil {
+		t.Fatalf("winner context was canceled with its completed dial: %v", err)
+	}
 	if fs.URL != a.wsURL() && fs.URL != b.wsURL() {
 		t.Fatalf("the race returned an endpoint nobody offered: %s", fs.URL)
 	}
 
-	// ConnectRace has already waited for every racer, so any client-visible
-	// loser has sent the explicit close frame by now. TestCloseWithReasonSendsTheClientsCloseFrame
-	// above pins that frame independently; this loop also permits cancellation
-	// of a server-accepted upgrade whose Dial had not returned to the racer.
-	for _, rec := range append(a.recorded(), b.recorded()...) {
-		explicitLoser := rec.code == websocket.StatusNormalClosure && rec.reason == LoserSocketCloseReason
-		canceledDial := rec.code == -1 && rec.reason == ""
-		if explicitLoser || canceledDial {
-			continue
-		}
-		t.Errorf("a loser was closed with unexpected code and reason (%d, %q)", rec.code, rec.reason)
+	if connected.Load() != 2 {
+		t.Fatalf("completed upgrades = %d, want 2", connected.Load())
+	}
+	loser := a
+	if fs.URL == a.wsURL() {
+		loser = b
+	}
+	rec := loser.awaitClose(t)[0]
+	if rec.code != websocket.StatusNormalClosure || rec.reason != LoserSocketCloseReason {
+		t.Fatalf("loser close = (%d, %q), want (%d, %q)",
+			rec.code, rec.reason, websocket.StatusNormalClosure, LoserSocketCloseReason)
 	}
 }
 

@@ -104,16 +104,24 @@ func (fs *FrameSocket) CloseWithReason(code websocket.StatusCode, reason string)
 }
 
 func (fs *FrameSocket) Connect(ctx context.Context) error {
+	return fs.connect(ctx, ctx)
+}
+
+// connect separates the lifetime of the opened socket from the context used
+// for the HTTP upgrade. Most callers use the same context for both through
+// Connect. Socket racing uses a short-lived dial context so aborting another
+// in-flight upgrade cannot cancel a connection that has already opened.
+func (fs *FrameSocket) connect(parentCtx, dialCtx context.Context) error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 	if fs.conn.Load() != nil {
 		return ErrSocketAlreadyOpen
 	}
-	fs.parentCtx = ctx
-	fs.cancelCtx, fs.cancel = context.WithCancel(ctx)
+	fs.parentCtx = parentCtx
+	fs.cancelCtx, fs.cancel = context.WithCancel(parentCtx)
 
 	fs.log.Debugf("Dialing %s", fs.URL)
-	conn, resp, err := websocket.Dial(ctx, fs.URL, fs.makeDialOptions())
+	conn, resp, err := websocket.Dial(dialCtx, fs.URL, fs.makeDialOptions())
 	if err != nil {
 		if resp != nil {
 			err = ErrWithStatusCode{err, resp.StatusCode}
@@ -125,7 +133,7 @@ func (fs *FrameSocket) Connect(ctx context.Context) error {
 
 	fs.conn.Store(conn)
 
-	go fs.readPump(conn, ctx)
+	go fs.readPump(conn, fs.cancelCtx)
 	return nil
 }
 
