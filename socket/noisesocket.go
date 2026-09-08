@@ -45,9 +45,9 @@ func newNoiseSocket(
 		onFrame:      frameHandler,
 		stopConsumer: make(chan struct{}),
 	}
-	fs.OnDisconnect = func(ctx context.Context, remote bool) {
+	fs.SetOnDisconnect(func(ctx context.Context, remote bool) {
 		disconnectHandler(ctx, ns, remote)
-	}
+	})
 	go ns.consumeFrames(ctx, fs.Frames)
 	return ns, nil
 }
@@ -80,7 +80,7 @@ func (ns *NoiseSocket) Stop(disconnect, allowOnDisconnect bool) {
 	if ns.destroyed.CompareAndSwap(false, true) {
 		close(ns.stopConsumer)
 		if !allowOnDisconnect {
-			ns.fs.OnDisconnect = nil
+			ns.fs.SetOnDisconnect(nil)
 		}
 		if disconnect {
 			ns.fs.Close(websocket.StatusNormalClosure)
