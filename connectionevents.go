@@ -197,9 +197,16 @@ func (cli *Client) handleConnectSuccess(ctx context.Context, node *waBinary.Node
 				cli.Log.Debugf("Prekey count after upload: %d", sc)
 			}
 		}
-		err := cli.SetPassive(ctx, false)
-		if err != nil {
-			cli.Log.Warnf("Failed to send post-connect passive IQ: %v", err)
+		// WhatsApp Web sends `passive: false` in the login payload itself
+		// (WAWebGetClientPayloadForLogin.js:14-19) and never sends this IQ.
+		// A client that logs in passive and then immediately asks to become
+		// active does something no real page does, so a caller that already
+		// carries the right value in its payload turns this off.
+		if !cli.DisablePostConnectPassiveIQ {
+			err := cli.SetPassive(ctx, false)
+			if err != nil {
+				cli.Log.Warnf("Failed to send post-connect passive IQ: %v", err)
+			}
 		}
 		cli.dispatchEvent(&events.Connected{})
 		cli.closeSocketWaitChan()

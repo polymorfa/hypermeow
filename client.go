@@ -262,6 +262,11 @@ type Client struct {
 	// The user agent to use (for non-Messenger connections).
 	UserAgent        string
 	WebSocketHeaders http.Header
+	// DisablePostConnectPassiveIQ stops the library sending the
+	// `passive`/`active` IQ after a successful connect. Set it when the
+	// client payload already carries `passive: false`, which is what
+	// WhatsApp Web sends; the real client has no such IQ.
+	DisablePostConnectPassiveIQ bool
 }
 
 type groupMetaCache struct {
@@ -281,6 +286,19 @@ type SocketConfig struct {
 	URL                       string
 	Origin                    string
 	NoiseCertificateAuthority *[32]byte
+	// RaceURLs, when it has more than one entry, makes Connect open every
+	// URL concurrently and keep the one that connects first, closing the
+	// others with code 1000 and the reason "loser socket".
+	//
+	// This is what WhatsApp Web does on every connect
+	// (WAWebOpenSocket.js:10, 44-52). A client that makes exactly one
+	// attempt per connect and never closes a second socket differs from the
+	// real one by nothing more than counting. Use socket.RaceURLs for the
+	// endpoints the client itself races.
+	//
+	// Empty (the default) keeps the single-socket behaviour and the URL
+	// field above.
+	RaceURLs []string
 }
 
 const handlerQueueSize = 256
@@ -610,6 +628,7 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.HTTPHeaders.Set("Origin", cli.MessengerConfig.BaseURL)
 	}
 	maps.Copy(fs.HTTPHeaders, cli.WebSocketHeaders)
+	var raceURLs []string
 	if cli.SocketConfig != nil {
 		if cli.SocketConfig.URL != "" {
 			fs.URL = cli.SocketConfig.URL
@@ -617,11 +636,19 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		if cli.SocketConfig.Origin != "" {
 			fs.HTTPHeaders.Set("Origin", cli.SocketConfig.Origin)
 		}
+		raceURLs = cli.SocketConfig.RaceURLs
 	}
-	if err := fs.Connect(ctx); err != nil {
+	if len(raceURLs) > 1 {
+		raced, err := socket.ConnectRace(ctx, cli.Log.Sub("Socket"), client, raceURLs, fs.HTTPHeaders)
+		if err != nil {
+			return err
+		}
+		fs = raced
+	} else if err := fs.Connect(ctx); err != nil {
 		fs.Close(0)
 		return err
-	} else if err = cli.doHandshake(ctx, fs, *keys.NewKeyPair()); err != nil {
+	}
+	if err := cli.doHandshake(ctx, fs, *keys.NewKeyPair()); err != nil {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}
