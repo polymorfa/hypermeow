@@ -25,7 +25,7 @@ func newTestFrameSocket(t *testing.T) *FrameSocket {
 			t.Errorf("Failed to accept websocket: %v", err)
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		<-conn.CloseRead(r.Context()).Done()
 	}))
 	t.Cleanup(server.Close)
