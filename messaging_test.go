@@ -17,10 +17,12 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waCommon"
 	waE2E "github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/proto/waWa6"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 func TestIQErrorIsDistinguishesSensitiveAttributes(t *testing.T) {
@@ -434,5 +436,43 @@ func TestAssociatedChildMessageStanzaAttributes(t *testing.T) {
 				t.Errorf("getMediaTypeFromMessage() = %q, want %q", got, tc.wantMedia)
 			}
 		})
+	}
+}
+
+func TestUnwrapRawAssociatedChildMessage(t *testing.T) {
+	assoc := &waE2E.MessageAssociation{
+		AssociationType: waE2E.MessageAssociation_HD_IMAGE_DUAL_UPLOAD.Enum(),
+		ParentMessageKey: &waCommon.MessageKey{
+			RemoteJID: proto.String("123@s.whatsapp.net"),
+			FromMe:    proto.Bool(false),
+			ID:        proto.String("PARENT"),
+		},
+	}
+	image := &waE2E.ImageMessage{Caption: proto.String("hd")}
+	raw := &waE2E.Message{
+		AssociatedChildMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{ImageMessage: image}},
+		MessageContextInfo:     &waE2E.MessageContextInfo{MessageAssociation: assoc},
+	}
+	evt := (&events.Message{RawMessage: raw}).UnwrapRaw()
+	if !evt.IsAssociatedChild {
+		t.Fatal("IsAssociatedChild = false, want true")
+	}
+	if evt.Message.GetImageMessage() != image {
+		t.Fatalf("unwrapped message = %v, want the child image", evt.Message)
+	}
+	if got := evt.Message.GetMessageContextInfo().GetMessageAssociation(); got != assoc {
+		t.Fatalf("message association = %v, want the outer association", got)
+	}
+	if evt.RawMessage.GetAssociatedChildMessage() == nil {
+		t.Fatal("RawMessage lost the associatedChildMessage wrapper")
+	}
+
+	plain := (&events.Message{RawMessage: &waE2E.Message{ImageMessage: image}}).UnwrapRaw()
+	if plain.IsAssociatedChild {
+		t.Fatal("IsAssociatedChild = true for an unwrapped image")
+	}
+	empty := (&events.Message{RawMessage: &waE2E.Message{AssociatedChildMessage: &waE2E.FutureProofMessage{}}}).UnwrapRaw()
+	if empty.IsAssociatedChild || empty.Message.GetAssociatedChildMessage() == nil {
+		t.Fatal("an empty associatedChildMessage wrapper must be left in place")
 	}
 }

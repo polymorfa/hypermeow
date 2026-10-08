@@ -342,6 +342,7 @@ type Message struct {
 	IsLottieSticker       bool // True if the message was unwrapped from a LottieStickerMessage
 	IsBotInvoke           bool // True if the message was unwrapped from a BotInvokeMessage
 	IsEdit                bool // True if the message was unwrapped from an EditedMessage
+	IsAssociatedChild     bool // True if the message was unwrapped from an AssociatedChildMessage; the association stays in MessageContextInfo
 
 	// If this event was parsed from a WebMessageInfo (i.e. from a history sync or unavailable message request), the source data is here.
 	SourceWebMsg *waWeb.WebMessageInfo
@@ -401,6 +402,14 @@ func (evt *Message) UnwrapRaw() *Message {
 	if evt.Message.GetEphemeralMessage().GetMessage() != nil {
 		evt.Message = evt.Message.GetEphemeralMessage().GetMessage()
 		evt.IsEphemeral = true
+	}
+	// WhatsApp Web opens associatedChildMessage as a future-proof wrapper
+	// (WAWebFutureproofProtoUtils maybeGetFutureproofMessage). The sender puts
+	// messageAssociation on the outer message, which is copied onto the child
+	// below when the child has no MessageContextInfo of its own.
+	if evt.Message.GetAssociatedChildMessage().GetMessage() != nil {
+		evt.Message = evt.Message.GetAssociatedChildMessage().GetMessage()
+		evt.IsAssociatedChild = true
 	}
 	if evt.Message.GetViewOnceMessage().GetMessage() != nil {
 		evt.Message = evt.Message.GetViewOnceMessage().GetMessage()
