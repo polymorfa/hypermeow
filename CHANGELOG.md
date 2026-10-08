@@ -9,6 +9,10 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ## [Unreleased]
 
+### Fixed
+
+- Sending a message wrapped in `AssociatedChildMessage` (for example the HD half of an image or video dual upload) now derives the stanza `type` and enc `mediatype` from the child, as WhatsApp Web does, so an HD image child is sent as `type="media"` with `mediatype="image"` instead of `type="text"`. Retry receipts use the same attributes.
+
 ### Documentation
 
 - Added an evidence-backed comparison with upstream WhatsMeow.

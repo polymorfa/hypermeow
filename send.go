@@ -920,6 +920,11 @@ func getTypeFromMessage(msg *waE2E.Message) string {
 		return getTypeFromMessage(msg.EphemeralMessage.Message)
 	case msg.DocumentWithCaptionMessage != nil:
 		return getTypeFromMessage(msg.DocumentWithCaptionMessage.Message)
+	case msg.GetAssociatedChildMessage().GetMessage() != nil:
+		// WhatsApp Web derives the stanza type from the unwrapped child
+		// (WAWebE2EProtoUtils typeAttributeFromProtobuf), so an HD dual-upload
+		// image child is sent as media rather than text.
+		return getTypeFromMessage(msg.AssociatedChildMessage.Message)
 	case msg.ReactionMessage != nil, msg.EncReactionMessage != nil:
 		return "reaction"
 	case msg.PollCreationMessage != nil, msg.PollUpdateMessage != nil:
@@ -947,6 +952,10 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 		return getMediaTypeFromMessage(msg.EphemeralMessage.Message)
 	case msg.DocumentWithCaptionMessage != nil:
 		return getMediaTypeFromMessage(msg.DocumentWithCaptionMessage.Message)
+	case msg.GetAssociatedChildMessage().GetMessage() != nil:
+		// WAWebBackendJobsCommon recurses into associatedChildMessage when
+		// deriving the enc mediatype.
+		return getMediaTypeFromMessage(msg.AssociatedChildMessage.Message)
 	case msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Title != nil:
 		return "url"
 	case msg.ImageMessage != nil:

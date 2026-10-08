@@ -401,3 +401,38 @@ func TestUploadNewsletterReaderReturnsHashingError(t *testing.T) {
 }
 
 var _ io.ReadSeeker = failingReadSeeker{}
+
+func TestAssociatedChildMessageStanzaAttributes(t *testing.T) {
+	wrap := func(child *waE2E.Message) *waE2E.Message {
+		return &waE2E.Message{
+			AssociatedChildMessage: &waE2E.FutureProofMessage{Message: child},
+			MessageContextInfo: &waE2E.MessageContextInfo{
+				MessageAssociation: &waE2E.MessageAssociation{
+					AssociationType: waE2E.MessageAssociation_HD_IMAGE_DUAL_UPLOAD.Enum(),
+				},
+			},
+		}
+	}
+	cases := []struct {
+		name      string
+		msg       *waE2E.Message
+		wantType  string
+		wantMedia string
+	}{
+		{"hd image child", wrap(&waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}), "media", "image"},
+		{"hd video child", wrap(&waE2E.Message{VideoMessage: &waE2E.VideoMessage{}}), "media", "video"},
+		{"gif child", wrap(&waE2E.Message{VideoMessage: &waE2E.VideoMessage{GifPlayback: proto.Bool(true)}}), "media", "gif"},
+		{"text child", wrap(&waE2E.Message{Conversation: proto.String("hi")}), "text", ""},
+		{"empty wrapper", wrap(nil), "text", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := getTypeFromMessage(tc.msg); got != tc.wantType {
+				t.Errorf("getTypeFromMessage() = %q, want %q", got, tc.wantType)
+			}
+			if got := getMediaTypeFromMessage(tc.msg); got != tc.wantMedia {
+				t.Errorf("getMediaTypeFromMessage() = %q, want %q", got, tc.wantMedia)
+			}
+		})
+	}
+}
