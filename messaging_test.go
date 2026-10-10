@@ -457,14 +457,48 @@ func TestUnwrapRawAssociatedChildMessage(t *testing.T) {
 	if !evt.IsAssociatedChild {
 		t.Fatal("IsAssociatedChild = false, want true")
 	}
-	if evt.Message.GetImageMessage() != image {
+	if !proto.Equal(evt.Message.GetImageMessage(), image) {
 		t.Fatalf("unwrapped message = %v, want the child image", evt.Message)
 	}
-	if got := evt.Message.GetMessageContextInfo().GetMessageAssociation(); got != assoc {
+	if got := evt.Message.GetMessageContextInfo().GetMessageAssociation(); !proto.Equal(got, assoc) {
 		t.Fatalf("message association = %v, want the outer association", got)
 	}
 	if evt.RawMessage.GetAssociatedChildMessage() == nil {
 		t.Fatal("RawMessage lost the associatedChildMessage wrapper")
+	}
+	if raw.GetAssociatedChildMessage().GetMessage().GetMessageContextInfo() != nil {
+		t.Fatal("UnwrapRaw mutated the child referenced by RawMessage")
+	}
+
+	// A child with its own MessageContextInfo keeps its fields and gains the
+	// wrapper's association; wrapper fields win on conflict, as in WhatsApp Web.
+	childCtx := &waE2E.MessageContextInfo{
+		MessageSecret:              []byte("child-secret"),
+		MessageAddOnDurationInSecs: proto.Uint32(7),
+	}
+	withCtx := &waE2E.Message{
+		AssociatedChildMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{
+			ImageMessage:       image,
+			MessageContextInfo: childCtx,
+		}},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageAssociation:         assoc,
+			MessageAddOnDurationInSecs: proto.Uint32(9),
+		},
+	}
+	merged := (&events.Message{RawMessage: withCtx}).UnwrapRaw()
+	gotCtx := merged.Message.GetMessageContextInfo()
+	if !proto.Equal(gotCtx.GetMessageAssociation(), assoc) {
+		t.Fatalf("merged association = %v, want the outer association", gotCtx.GetMessageAssociation())
+	}
+	if string(gotCtx.GetMessageSecret()) != "child-secret" {
+		t.Fatalf("merged message secret = %q, want the child's", gotCtx.GetMessageSecret())
+	}
+	if gotCtx.GetMessageAddOnDurationInSecs() != 9 {
+		t.Fatalf("merged add-on duration = %d, want the wrapper's 9", gotCtx.GetMessageAddOnDurationInSecs())
+	}
+	if childCtx.MessageAssociation != nil || childCtx.GetMessageAddOnDurationInSecs() != 7 {
+		t.Fatal("UnwrapRaw mutated the child context referenced by RawMessage")
 	}
 
 	plain := (&events.Message{RawMessage: &waE2E.Message{ImageMessage: image}}).UnwrapRaw()

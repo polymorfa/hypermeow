@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.mau.fi/util/jsontime"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	armadillo "github.com/polymorfa/hypermeow/proto"
@@ -405,10 +407,12 @@ func (evt *Message) UnwrapRaw() *Message {
 	}
 	// WhatsApp Web opens associatedChildMessage as a future-proof wrapper
 	// (WAWebFutureproofProtoUtils maybeGetFutureproofMessage). The sender puts
-	// messageAssociation on the outer message, which is copied onto the child
-	// below when the child has no MessageContextInfo of its own.
-	if evt.Message.GetAssociatedChildMessage().GetMessage() != nil {
-		evt.Message = evt.Message.GetAssociatedChildMessage().GetMessage()
+	// messageAssociation on the outer message, so the wrapper's
+	// MessageContextInfo is overlaid onto the child's, wrapper fields winning
+	// (WAWebE2EProtoParser parseFutureproofMessageProto spreads
+	// {...child.messageContextInfo, ...wrapper.messageContextInfo}).
+	if child := evt.Message.GetAssociatedChildMessage().GetMessage(); child != nil {
+		evt.Message = unwrapAssociatedChild(child, evt.Message.GetMessageContextInfo())
 		evt.IsAssociatedChild = true
 	}
 	if evt.Message.GetViewOnceMessage().GetMessage() != nil {
@@ -442,6 +446,27 @@ func (evt *Message) UnwrapRaw() *Message {
 		evt.Message.MessageContextInfo = evt.RawMessage.MessageContextInfo
 	}
 	return evt
+}
+
+// unwrapAssociatedChild returns the child of an associatedChildMessage with the
+// wrapper's MessageContextInfo overlaid field by field onto the child's own
+// context. The child is cloned first so RawMessage stays unmodified.
+func unwrapAssociatedChild(child *waE2E.Message, wrapperCtx *waE2E.MessageContextInfo) *waE2E.Message {
+	if wrapperCtx == nil {
+		return child
+	}
+	child = proto.Clone(child).(*waE2E.Message)
+	overlay := proto.Clone(wrapperCtx).(*waE2E.MessageContextInfo)
+	if child.MessageContextInfo == nil {
+		child.MessageContextInfo = overlay
+		return child
+	}
+	dst := child.MessageContextInfo.ProtoReflect()
+	overlay.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		dst.Set(fd, v)
+		return true
+	})
+	return child
 }
 
 // Deprecated: use types.ReceiptType directly
