@@ -1850,39 +1850,56 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 	}}, nil
 }
 
+// BuildBusinessNativeFlowButtonsMessage creates the native InteractiveMessage form.
+// Web supports up to ten quick replies or three CTA buttons, without mixing them.
 func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || !bounded(params.Title, 60) || !bounded(params.Footer, 60) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 4096) || !bounded(params.Title, 256) || !bounded(params.Footer, 256) {
 		return nil, errors.New("invalid business native-flow text")
 	}
-	if len(params.Buttons) == 0 || len(params.Buttons) > 3 {
-		return nil, errors.New("business native-flow message must contain 1 to 3 buttons")
+	if len(params.Buttons) == 0 || len(params.Buttons) > 10 {
+		return nil, errors.New("business native-flow message must contain 1 to 10 buttons")
 	}
-	buttons := make([]*waE2E.ButtonsMessage_Button, len(params.Buttons))
+	buttons := make([]*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton, len(params.Buttons))
+	replies := 0
 	for index, button := range params.Buttons {
-		if strings.TrimSpace(button.Name) == "" || !bounded(button.Name, 64) || strings.TrimSpace(button.ParamsJSON) == "" || !bounded(button.ParamsJSON, 8192) {
+		switch button.Name {
+		case "quick_reply":
+			replies++
+		case "cta_url", "cta_call", "cta_copy", "cta_catalog":
+		default:
+			return nil, fmt.Errorf("unsupported business native-flow button %d", index)
+		}
+		if strings.TrimSpace(button.ParamsJSON) == "" || !bounded(button.ParamsJSON, 8192) {
 			return nil, fmt.Errorf("invalid business native-flow button %d", index)
 		}
 		var object map[string]any
 		if err := json.Unmarshal([]byte(button.ParamsJSON), &object); err != nil || object == nil {
 			return nil, fmt.Errorf("invalid business native-flow params for button %d", index)
 		}
-		buttons[index] = &waE2E.ButtonsMessage_Button{
-			Type: waE2E.ButtonsMessage_Button_NATIVE_FLOW.Enum(),
-			NativeFlowInfo: &waE2E.ButtonsMessage_Button_NativeFlowInfo{
-				Name: proto.String(button.Name), ParamsJSON: proto.String(button.ParamsJSON),
-			},
+		buttons[index] = &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+			Name: proto.String(button.Name), ButtonParamsJSON: proto.String(button.ParamsJSON),
 		}
 	}
-	headerType := waE2E.ButtonsMessage_EMPTY
-	message := &waE2E.ButtonsMessage{
-		ContentText: proto.String(params.Body), FooterText: optionalString(params.Footer), Buttons: buttons, HeaderType: headerType.Enum(), ContextInfo: params.ContextInfo,
+	if replies != 0 && replies != len(buttons) {
+		return nil, errors.New("business native-flow quick replies cannot be mixed with CTA buttons")
+	}
+	if replies == 0 && len(buttons) > 3 {
+		return nil, errors.New("business native-flow message exceeds 3 CTA buttons")
+	}
+	message := &waE2E.InteractiveMessage{
+		Body:        &waE2E.InteractiveMessage_Body{Text: proto.String(params.Body)},
+		ContextInfo: params.ContextInfo,
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			Buttons: buttons, MessageVersion: proto.Int32(1),
+		}},
 	}
 	if params.Title != "" {
-		headerType = waE2E.ButtonsMessage_TEXT
-		message.HeaderType = headerType.Enum()
-		message.Header = &waE2E.ButtonsMessage_Text{Text: params.Title}
+		message.Header = &waE2E.InteractiveMessage_Header{Title: proto.String(params.Title)}
 	}
-	return &waE2E.Message{ButtonsMessage: message}, nil
+	if params.Footer != "" {
+		message.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(params.Footer)}
+	}
+	return &waE2E.Message{InteractiveMessage: message}, nil
 }
 
 func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Message, error) {
