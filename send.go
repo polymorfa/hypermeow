@@ -129,6 +129,9 @@ type SendResponse struct {
 
 	// PHashMismatch indicates the server acknowledged a different participant list hash.
 	PHashMismatch bool
+
+	// The chat JID the message was actually sent to.
+	Chat types.JID
 }
 
 func setParticipantHashMismatch(resp *SendResponse, sent, acknowledged string) bool {
@@ -253,8 +256,12 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 
 	if isBotMode {
 		if message.MessageContextInfo.BotMetadata == nil {
+			personaID := "867051314767696$760019659443059"
+			if to == types.MuseJID {
+				personaID = "1807055946647697$1"
+			}
 			message.MessageContextInfo.BotMetadata = &waAICommon.BotMetadata{
-				PersonaID: proto.String("867051314767696$760019659443059"),
+				PersonaID: proto.String(personaID),
 			}
 		}
 
@@ -367,6 +374,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	}
 
 	resp.Sender = ownID
+	resp.Chat = to
 
 	start := time.Now()
 	// Sending multiple messages at a time can cause weird issues and makes it harder to retry safely
@@ -758,6 +766,10 @@ func (cli *Client) sendGroup(
 	timings *MessageDebugTimings,
 	extraParams nodeExtraParams,
 ) (string, []byte, error) {
+	if cli.isShadow() {
+		// A shadow would otherwise mint a sender key into the seeded snapshot.
+		return "", nil, ErrShadowGroupUnsupported
+	}
 	start := time.Now()
 	plaintext, _, err := marshalMessage(to, message)
 	timings.Marshal = time.Since(start)
@@ -858,9 +870,16 @@ func (cli *Client) sendDM(
 		return "", nil, err
 	}
 
+	recipientPlaintext := messagePlaintext
+	if to == types.MuseJID {
+		recipientPlaintext, err = cli.encryptWASAMessage(ctx, to, id, message)
+		if err != nil {
+			return "", nil, err
+		}
+	}
 	node, allDevices, err := cli.prepareMessageNode(
 		ctx, to, id, message, []types.JID{to, ownID.ToNonAD()},
-		messagePlaintext, deviceSentMessagePlaintext, timings, extraParams,
+		recipientPlaintext, deviceSentMessagePlaintext, timings, extraParams,
 	)
 	if err != nil {
 		return "", nil, err
@@ -916,6 +935,11 @@ func getTypeFromMessage(msg *waE2E.Message) string {
 		return getTypeFromMessage(msg.EphemeralMessage.Message)
 	case msg.DocumentWithCaptionMessage != nil:
 		return getTypeFromMessage(msg.DocumentWithCaptionMessage.Message)
+	case msg.GetAssociatedChildMessage().GetMessage() != nil:
+		// WhatsApp Web derives the stanza type from the unwrapped child
+		// (WAWebE2EProtoUtils typeAttributeFromProtobuf), so an HD dual-upload
+		// image child is sent as media rather than text.
+		return getTypeFromMessage(msg.AssociatedChildMessage.Message)
 	case msg.ReactionMessage != nil, msg.EncReactionMessage != nil:
 		return "reaction"
 	case msg.PollCreationMessage != nil, msg.PollUpdateMessage != nil:
@@ -943,6 +967,10 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 		return getMediaTypeFromMessage(msg.EphemeralMessage.Message)
 	case msg.DocumentWithCaptionMessage != nil:
 		return getMediaTypeFromMessage(msg.DocumentWithCaptionMessage.Message)
+	case msg.GetAssociatedChildMessage().GetMessage() != nil:
+		// WAWebBackendJobsCommon recurses into associatedChildMessage when
+		// deriving the enc mediatype.
+		return getMediaTypeFromMessage(msg.AssociatedChildMessage.Message)
 	case msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Title != nil:
 		return "url"
 	case msg.ImageMessage != nil:
@@ -1438,6 +1466,11 @@ func (cli *Client) encryptMessageForDevice(
 	extraAttrs waBinary.Attrs,
 	existingSessions map[string]bool,
 ) (*waBinary.Node, bool, error) {
+	if cli.isShadow() {
+		// A headless client holds no live Signal session; delegate
+		// per-device encryption to the relay oracle.
+		return cli.shadowRelay.EncryptForDevice(ctx, plaintext, to, bundle, extraAttrs)
+	}
 	builder := session.NewBuilderFromSignal(cli.Store, to.SignalAddress(), pbSerializer)
 	if bundle != nil {
 		cli.Log.Debugf("Processing prekey bundle for %s", to)

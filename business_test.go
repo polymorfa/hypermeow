@@ -1379,8 +1379,7 @@ func TestHandleBusinessNonceNotificationIsLazyAndNonBlocking(t *testing.T) {
 }
 
 func TestBusinessNonceDeliveredBeforeHandlerQueue(t *testing.T) {
-	client := &Client{handlerQueue: make(chan *waBinary.Node, 1)}
-	client.handlerQueue <- &waBinary.Node{Tag: "message"}
+	client := &Client{}
 	state := client.getBusinessCatalogAuth()
 	waiter := &businessNonceWaiter{ch: make(chan string, 1)}
 	state.nonceWaiter.Store(waiter)
@@ -1394,9 +1393,6 @@ func TestBusinessNonceDeliveredBeforeHandlerQueue(t *testing.T) {
 		}
 	default:
 		t.Fatal("nonce was blocked behind the handler queue")
-	}
-	if len(client.handlerQueue) != 1 {
-		t.Fatalf("out-of-band delivery changed handler queue length to %d", len(client.handlerQueue))
 	}
 }
 

@@ -17,10 +17,12 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/proto/waCommon"
 	waE2E "github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/proto/waWa6"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 )
 
 func TestIQErrorIsDistinguishesSensitiveAttributes(t *testing.T) {
@@ -401,3 +403,110 @@ func TestUploadNewsletterReaderReturnsHashingError(t *testing.T) {
 }
 
 var _ io.ReadSeeker = failingReadSeeker{}
+
+func TestAssociatedChildMessageStanzaAttributes(t *testing.T) {
+	wrap := func(child *waE2E.Message) *waE2E.Message {
+		return &waE2E.Message{
+			AssociatedChildMessage: &waE2E.FutureProofMessage{Message: child},
+			MessageContextInfo: &waE2E.MessageContextInfo{
+				MessageAssociation: &waE2E.MessageAssociation{
+					AssociationType: waE2E.MessageAssociation_HD_IMAGE_DUAL_UPLOAD.Enum(),
+				},
+			},
+		}
+	}
+	cases := []struct {
+		name      string
+		msg       *waE2E.Message
+		wantType  string
+		wantMedia string
+	}{
+		{"hd image child", wrap(&waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}), "media", "image"},
+		{"hd video child", wrap(&waE2E.Message{VideoMessage: &waE2E.VideoMessage{}}), "media", "video"},
+		{"gif child", wrap(&waE2E.Message{VideoMessage: &waE2E.VideoMessage{GifPlayback: proto.Bool(true)}}), "media", "gif"},
+		{"text child", wrap(&waE2E.Message{Conversation: proto.String("hi")}), "text", ""},
+		{"empty wrapper", wrap(nil), "text", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := getTypeFromMessage(tc.msg); got != tc.wantType {
+				t.Errorf("getTypeFromMessage() = %q, want %q", got, tc.wantType)
+			}
+			if got := getMediaTypeFromMessage(tc.msg); got != tc.wantMedia {
+				t.Errorf("getMediaTypeFromMessage() = %q, want %q", got, tc.wantMedia)
+			}
+		})
+	}
+}
+
+func TestUnwrapRawAssociatedChildMessage(t *testing.T) {
+	assoc := &waE2E.MessageAssociation{
+		AssociationType: waE2E.MessageAssociation_HD_IMAGE_DUAL_UPLOAD.Enum(),
+		ParentMessageKey: &waCommon.MessageKey{
+			RemoteJID: proto.String("123@s.whatsapp.net"),
+			FromMe:    proto.Bool(false),
+			ID:        proto.String("PARENT"),
+		},
+	}
+	image := &waE2E.ImageMessage{Caption: proto.String("hd")}
+	raw := &waE2E.Message{
+		AssociatedChildMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{ImageMessage: image}},
+		MessageContextInfo:     &waE2E.MessageContextInfo{MessageAssociation: assoc},
+	}
+	evt := (&events.Message{RawMessage: raw}).UnwrapRaw()
+	if !evt.IsAssociatedChild {
+		t.Fatal("IsAssociatedChild = false, want true")
+	}
+	if !proto.Equal(evt.Message.GetImageMessage(), image) {
+		t.Fatalf("unwrapped message = %v, want the child image", evt.Message)
+	}
+	if got := evt.Message.GetMessageContextInfo().GetMessageAssociation(); !proto.Equal(got, assoc) {
+		t.Fatalf("message association = %v, want the outer association", got)
+	}
+	if evt.RawMessage.GetAssociatedChildMessage() == nil {
+		t.Fatal("RawMessage lost the associatedChildMessage wrapper")
+	}
+	if raw.GetAssociatedChildMessage().GetMessage().GetMessageContextInfo() != nil {
+		t.Fatal("UnwrapRaw mutated the child referenced by RawMessage")
+	}
+
+	// A child with its own MessageContextInfo keeps its fields and gains the
+	// wrapper's association; wrapper fields win on conflict, as in WhatsApp Web.
+	childCtx := &waE2E.MessageContextInfo{
+		MessageSecret:              []byte("child-secret"),
+		MessageAddOnDurationInSecs: proto.Uint32(7),
+	}
+	withCtx := &waE2E.Message{
+		AssociatedChildMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{
+			ImageMessage:       image,
+			MessageContextInfo: childCtx,
+		}},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageAssociation:         assoc,
+			MessageAddOnDurationInSecs: proto.Uint32(9),
+		},
+	}
+	merged := (&events.Message{RawMessage: withCtx}).UnwrapRaw()
+	gotCtx := merged.Message.GetMessageContextInfo()
+	if !proto.Equal(gotCtx.GetMessageAssociation(), assoc) {
+		t.Fatalf("merged association = %v, want the outer association", gotCtx.GetMessageAssociation())
+	}
+	if string(gotCtx.GetMessageSecret()) != "child-secret" {
+		t.Fatalf("merged message secret = %q, want the child's", gotCtx.GetMessageSecret())
+	}
+	if gotCtx.GetMessageAddOnDurationInSecs() != 9 {
+		t.Fatalf("merged add-on duration = %d, want the wrapper's 9", gotCtx.GetMessageAddOnDurationInSecs())
+	}
+	if childCtx.MessageAssociation != nil || childCtx.GetMessageAddOnDurationInSecs() != 7 {
+		t.Fatal("UnwrapRaw mutated the child context referenced by RawMessage")
+	}
+
+	plain := (&events.Message{RawMessage: &waE2E.Message{ImageMessage: image}}).UnwrapRaw()
+	if plain.IsAssociatedChild {
+		t.Fatal("IsAssociatedChild = true for an unwrapped image")
+	}
+	empty := (&events.Message{RawMessage: &waE2E.Message{AssociatedChildMessage: &waE2E.FutureProofMessage{}}}).UnwrapRaw()
+	if empty.IsAssociatedChild || empty.Message.GetAssociatedChildMessage() == nil {
+		t.Fatal("an empty associatedChildMessage wrapper must be left in place")
+	}
+}

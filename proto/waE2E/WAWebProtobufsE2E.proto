@@ -331,6 +331,32 @@ message SecretEncryptedMessage {
 	optional string remoteKeyID = 5;
 }
 
+message EventInviteMessage {
+	enum EventStatus {
+		UNKNOWN = 0;
+		ACTIVE = 1;
+		CANCELED = 2;
+		SUSPENDED = 3;
+		DELETED = 4;
+		LEFT_EVENT = 5;
+		REMOVED_FROM_INVITE_LIST = 6;
+	}
+
+	optional ContextInfo contextInfo = 1;
+	optional string eventID = 2;
+	optional string eventTitle = 3;
+	optional bytes JPEGThumbnail = 4;
+	optional int64 startTime = 5;
+	optional string caption = 6;
+	optional bool isCanceled = 7;
+	optional int64 endTime = 8;
+	optional string callLink = 9;
+	optional string coverImageHandle = 10;
+	optional string locationName = 11;
+	optional int64 lastUpdatedTSUsec = 12;
+	optional EventStatus status = 13;
+}
+
 message GroupInviteMessage {
 	enum GroupType {
 		DEFAULT = 0;
@@ -913,6 +939,18 @@ message PeerDataOperationRequestMessage {
 	optional BizBroadcastInsightsRefreshRequest bizBroadcastInsightsRefreshRequest = 12;
 }
 
+message SharedDeviceContactHashKey {
+	enum Kind {
+		UNKNOWN = 0;
+		LID = 1;
+		PHONE_NUMBER = 2;
+	}
+
+	optional uint32 epoch = 1;
+	optional Kind kind = 2;
+	optional bytes keyData = 3;
+}
+
 message RequestWelcomeMessageMetadata {
 	enum WelcomeTrigger {
 		CHAT_OPEN = 0;
@@ -963,6 +1001,9 @@ message ProtocolMessage {
 		AI_METADATA_OPERATION = 35;
 		MARK_AS_VERIFIED_ACTION = 36;
 		COEX_STATE_SYNC = 37;
+		ACP2_SETTING = 39;
+		SHARED_DEVICE_CONTACT_HASH_KEY_SHARE = 40;
+		SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST = 41;
 	}
 
 	optional WACommon.MessageKey key = 1;
@@ -995,6 +1036,10 @@ message ProtocolMessage {
 	optional WAWebProtobufsAICommon.AIMetadataOperation aiMetadataOperation = 31;
 	optional MarkAsVerifiedAction markAsVerifiedAction = 32;
 	optional WAWebProtobufsServerSync.CoexStateSync coexStateSync = 33;
+	optional WACommon.ACP2Setting acp2Setting = 35;
+	optional SharedDeviceContactHashKeyShare sharedDeviceContactHashKeyShare = 36;
+	optional SharedDeviceContactHashKeyRequest sharedDeviceContactHashKeyRequest = 37;
+	repeated string additionalPromptIDs = 38;
 }
 
 message CloudAPIThreadControlNotification {
@@ -1061,6 +1106,8 @@ message VideoMessage {
 	optional uint64 motionPhotoPresentationOffsetMS = 29;
 	optional string metadataURL = 30;
 	optional VideoSourceType videoSourceType = 31;
+	optional string dashManifestURL = 33;
+	optional int64 smartThumbnailTS = 34;
 }
 
 message MusicMessage {
@@ -1294,6 +1341,8 @@ message ContextInfo {
 		MOTION_PHOTO_CHILD = 6;
 		HEVC_VIDEO_PARENT = 7;
 		HEVC_VIDEO_CHILD = 8;
+		AV1_VIDEO_PARENT = 9;
+		AV1_VIDEO_CHILD = 10;
 	}
 
 	enum StatusAttributionType {
@@ -1445,6 +1494,15 @@ message ContextInfo {
 		optional int32 agmTitleStrategy = 30;
 		optional int32 agmSubtitleStrategy = 31;
 		optional int32 agmHeaderInteractionStrategy = 32;
+		optional bool containsCtwaFlowsAutoLabel = 33;
+		optional string productID = 34;
+		optional bool containsCtwaPromo = 35;
+		optional string ctwaPromoResponseID = 36;
+		optional string ctwaPromoOfferID = 37;
+		optional string ctwaPromoAdEntryID = 38;
+		optional uint64 ctwaPromoResponseExpiresAtSeconds = 39;
+		optional uint32 ctwaPromoSchemaVersion = 40;
+		optional string ctwaPromoAdgroupID = 41;
 	}
 
 	message AdReplyInfo {
@@ -1555,6 +1613,8 @@ message ContextInfo {
 	optional string posterStatusID = 79;
 	optional InstagramThreadLink instagramThreadLink = 80;
 	optional WAWebProtobufsAICommon.AIProvenance aiProvenance = 81;
+	repeated uint32 experienceIDs = 82 [packed=true];
+	optional string partnerDeepLinkToken = 83;
 }
 
 message MessageAssociation {
@@ -1580,6 +1640,7 @@ message MessageAssociation {
 		STATUS_REACTION = 18;
 		HEVC_VIDEO_DUAL_UPLOAD = 19;
 		POLL_ADD_OPTION = 20;
+		AV1_VIDEO_DUAL_UPLOAD = 21;
 	}
 
 	optional AssociationType associationType = 1;
@@ -1623,6 +1684,8 @@ message MessageContextInfo {
 	optional bytes teeBotMetadata = 17;
 	optional WAWebProtobufsAea.NonE2EEAttestation accountEncryptionAttestation = 18;
 	optional bytes associatedPrimaryIdentityKey = 19;
+	optional string teeContextAnchorMessageID = 20;
+	optional WACommon.ACP2Setting acp2Setting = 21;
 }
 
 message InteractiveAnnotation {
@@ -1842,7 +1905,6 @@ message Message {
 	optional NewsletterFollowerInviteMessage newsletterFollowerInviteMessageV2 = 113;
 	optional PollResultSnapshotMessage pollResultSnapshotMessageV3 = 115;
 	optional FutureProofMessage newsletterAdminProfileMessage = 116;
-	optional FutureProofMessage newsletterAdminProfileMessageV2 = 117;
 	optional FutureProofMessage spoilerMessage = 118;
 	optional PollCreationMessage pollCreationMessageV6 = 119;
 	optional ConditionalRevealMessage conditionalRevealMessage = 120;
@@ -1857,6 +1919,12 @@ message Message {
 	optional MusicMessage musicMessage = 129;
 	optional StatusLinkPreviewMetadata statusLinkPreviewMetadata = 130;
 	optional FutureProofMessage botPlatformRegistrationSuccessMessage = 131;
+	optional FutureProofMessage newsletterScheduledMessage = 132;
+	optional FutureProofMessage acp2SettingMessage = 133;
+	optional FutureProofMessage audioStickerMessage = 134;
+	optional ImageMessage instantImageMessage = 135;
+	optional RequestLocationMessage requestLocationMessage = 136;
+	optional FutureProofMessage botGroupParticipantMessage = 137;
 }
 
 message AlbumMessage {
@@ -1871,6 +1939,7 @@ message MessageHistoryMetadata {
 	optional int64 messageCount = 3;
 	repeated string nonHistoryReceivers = 4;
 	optional int64 oldestMessageTimestampInBundle = 5;
+	optional bool includesChatTheme = 6;
 }
 
 message HistoryShareMessageEntry {
@@ -2036,20 +2105,12 @@ message DeviceSentMessage {
 	optional string phash = 3;
 }
 
-message RequestPhoneNumberMessage {
+message RequestLocationMessage {
 	optional ContextInfo contextInfo = 1;
 }
 
-message EventInviteMessage {
+message RequestPhoneNumberMessage {
 	optional ContextInfo contextInfo = 1;
-	optional string eventID = 2;
-	optional string eventTitle = 3;
-	optional bytes JPEGThumbnail = 4;
-	optional int64 startTime = 5;
-	optional string caption = 6;
-	optional bool isCanceled = 7;
-	optional int64 endTime = 8;
-	optional string callLink = 9;
 }
 
 message NewsletterFollowerInviteMessage {
@@ -2150,6 +2211,10 @@ message TemplateMessage {
 }
 
 message StickerMessage {
+	oneof audio {
+		AudioMessage audioMessage = 26;
+	}
+
 	optional string URL = 1;
 	optional bytes fileSHA256 = 2;
 	optional bytes fileEncSHA256 = 3;
@@ -2246,11 +2311,25 @@ message FullHistorySyncOnDemandRequestMetadata {
 	optional string requestID = 1;
 	optional string businessProduct = 2;
 	optional bytes opaqueClientData = 3;
+	optional CoexConnectionDescriptor connection = 4;
+}
+
+message CoexConnectionDescriptor {
+	optional int64 providerID = 1;
+	optional string product = 2;
 }
 
 message AppStateFatalExceptionNotification {
 	repeated string collectionNames = 1;
 	optional int64 timestamp = 2;
+}
+
+message SharedDeviceContactHashKeyRequest {
+	optional uint32 knownEpoch = 1;
+}
+
+message SharedDeviceContactHashKeyShare {
+	repeated SharedDeviceContactHashKey keys = 1;
 }
 
 message AppStateSyncKeyRequest {
@@ -2304,15 +2383,22 @@ message HistorySyncMessageAccessStatus {
 	optional bool completeAccessGranted = 1;
 }
 
+message ChatAnimatedWallpaper {
+	optional string animatedWallpaperID = 1;
+	optional float dimLevel = 2;
+}
+
 message ChatStockImageWallpaper {
 	optional string stockImageID = 1;
 	optional float dimLevel = 2;
 }
 
 message ChatSolidColorWallpaper {
-	optional string colorLight = 1;
-	optional string colorDark = 2;
+	optional fixed32 backgroundLightArgb = 1;
+	optional fixed32 backgroundDarkArgb = 2;
 	optional bool isDoodleEnabled = 3;
+	optional fixed32 doodleLightArgb = 4;
+	optional fixed32 doodleDarkArgb = 5;
 }
 
 message ChatDefaultWallpaper {
@@ -2333,6 +2419,7 @@ message ChatThemeSetting {
 		ChatSolidColorWallpaper solidColor = 11;
 		ChatStockImageWallpaper stockImage = 12;
 		ChatCustomImageWallpaper customImage = 13;
+		ChatAnimatedWallpaper animatedWallpaper = 14;
 	}
 
 	optional int64 settingTimestampMS = 1;
@@ -2609,6 +2696,7 @@ message AIRichResponseMessage {
 	repeated WAAICommonDeprecated.AIRichResponseSubMessage submessages = 2;
 	optional WAWebProtobufsAICommon.AIRichResponseUnifiedResponse unifiedResponse = 3;
 	optional ContextInfo contextInfo = 4;
+	optional WAWebProtobufsAICommon.AIRichResponseUnifiedResponse originalRecipientMetadata = 5;
 }
 
 message AIQueryFanout {

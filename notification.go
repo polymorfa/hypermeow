@@ -507,6 +507,9 @@ func (cli *Client) handleStatusNotification(ctx context.Context, node *waBinary.
 }
 
 func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) {
+	if cli.deferServerABProps(ctx, node, func() { cli.sendAck(ctx, node, 0) }) {
+		return
+	}
 	var cancelled bool
 	defer cli.maybeDeferredAck(ctx, node)(&cancelled)
 	ag := node.AttrGetter()
@@ -561,8 +564,65 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 		cli.handleQueuedBusinessCatalogNotification(node)
 	case "crsc_continuation":
 		go cli.tryHandlePasskeyContinuationNotification(ctx, node)
+	case "companion_reg_refresh":
+		_, refresh := node.GetOptionalChildByTag("companion_reg_refresh")
+		_, rotateQR := node.GetOptionalChildByTag("pair-device-rotate-qr")
+		if refresh || rotateQR {
+			cli.rotateADVSecret(ctx)
+		} else {
+			cli.Log.Debugf("Unrecognized companion reg refresh notification: %s", node)
+		}
 	// Other types: disappearing_mode, server, status, pay, psa
 	default:
 		cli.Log.Debugf("Unhandled notification with type %s", notifType)
 	}
+}
+
+// Only the server/abprops notification takes this path. In-flight duplicate
+// IDs share the task and ack. A later redelivery may start a fresh task.
+func (cli *Client) deferServerABProps(ctx context.Context, node *waBinary.Node, ack func()) bool {
+	if cli.ServerABPropsSync == nil || node == nil || node.Tag != "notification" || node.Attrs["type"] != "server" {
+		return false
+	}
+	if _, ok := node.GetOptionalChildByTag("abprops"); !ok {
+		return false
+	}
+	ag := node.AttrGetter()
+	id := ag.String("id")
+	from := ag.JID("from")
+	if !ag.OK() || id == "" || from.IsEmpty() {
+		return false
+	}
+	key := from.String() + "/" + id
+	cli.serverABPropsMu.Lock()
+	if cli.serverABPropsPending == nil {
+		cli.serverABPropsPending = make(map[string]struct{})
+	}
+	if _, exists := cli.serverABPropsPending[key]; exists {
+		cli.serverABPropsMu.Unlock()
+		return true
+	}
+	if len(cli.serverABPropsPending) >= 256 {
+		cli.serverABPropsMu.Unlock()
+		return true
+	}
+	cli.serverABPropsPending[key] = struct{}{}
+	cli.serverABPropsMu.Unlock()
+	go func() {
+		// Allow three 30-second attempts, two retry waits and durable completion.
+		taskCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		defer func() {
+			cli.serverABPropsMu.Lock()
+			delete(cli.serverABPropsPending, key)
+			cli.serverABPropsMu.Unlock()
+		}()
+		if ctx.Err() != nil {
+			return
+		}
+		if err := cli.ServerABPropsSync(taskCtx); err == nil && taskCtx.Err() == nil {
+			ack()
+		}
+	}()
+	return true
 }

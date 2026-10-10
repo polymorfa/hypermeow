@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.mau.fi/util/jsontime"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	armadillo "github.com/polymorfa/hypermeow/proto"
@@ -39,6 +41,11 @@ import (
 // reconnect to get more codes.
 type QR struct {
 	Codes []string
+}
+
+type RotateADVSecret struct {
+	OldSecret string
+	NewSecret string
 }
 
 // PairSuccess is emitted after the QR code has been scanned with the phone and the handshake has
@@ -342,6 +349,7 @@ type Message struct {
 	IsLottieSticker       bool // True if the message was unwrapped from a LottieStickerMessage
 	IsBotInvoke           bool // True if the message was unwrapped from a BotInvokeMessage
 	IsEdit                bool // True if the message was unwrapped from an EditedMessage
+	IsAssociatedChild     bool // True if the message was unwrapped from an AssociatedChildMessage; the association stays in MessageContextInfo
 
 	// If this event was parsed from a WebMessageInfo (i.e. from a history sync or unavailable message request), the source data is here.
 	SourceWebMsg *waWeb.WebMessageInfo
@@ -402,6 +410,16 @@ func (evt *Message) UnwrapRaw() *Message {
 		evt.Message = evt.Message.GetEphemeralMessage().GetMessage()
 		evt.IsEphemeral = true
 	}
+	// WhatsApp Web opens associatedChildMessage as a future-proof wrapper
+	// (WAWebFutureproofProtoUtils maybeGetFutureproofMessage). The sender puts
+	// messageAssociation on the outer message, so the wrapper's
+	// MessageContextInfo is overlaid onto the child's, wrapper fields winning
+	// (WAWebE2EProtoParser parseFutureproofMessageProto spreads
+	// {...child.messageContextInfo, ...wrapper.messageContextInfo}).
+	if child := evt.Message.GetAssociatedChildMessage().GetMessage(); child != nil {
+		evt.Message = unwrapAssociatedChild(child, evt.Message.GetMessageContextInfo())
+		evt.IsAssociatedChild = true
+	}
 	if evt.Message.GetViewOnceMessage().GetMessage() != nil {
 		evt.Message = evt.Message.GetViewOnceMessage().GetMessage()
 		evt.IsViewOnce = true
@@ -433,6 +451,27 @@ func (evt *Message) UnwrapRaw() *Message {
 		evt.Message.MessageContextInfo = evt.RawMessage.MessageContextInfo
 	}
 	return evt
+}
+
+// unwrapAssociatedChild returns the child of an associatedChildMessage with the
+// wrapper's MessageContextInfo overlaid field by field onto the child's own
+// context. The child is cloned first so RawMessage stays unmodified.
+func unwrapAssociatedChild(child *waE2E.Message, wrapperCtx *waE2E.MessageContextInfo) *waE2E.Message {
+	if wrapperCtx == nil {
+		return child
+	}
+	child = proto.Clone(child).(*waE2E.Message)
+	overlay := proto.Clone(wrapperCtx).(*waE2E.MessageContextInfo)
+	if child.MessageContextInfo == nil {
+		child.MessageContextInfo = overlay
+		return child
+	}
+	dst := child.MessageContextInfo.ProtoReflect()
+	overlay.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		dst.Set(fd, v)
+		return true
+	})
+	return child
 }
 
 // Deprecated: use types.ReceiptType directly

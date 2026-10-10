@@ -9,7 +9,7 @@ The upstream project remains the smaller choice for applications that only need 
 
 ## Why HyperMeow instead of upstream WhatsMeow?
 
-This comparison was last verified against upstream `main` at [`a23afe3`](https://github.com/tulir/whatsmeow/commit/a23afe3171803f34d6761979988b9d2275e961c7) on 2026-08-11. Each upstream sync must update this section when the difference changes.
+This comparison was last verified against upstream `main` at [`c386243`](https://github.com/tulir/whatsmeow/commit/c386243a72bacad080ba2938b37e1e4e0f1ca3b2) on 2026-10-10. Each upstream sync must update this section when the difference changes.
 
 | Area | HyperMeow advantage over upstream `main` |
 | --- | --- |
@@ -42,6 +42,8 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 - [Benchmark instructions](benchmark/barback/README.md)
 
 ## Install
+
+HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.1 as its preferred toolchain.
 
 Install the newest reviewed commit from the authoritative `main` branch:
 
@@ -91,6 +93,20 @@ HyperMeow retains upstream's core support for:
 - retry receipts and message decryption recovery.
 
 New exported functionality is additive unless called out in the [changelog](CHANGELOG.md).
+
+`SendMessage` and `SendFBMessage` return the destination used for sending in
+`SendResponse.Chat`. `GetQRChannel` refreshes its active QR code when pairing
+secrets rotate. Full-sync fetch errors emit `events.AppStateSyncError` after
+releasing the sync lock, so a handler can retry the fetch.
+
+The `types/richresponse` package decodes rich bot responses. Known primitives
+retain their type names during JSON round trips; unknown primitives, view models,
+and text-entity metadata retain their raw JSON. Malformed known values return a
+decode error.
+
+Custom `store.ChatSettingsStore` implementations must add `PutWASARootSecretID`
+and `GetWASARootSecretID` for bot root-secret state. `sqlstore` adds this field
+through schema version 19; its existing migrations remain unchanged.
 
 ## Discord
 

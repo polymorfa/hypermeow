@@ -98,9 +98,10 @@ type Client struct {
 	recvLog waLog.Logger
 	sendLog waLog.Logger
 
-	socket     *socket.NoiseSocket
-	socketLock sync.RWMutex
-	socketWait chan struct{}
+	socket           *socket.NoiseSocket
+	socketLock       sync.RWMutex
+	socketWait       chan struct{}
+	handlerQueueWait chan struct{}
 
 	isLoggedIn            atomic.Bool
 	paired                atomic.Bool
@@ -149,6 +150,7 @@ type Client struct {
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time
+	PreKeysUploaded   *exsync.Event
 
 	mediaConnCache *MediaConn
 	mediaConnLock  sync.RWMutex
@@ -157,7 +159,12 @@ type Client struct {
 	responseWaitersLock sync.Mutex
 	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
-	handlerQueue      chan *waBinary.Node
+	// nodeHandlers maps a top-level stanza tag to its handler. Upstream
+	// whatsmeow exposes the same unexported map; keeping it (instead of a
+	// closed switch) lets a headless shadow Client dispatch injected nodes
+	// synchronously and lets embedders that reach for it via reflection keep
+	// working.
+	nodeHandlers      map[string]nodeHandler
 	eventHandlers     []wrappedEventHandler
 	eventHandlersLock sync.RWMutex
 
@@ -225,6 +232,19 @@ type Client struct {
 	// RawNodeHandler, if non-nil, is called for every inbound node
 	// after decoding but before standard dispatch. See [RawNodeHandler].
 	RawNodeHandler RawNodeHandler
+
+	// ServerABPropsSync optionally completes a server AB-props task before its
+	// acknowledgement. Install before Connect. A nil handler preserves ordinary
+	// dispatch. A returned error withholds the ack; an ordinary unsuccessful sync
+	// may return nil after its task has completed. The receive loop remains free
+	// to process the IQ response. The handler must honor context cancellation.
+	ServerABPropsSync    func(context.Context) error
+	serverABPropsMu      sync.Mutex
+	serverABPropsPending map[string]struct{}
+	// shadowRelay, if non-nil, marks this client as a headless "shadow"
+	// client (see [NewShadowClient]): it has no socket, Connect is guarded,
+	// and outbound nodes plus Signal/keying oracle ops are delegated here.
+	shadowRelay ShadowRelay
 
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
@@ -345,10 +365,10 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		recvLog:            log.Sub("Recv"),
 		sendLog:            log.Sub("Send"),
 		uniqueID:           fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
-		handlerQueue:       make(chan *waBinary.Node, handlerQueueSize),
 		appStateProc:       appstate.NewProcessor(deviceStore, log.Sub("AppState")),
 		socketWait:         make(chan struct{}),
 		expectedDisconnect: exsync.NewEvent(),
+		PreKeysUploaded:    exsync.NewEvent(),
 
 		historySyncNotifications: make(chan historySyncNotification, 32),
 
@@ -363,6 +383,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		WebSocketHeaders: http.Header{},
 	}
 	cli.paired.Store(deviceStore.ID != nil)
+	cli.nodeHandlers = cli.defaultNodeHandlers()
 	return cli
 }
 
@@ -603,8 +624,17 @@ func (cli *Client) connect(ctx context.Context) error {
 }
 
 func (cli *Client) unlockedConnect(ctx context.Context) error {
+	if cli.shadowRelay != nil {
+		// Guard: a shadow client must never open a socket. All Connect
+		// paths (Connect, ConnectContext, autoReconnect) funnel through
+		// here, so failing closed here blocks every one of them.
+		return ErrShadowClientNoConnect
+	}
 	if cli.Store.Deleted {
 		return store.ErrDeviceDeleted
+	}
+	if cli.socket == nil && cli.handlerQueueWait != nil {
+		cli.unlockedDisconnect()
 	}
 	if cli.socket != nil {
 		if !cli.socket.IsConnected() {
@@ -627,6 +657,7 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.URL = cli.MessengerConfig.WebsocketURL
 		fs.HTTPHeaders.Set("Origin", cli.MessengerConfig.BaseURL)
 	}
+	var queue chan *waBinary.Node
 	maps.Copy(fs.HTTPHeaders, cli.WebSocketHeaders)
 	var raceURLs []string
 	if cli.SocketConfig != nil {
@@ -648,12 +679,15 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.Close(0)
 		return err
 	}
-	if err := cli.doHandshake(ctx, fs, *keys.NewKeyPair()); err != nil {
+	var err error
+	if queue, err = cli.doHandshake(fs, *keys.NewKeyPair()); err != nil {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}
+	closeWait := make(chan struct{})
+	cli.handlerQueueWait = closeWait
 	go cli.keepAliveLoop(ctx, fs.Context())
-	go cli.handlerQueueLoop(ctx, fs.Context())
+	go cli.handlerQueueLoop(ctx, fs.Context(), queue, closeWait)
 	return nil
 }
 
@@ -669,17 +703,36 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 	if cli.socket == ns {
 		cli.socket = nil
 		cli.clearResponseWaiters(xmlStreamEndNode)
-		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
-			cli.Log.Debugf("Emitting Disconnected event")
-			go cli.dispatchEvent(&events.Disconnected{})
-			go cli.autoReconnect(ctx)
-		} else if remote {
-			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
-		} else {
-			cli.Log.Debugf("OnDisconnect() called after manual disconnection")
-		}
+		queueWait := cli.handlerQueueWait
+		go cli.finishDisconnect(ctx, remote, queueWait)
 	} else {
 		cli.Log.Debugf("Ignoring OnDisconnect on different socket")
+	}
+}
+
+// finishDisconnect evaluates reconnect eligibility after the retired queue has
+// processed stream errors, without holding the socket lock while handlers run.
+func (cli *Client) finishDisconnect(ctx context.Context, remote bool, queueWait chan struct{}) {
+	if queueWait != nil {
+		select {
+		case <-queueWait:
+		case <-ctx.Done():
+			return
+		}
+	}
+	cli.socketLock.Lock()
+	defer cli.socketLock.Unlock()
+	if cli.socket != nil || cli.handlerQueueWait != queueWait {
+		return
+	}
+	if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
+		cli.Log.Debugf("Emitting Disconnected event")
+		go cli.dispatchEvent(&events.Disconnected{})
+		go cli.autoReconnect(ctx)
+	} else if remote {
+		cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
+	} else {
+		cli.Log.Debugf("OnDisconnect() called after manual disconnection")
 	}
 }
 
@@ -780,6 +833,14 @@ func (cli *Client) unlockedDisconnect() {
 		cli.socket.Stop(true, false)
 		cli.socket = nil
 		cli.clearResponseWaiters(xmlStreamEndNode)
+	}
+	if cli.handlerQueueWait != nil {
+		select {
+		case <-cli.handlerQueueWait:
+			cli.handlerQueueWait = nil
+		case <-time.After(5 * time.Second):
+			cli.Log.Warnf("Handler queue wait channel not closed after 5 seconds")
+		}
 	}
 }
 
@@ -908,7 +969,13 @@ func (cli *Client) RemoveEventHandlers() {
 	cli.eventHandlersLock.Unlock()
 }
 
-func (cli *Client) handleFrame(ctx context.Context, data []byte) {
+func (cli *Client) makeFrameHandler(queue chan *waBinary.Node) func(ctx context.Context, data []byte) {
+	return func(ctx context.Context, data []byte) {
+		cli.handleFrame(ctx, data, queue)
+	}
+}
+
+func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waBinary.Node) {
 	decompressed, err := waBinary.Unpack(data)
 	if err != nil {
 		cli.Log.Warnf("Failed to decompress frame: %v", err)
@@ -959,7 +1026,7 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 	} else if cli.receiveResponse(ctx, node) {
 		// handled
 	} else if cli.hasNodeHandler(node.Tag) {
-		cli.enqueueNode(ctx, node)
+		cli.enqueueNode(ctx, queue, node)
 	} else if node.Tag != "ack" {
 		cli.Log.Debugf("Didn't handle WhatsApp node %s", node.Tag)
 	}
@@ -972,9 +1039,9 @@ func (cli *Client) handleOutOfBandNode(node *waBinary.Node) {
 	}
 }
 
-func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
+func (cli *Client) enqueueNode(ctx context.Context, queue chan *waBinary.Node, node *waBinary.Node) {
 	select {
-	case cli.handlerQueue <- node:
+	case queue <- node:
 	case <-ctx.Done():
 	default:
 		if cli.forceAutoReconnect.CompareAndSwap(false, true) {
@@ -984,14 +1051,38 @@ func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
 	}
 }
 
-func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context) {
+func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context, queue chan *waBinary.Node, closeWait chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	ticker.Stop()
 	cli.Log.Debugf("Starting handler queue loop")
+	defer func() {
+	Loop:
+		for {
+			select {
+			case node := <-queue:
+				// Make sure stream errors are handled even after disconnection so the appropriate auto-reconnect is done.
+				// Everything else
+				if node.Tag == "stream:error" {
+					cli.Log.Debugf("Handling stream:error node in handler queue loop after context cancellation")
+					cli.handleStreamError(evtCtx, node)
+				}
+			default:
+				break Loop
+			}
+		}
+		close(closeWait)
+	}()
 Loop:
 	for {
 		select {
-		case node := <-cli.handlerQueue:
+		case node := <-queue:
+			if connCtx.Err() != nil {
+				if node.Tag == "stream:error" {
+					cli.handleStreamError(evtCtx, node)
+				}
+				cli.Log.Debugf("Closing handler queue loop before node handling")
+				return
+			}
 			doneChan := make(chan struct{})
 			start := time.Now()
 			go func() {
@@ -1003,11 +1094,16 @@ Loop:
 				}
 			}()
 			ticker.Reset(30 * time.Second)
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				select {
 				case <-doneChan:
 					ticker.Stop()
 					continue Loop
+				case <-connCtx.Done():
+					ticker.Stop()
+					cli.Log.Warnf("Closing handler queue loop in the middle of handling %s", node)
+					<-doneChan
+					return
 				case <-ticker.C:
 					cli.Log.Warnf("Node handling is taking long for %s (started %s ago)", node, time.Since(start))
 				}
@@ -1022,40 +1118,34 @@ Loop:
 }
 
 func (cli *Client) hasNodeHandler(tag string) bool {
-	switch tag {
-	case "message", "status", "appdata", "receipt", "call", "chatstate", "presence", "notification", "success", "failure", "stream:error", "iq", "ib":
-		return true
-	default:
-		return false
+	_, ok := cli.nodeHandlers[tag]
+	return ok
+}
+
+type nodeHandler func(ctx context.Context, node *waBinary.Node)
+
+// defaultNodeHandlers returns the built-in top-level stanza dispatch table.
+func (cli *Client) defaultNodeHandlers() map[string]nodeHandler {
+	return map[string]nodeHandler{
+		"message":      cli.handleEncryptedMessage,
+		"appdata":      cli.handleEncryptedMessage,
+		"status":       cli.handleUnencryptedMessage,
+		"receipt":      cli.handleReceipt,
+		"call":         cli.handleCallEvent,
+		"chatstate":    cli.handleChatState,
+		"presence":     cli.handlePresence,
+		"notification": cli.handleNotification,
+		"success":      cli.handleConnectSuccess,
+		"failure":      cli.handleConnectFailure,
+		"stream:error": cli.handleStreamError,
+		"iq":           cli.handleIQ,
+		"ib":           cli.handleIB,
 	}
 }
 
 func (cli *Client) handleNode(ctx context.Context, node *waBinary.Node) {
-	switch node.Tag {
-	case "message", "appdata":
-		cli.handleEncryptedMessage(ctx, node)
-	case "status":
-		cli.handleUnencryptedMessage(ctx, node)
-	case "receipt":
-		cli.handleReceipt(ctx, node)
-	case "call":
-		cli.handleCallEvent(ctx, node)
-	case "chatstate":
-		cli.handleChatState(ctx, node)
-	case "presence":
-		cli.handlePresence(ctx, node)
-	case "notification":
-		cli.handleNotification(ctx, node)
-	case "success":
-		cli.handleConnectSuccess(ctx, node)
-	case "failure":
-		cli.handleConnectFailure(ctx, node)
-	case "stream:error":
-		cli.handleStreamError(ctx, node)
-	case "iq":
-		cli.handleIQ(ctx, node)
-	case "ib":
-		cli.handleIB(ctx, node)
+	if handler, ok := cli.nodeHandlers[node.Tag]; ok {
+		handler(ctx, node)
 	}
 }
 
@@ -1067,6 +1157,18 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 	sock := cli.socket
 	cli.socketLock.RUnlock()
 	if sock == nil {
+		// A headless (shadow) client has no socket by design; route the
+		// outbound node to its relay instead. Fail closed if there is
+		// neither a socket nor a relay so a write can never silently
+		// escape or nil-panic on the absent socket.
+		if cli.shadowRelay != nil {
+			payload, err := waBinary.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal node: %w", err)
+			}
+			cli.sendLog.Debugf("%s", &node)
+			return payload, cli.shadowRelay.SendNode(ctx, payload)
+		}
 		return nil, ErrNotConnected
 	}
 
@@ -1132,7 +1234,11 @@ func (cli *Client) ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageIn
 		if webMsg.GetOriginalSelfAuthorUserJIDString() != "" {
 			info.Sender, err = types.ParseJID(webMsg.GetOriginalSelfAuthorUserJIDString())
 		} else {
-			info.Sender = cli.getOwnID().ToNonAD()
+			if info.Chat.Server == types.HiddenUserServer {
+				info.Sender = cli.getOwnLID().ToNonAD()
+			} else {
+				info.Sender = cli.getOwnID().ToNonAD()
+			}
 			if info.Sender.IsEmpty() {
 				return nil, ErrNotLoggedIn
 			}
