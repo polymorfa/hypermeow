@@ -855,13 +855,25 @@ func TestBuildBusinessListRequiresBodyAndCapsRows(t *testing.T) {
 	if _, err := BuildBusinessListMessage(missingBody); err == nil {
 		t.Fatal("list without a body unexpectedly passed")
 	}
+	thirtyRows := valid
+	thirtyRows.Title = strings.Repeat("t", 256)
+	thirtyRows.Description = strings.Repeat("b", 4096)
+	thirtyRows.ButtonText = strings.Repeat("v", 64)
+	thirtyRows.Footer = strings.Repeat("f", 256)
+	thirtyRows.Sections = []BusinessListSection{{Title: strings.Repeat("s", 256), Rows: make([]BusinessListRow, 30)}}
+	for index := range thirtyRows.Sections[0].Rows {
+		thirtyRows.Sections[0].Rows[index] = BusinessListRow{ID: fmt.Sprintf("row-%d", index), Title: strings.Repeat("r", 256), Description: strings.Repeat("d", 1024)}
+	}
+	if message, err := BuildBusinessListMessage(thirtyRows); err != nil || len(message.GetListMessage().GetSections()[0].GetRows()) != 30 {
+		t.Fatalf("thirty-row native list at API bounds failed: %v", err)
+	}
 	tooManyRows := valid
-	tooManyRows.Sections[0].Rows = make([]BusinessListRow, 11)
+	tooManyRows.Sections[0].Rows = make([]BusinessListRow, 31)
 	for index := range tooManyRows.Sections[0].Rows {
 		tooManyRows.Sections[0].Rows[index] = BusinessListRow{ID: fmt.Sprintf("row-%d", index), Title: "Row"}
 	}
 	if _, err := BuildBusinessListMessage(tooManyRows); err == nil {
-		t.Fatal("list with more than ten rows unexpectedly passed")
+		t.Fatal("list with more than thirty rows unexpectedly passed")
 	}
 }
 
@@ -1183,15 +1195,15 @@ func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
 		Sections: []BusinessListSection{{Title: "Section", Rows: []BusinessListRow{{ID: "one", Title: "One", Description: "Description"}}}},
 	}
 	mutations := map[string]func(*BusinessListMessageParams){
-		"header":        func(params *BusinessListMessageParams) { params.Title = strings.Repeat("h", 61) },
-		"body":          func(params *BusinessListMessageParams) { params.Description = strings.Repeat("b", 1025) },
-		"button":        func(params *BusinessListMessageParams) { params.ButtonText = strings.Repeat("c", 21) },
-		"footer":        func(params *BusinessListMessageParams) { params.Footer = strings.Repeat("f", 61) },
-		"section title": func(params *BusinessListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 25) },
-		"row ID":        func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].ID = strings.Repeat("i", 201) },
-		"row title":     func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].Title = strings.Repeat("r", 25) },
+		"header":        func(params *BusinessListMessageParams) { params.Title = strings.Repeat("h", 257) },
+		"body":          func(params *BusinessListMessageParams) { params.Description = strings.Repeat("b", 4097) },
+		"button":        func(params *BusinessListMessageParams) { params.ButtonText = strings.Repeat("c", 65) },
+		"footer":        func(params *BusinessListMessageParams) { params.Footer = strings.Repeat("f", 257) },
+		"section title": func(params *BusinessListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 257) },
+		"row ID":        func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].ID = strings.Repeat("i", 257) },
+		"row title":     func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].Title = strings.Repeat("r", 257) },
 		"row description": func(params *BusinessListMessageParams) {
-			params.Sections[0].Rows[0].Description = strings.Repeat("d", 73)
+			params.Sections[0].Rows[0].Description = strings.Repeat("d", 1025)
 		},
 	}
 	for name, mutate := range mutations {
@@ -1209,8 +1221,8 @@ func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
 		{Rows: []BusinessListRow{{ID: "one", Title: "One"}}},
 		{Title: "Second", Rows: []BusinessListRow{{ID: "two", Title: "Two"}}},
 	}
-	if _, err := BuildBusinessListMessage(multipleSections); err == nil {
-		t.Fatal("multiple sections with an empty title unexpectedly passed")
+	if _, err := BuildBusinessListMessage(multipleSections); err != nil {
+		t.Fatalf("native list optional section title failed: %v", err)
 	}
 }
 
