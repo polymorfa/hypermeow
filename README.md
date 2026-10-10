@@ -130,9 +130,10 @@ The first successful upgrade wins. Pending upgrades are canceled, and opened
 losers close asynchronously with status 1000 and reason `loser socket`.
 The winner proceeds without waiting for those close handshakes. If every
 endpoint fails, the returned error joins the failures in configured URL order.
-When failures carry HTTP status codes, initial background reconnect classification
-uses the first matching status in that order, preserving the existing
-single-endpoint retry rules.
+Initial background reconnect classification uses the first matching HTTP status
+in configured URL order, ahead of network errors from other endpoints. When no
+HTTP status is present, network and dial failures remain retryable. The existing
+single-endpoint retry rules remain unchanged.
 
 With zero or one race URL, the client uses `SocketConfig.URL`, or the default
 endpoint if `URL` is empty. With racing enabled, the list supplies the endpoints
