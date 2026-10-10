@@ -1814,7 +1814,7 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 }
 
 func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message, error) {
-	if !bounded(params.Title, 60) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+	if !bounded(params.Title, 256) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 4096) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Footer, 256) {
 		return nil, errors.New("invalid business list text")
 	}
 	if len(params.Sections) == 0 || len(params.Sections) > 10 {
@@ -1824,16 +1824,16 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 	seen := make(map[string]struct{})
 	rowCount := 0
 	for sectionIndex, section := range params.Sections {
-		if !bounded(section.Title, 24) || len(section.Rows) == 0 || (len(params.Sections) > 1 && strings.TrimSpace(section.Title) == "") {
+		if !bounded(section.Title, 256) || len(section.Rows) == 0 {
 			return nil, fmt.Errorf("invalid business list section %d", sectionIndex)
 		}
-		if len(section.Rows) > 10-rowCount {
-			return nil, errors.New("business list exceeds 10 rows")
+		if len(section.Rows) > 30-rowCount {
+			return nil, errors.New("business list exceeds 30 rows")
 		}
 		rowCount += len(section.Rows)
 		rows := make([]*waE2E.ListMessage_Row, len(section.Rows))
 		for rowIndex, row := range section.Rows {
-			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 200) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 24) || !bounded(row.Description, 72) {
+			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 256) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 256) || !bounded(row.Description, 1024) {
 				return nil, fmt.Errorf("invalid business list row %d in section %d", rowIndex, sectionIndex)
 			}
 			if _, exists := seen[row.ID]; exists {
