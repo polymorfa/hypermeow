@@ -310,14 +310,10 @@ type SocketConfig struct {
 	// URL concurrently and keep the one that connects first, closing the
 	// others with code 1000 and the reason "loser socket".
 	//
-	// This is what WhatsApp Web does on every connect
-	// (WAWebOpenSocket.js:10, 44-52). A client that makes exactly one
-	// attempt per connect and never closes a second socket differs from the
-	// real one by nothing more than counting. Use socket.RaceURLs for the
-	// endpoints the client itself races.
+	// Use socket.RaceURLs for the endpoints WhatsApp Web races
+	// (WAWebOpenSocket.js:10, 44-52). Loser cleanup runs asynchronously.
 	//
-	// Empty (the default) keeps the single-socket behaviour and the URL
-	// field above.
+	// Zero or one entry keeps the single-socket behavior and uses URL above.
 	RaceURLs []string
 }
 

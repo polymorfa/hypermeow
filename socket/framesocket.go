@@ -113,14 +113,14 @@ func (fs *FrameSocket) CloseWithReason(code websocket.StatusCode, reason string)
 }
 
 func (fs *FrameSocket) Connect(ctx context.Context) error {
-	return fs.connect(ctx, ctx)
+	return fs.dial(ctx, ctx, true)
 }
 
-// connect separates the lifetime of the opened socket from the context used
+// dial separates the lifetime of the opened socket from the context used
 // for the HTTP upgrade. Most callers use the same context for both through
 // Connect. Socket racing uses a short-lived dial context so aborting another
 // in-flight upgrade cannot cancel a connection that has already opened.
-func (fs *FrameSocket) connect(parentCtx, dialCtx context.Context) error {
+func (fs *FrameSocket) dial(parentCtx, dialCtx context.Context, startPump bool) error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 	if fs.conn.Load() != nil {
@@ -141,9 +141,18 @@ func (fs *FrameSocket) connect(parentCtx, dialCtx context.Context) error {
 	conn.SetReadLimit(FrameMaxSize)
 
 	fs.conn.Store(conn)
-
-	go fs.readPump(conn, fs.cancelCtx)
+	if startPump {
+		go fs.readPump(conn, fs.cancelCtx)
+	}
 	return nil
+}
+
+func (fs *FrameSocket) startReadPump() {
+	fs.lock.Lock()
+	defer fs.lock.Unlock()
+	if conn := fs.conn.Load(); conn != nil {
+		go fs.readPump(conn, fs.cancelCtx)
+	}
 }
 
 func (fs *FrameSocket) Context() context.Context {
@@ -182,13 +191,18 @@ func (fs *FrameSocket) SendFrame(data []byte) error {
 	return conn.Write(fs.cancelCtx, websocket.MessageBinary, wholeFrame)
 }
 
-func (fs *FrameSocket) frameComplete() {
+func (fs *FrameSocket) frameComplete() bool {
 	data := fs.incoming
 	fs.incoming = nil
 	fs.partialHeader = nil
 	fs.incomingLength = 0
 	fs.receivedLength = 0
-	fs.Frames <- data
+	select {
+	case fs.Frames <- data:
+		return true
+	case <-fs.cancelCtx.Done():
+		return false
+	}
 }
 
 func (fs *FrameSocket) processData(msg []byte) {
@@ -207,7 +221,9 @@ func (fs *FrameSocket) processData(msg []byte) {
 				if len(msg) >= length {
 					fs.incoming = msg[:length]
 					msg = msg[length:]
-					fs.frameComplete()
+					if !fs.frameComplete() {
+						return
+					}
 				} else {
 					fs.incoming = make([]byte, length)
 					copy(fs.incoming, msg)
@@ -222,7 +238,9 @@ func (fs *FrameSocket) processData(msg []byte) {
 			if fs.receivedLength+len(msg) >= fs.incomingLength {
 				copy(fs.incoming[fs.receivedLength:], msg[:fs.incomingLength-fs.receivedLength])
 				msg = msg[fs.incomingLength-fs.receivedLength:]
-				fs.frameComplete()
+				if !fs.frameComplete() {
+					return
+				}
 			} else {
 				copy(fs.incoming[fs.receivedLength:], msg)
 				fs.receivedLength += len(msg)

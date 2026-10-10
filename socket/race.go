@@ -1,12 +1,9 @@
-//go:build !js
-
 package socket
 
 import (
 	"context"
 	"errors"
 	"net/http"
-	"sync"
 
 	"github.com/coder/websocket"
 
@@ -33,12 +30,9 @@ var RaceURLs = []string{
 // wins, the outstanding dials are aborted, and the call fails only when every
 // URL failed.
 //
-// A client that makes one attempt per connect and never closes a second socket
-// is distinguishable from the real one by nothing more than counting, which is
-// why this is worth having.
-//
-// The returned socket is connected and its read pump is running; the caller
-// owns it exactly as it owns one from NewFrameSocket plus Connect.
+// Loser cleanup runs asynchronously. If all endpoints fail, errors are joined
+// in endpoint order. The returned socket is connected and its read pump is
+// running; the caller owns it as it owns one from NewFrameSocket plus Connect.
 func ConnectRace(
 	ctx context.Context,
 	log waLog.Logger,
@@ -69,80 +63,60 @@ func connectRace(
 		return fs, nil
 	}
 
-	// The decision is taken inside the racer goroutines under one lock, so a
-	// socket that opens at the same instant as the winner is chosen either
-	// becomes the winner or closes itself as the loser — there is no window
-	// in which an already-open loser has its context cancelled from outside
-	// and is torn down before it can send the close frame.
-	var (
-		mu     sync.Mutex
-		winner *FrameSocket
-		errs   []error
-	)
-	racerContexts := make([]context.Context, len(urls))
-	cancels := make([]context.CancelFunc, len(urls))
-	for i := range urls {
-		racerContexts[i], cancels[i] = context.WithCancel(ctx)
+	type dialResult struct {
+		index int
+		fs    *FrameSocket
+		err   error
 	}
-	var wg sync.WaitGroup
+	results := make(chan dialResult, len(urls))
+	cancels := make([]context.CancelFunc, len(urls))
 	for i, url := range urls {
-		wg.Add(1)
-		go func(i int, url string, racerCtx context.Context) {
-			defer wg.Done()
-			defer cancels[i]()
+		dialCtx, cancel := context.WithCancel(ctx)
+		cancels[i] = cancel
+		go func() {
 			fs := newRacer(log, httpClient, url, headers)
-			if err := fs.connect(ctx, racerCtx); err != nil {
-				fs.Close(0)
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-				return
-			}
-			if afterConnect != nil {
+			err := fs.dial(ctx, dialCtx, false)
+			cancel()
+			if err == nil && afterConnect != nil {
 				afterConnect(i)
 			}
-			mu.Lock()
-			if winner == nil {
-				winner = fs
-				mu.Unlock()
-				log.Debugf("Opened socket with %s (race winner)", url)
-				// Abort every dial still outstanding, exactly as the client
-				// aborts its AbortController on the first success. The
-				// dial contexts do not own sockets after their upgrades complete.
-				for j, cancel := range cancels {
-					if j != i {
-						cancel()
-					}
-				}
-				return
-			}
-			mu.Unlock()
-			// A socket that opened after the winner is closed with the
-			// client's own code and reason.
-			fs.CloseWithReason(websocket.StatusNormalClosure, LoserSocketCloseReason)
-		}(i, url, racerContexts[i])
+			results <- dialResult{i, fs, err}
+		}()
 	}
-	wg.Wait()
 
-	if winner == nil {
+	// Preserve endpoint order in the joined error so retry classification is
+	// independent of the order in which unsuccessful dials finish.
+	errs := make([]error, len(urls))
+	for remaining := len(urls); remaining > 0; remaining-- {
+		result := <-results
+		if result.err != nil {
+			errs[result.index] = result.err
+			continue
+		}
 		for _, cancel := range cancels {
 			cancel()
 		}
-		if len(errs) == 0 {
-			return nil, ErrDialFailed
-		}
-		return nil, errors.Join(errs...)
+		result.fs.startReadPump()
+		log.Debugf("Opened socket with %s (race winner)", result.fs.URL)
+		// Upgraded losers have no frame consumer. Never start their read pumps,
+		// and don't delay the winner while waiting for their close handshakes.
+		go func() {
+			for range remaining - 1 {
+				loser := <-results
+				if loser.err == nil {
+					go loser.fs.CloseWithReason(websocket.StatusNormalClosure, LoserSocketCloseReason)
+				}
+			}
+		}()
+		return result.fs, nil
 	}
-	return winner, nil
+	return nil, errors.Join(errs...)
 }
 
 func newRacer(log waLog.Logger, httpClient *http.Client, url string, headers http.Header) *FrameSocket {
 	fs := NewFrameSocket(log, httpClient)
 	fs.URL = url
 	for name, values := range headers {
-		if len(values) == 0 {
-			continue
-		}
 		fs.HTTPHeaders[name] = append([]string(nil), values...)
 	}
 	return fs

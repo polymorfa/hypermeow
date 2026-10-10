@@ -108,6 +108,44 @@ Custom `store.ChatSettingsStore` implementations must add `PutWASARootSecretID`
 and `GetWASARootSecretID` for bot root-secret state. `sqlstore` adds this field
 through schema version 19; its existing migrations remain unchanged.
 
+## Connection options
+
+Connections use one WebSocket endpoint by default. To try both WhatsApp chat
+endpoints concurrently, configure the client before connecting:
+
+```go
+import (
+    whatsmeow "github.com/polymorfa/hypermeow"
+    "github.com/polymorfa/hypermeow/socket"
+)
+
+// client is an existing *whatsmeow.Client.
+client.SocketConfig = &whatsmeow.SocketConfig{
+    RaceURLs: append([]string(nil), socket.RaceURLs...),
+}
+```
+
+`SocketConfig.RaceURLs` activates racing when it contains at least two URLs.
+The first successful upgrade wins. Pending upgrades are canceled, and opened
+losers close asynchronously with status 1000 and reason `loser socket`.
+The winner proceeds without waiting for those close handshakes. If every
+endpoint fails, the returned error joins the failures in configured URL order.
+When failures carry HTTP status codes, initial background reconnect classification
+uses the first matching status in that order, preserving the existing
+single-endpoint retry rules.
+
+With zero or one race URL, the client uses `SocketConfig.URL`, or the default
+endpoint if `URL` is empty. With racing enabled, the list supplies the endpoints
+and `URL` is ignored. `SocketConfig.Origin` and `Client.WebSocketHeaders` apply to
+all racers. Repeated header values and empty entries that suppress defaults are
+preserved. Browsers control request headers on JS/WASM builds, as they do for
+single-endpoint connections.
+
+`Client.DisablePostConnectPassiveIQ` defaults to `false`. Set it to `true` only
+when your login payload already declares `passive: false`; the client then skips
+the post-connect passive/active IQ. This option does not change the login payload.
+Configure both options before connecting rather than while a connection is active.
+
 ## Discord
 
 Join the [WhatsApp Web ecosystem Discord](https://whiskey.so/discord) and visit
