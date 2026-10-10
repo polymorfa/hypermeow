@@ -1032,7 +1032,7 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return "buttons"
 	case msg.ListMessage != nil:
 		return "list"
-	case msg.InteractiveMessage != nil && msg.InteractiveMessage.GetNativeFlowMessage() != nil:
+	case msg.InteractiveMessage != nil && (msg.InteractiveMessage.GetNativeFlowMessage() != nil || msg.InteractiveMessage.GetCarouselMessage() != nil):
 		return "native_flow"
 	case msg.InteractiveResponseMessage != nil:
 		return "interactive_response"
