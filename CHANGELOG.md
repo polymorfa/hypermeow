@@ -11,7 +11,7 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Added
 
-- Added remote Signal keys: `NewRemoteSignalClient` runs a linked device whose Signal private keys, sessions and message plaintext live in an external store reached through `RemoteSignal`. The client keeps its socket, receipts, retry receipts, prekey uploads and QR pairing, hands each received payload to the store, receives only delivery metadata (`events.RemoteMessage`), and transmits stanzas the store built with `SendPrebuiltStanza`. Pair-code pairing and local `SendMessage` return `ErrRemoteSignalUnsupported` for such clients.
+- Added remote Signal keys: `NewRemoteSignalClient` runs a linked device whose Signal private keys, sessions and message plaintext live in an external store reached through `RemoteSignal`. The client keeps its socket, receipts, retry receipts, prekey uploads and QR pairing, hands each received payload to the store, receives only delivery metadata (`events.RemoteMessage`), and transmits stanzas the store built with `SendPrebuiltStanza`. The store also handles identity changes (`ForgetIdentity`) and phone-number-to-LID session moves (`MigratePNToLID`). Pair-code pairing, local `SendMessage` and `SendFBMessage` return `ErrRemoteSignalUnsupported` for such clients, and `PreRetryCallback` receives a nil message.
 
 ### Documentation
 

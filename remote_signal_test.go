@@ -35,6 +35,15 @@ type fakeRemoteSignal struct {
 	resends    []RemoteResend
 	resendWith []byte
 	forgotten  []types.JID
+	migrated   [][2]types.JID
+	migrateErr error
+}
+
+func (f *fakeRemoteSignal) MigratePNToLID(ctx context.Context, pn, lid types.JID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.migrated = append(f.migrated, [2]types.JID{pn, lid})
+	return f.migrateErr
 }
 
 func (f *fakeRemoteSignal) Receive(ctx context.Context, req RemoteReceive) (*RemoteReceiveResult, error) {
@@ -495,11 +504,16 @@ func TestRemoteRetryHonoursPreRetryCallback(t *testing.T) {
 }
 
 func TestRemoteIdentityChangeReachesTheStore(t *testing.T) {
-	cli, remote, _ := newTestRemote(t)
-	from := types.JID{User: "123", Server: types.HiddenUserServer, Device: 3}
-	cli.deleteIdentityChangeState(context.Background(), from)
-	if len(remote.forgotten) != 1 || remote.forgotten[0] != from.ToNonAD() {
-		t.Fatalf("forgotten = %v, want [%s]", remote.forgotten, from.ToNonAD())
+	for _, tc := range []struct{ from, want types.JID }{
+		{types.JID{User: "123", Server: types.HiddenUserServer, Device: 3}, types.NewJID("123", types.HiddenUserServer)},
+		{types.JID{User: "123", Server: types.HostedLIDServer, Device: 99}, types.NewJID("123", types.HiddenUserServer)},
+		{types.JID{User: "5511", Server: types.HostedServer, Device: 99}, types.NewJID("5511", types.DefaultUserServer)},
+	} {
+		cli, remote, _ := newTestRemote(t)
+		cli.deleteIdentityChangeState(context.Background(), tc.from)
+		if len(remote.forgotten) != 1 || remote.forgotten[0] != tc.want {
+			t.Fatalf("from %s: forgotten = %v, want [%s]", tc.from, remote.forgotten, tc.want)
+		}
 	}
 }
 
@@ -508,5 +522,31 @@ func TestRemoteClientRefusesLocalFBSends(t *testing.T) {
 	_, err := cli.SendFBMessage(context.Background(), types.NewJID("123", types.DefaultUserServer), nil, nil)
 	if !errors.Is(err, ErrRemoteSignalUnsupported) {
 		t.Fatalf("SendFBMessage err = %v", err)
+	}
+}
+
+func TestRemotePNSenderMigratesSessionsInTheRemoteStore(t *testing.T) {
+	cli, remote, _ := newTestRemote(t)
+	pn := types.JID{User: "5511", Server: types.DefaultUserServer, Device: 3}
+	lid := types.JID{User: "777", Server: types.HiddenUserServer, Device: 3}
+	receive := func() {
+		info, node := encMessage("msg")
+		info.Chat, info.Sender, info.SenderAlt = pn.ToNonAD(), pn, lid
+		node.Attrs["from"] = pn
+		cli.decryptMessages(context.Background(), info, node)
+	}
+
+	remote.migrateErr = errors.New("store offline")
+	receive()
+	remote.migrateErr = nil
+	receive()
+	receive()
+
+	want := [2]types.JID{pn.ToNonAD(), lid.ToNonAD()}
+	if len(remote.migrated) != 2 || remote.migrated[0] != want || remote.migrated[1] != want {
+		t.Fatalf("migrations = %v, want a failed then one successful %v and no more", remote.migrated, want)
+	}
+	if len(remote.receives) != 3 || remote.receives[2].Sender != lid {
+		t.Fatalf("receives should decrypt as the LID %s: %+v", lid, remote.receives)
 	}
 }

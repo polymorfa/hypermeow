@@ -57,6 +57,10 @@ type RemoteSignal interface {
 	// ForgetIdentity drops the stored identity and sessions for every device
 	// of user after the server reports an identity change.
 	ForgetIdentity(ctx context.Context, user types.JID) error
+	// MigratePNToLID moves the sessions and identities of a phone-number
+	// user's devices, including hosted devices, to the user's LID. Calling it
+	// again after a successful migration is a no-op.
+	MigratePNToLID(ctx context.Context, pn, lid types.JID) error
 }
 
 // RemoteIdentity is the public material a remote-keyed device registers with.
@@ -557,8 +561,17 @@ func (cli *Client) SendPrebuiltStanza(ctx context.Context, stanza []byte, phash 
 
 // forgetRemoteIdentity asks the remote store to drop identity and session
 // state for from and its PN/LID alternate, mirroring deleteIdentityChangeState.
+// The store clears a phone-number or LID user's hosted devices with it, so a
+// hosted JID is sent as its base user.
 func (cli *Client) forgetRemoteIdentity(ctx context.Context, from types.JID) {
-	users := []types.JID{from.ToNonAD()}
+	base := from.ToNonAD()
+	switch base.Server {
+	case types.HostedServer:
+		base.Server = types.DefaultUserServer
+	case types.HostedLIDServer:
+		base.Server = types.HiddenUserServer
+	}
+	users := []types.JID{base}
 	if cli.Store.LIDs != nil {
 		var alternate types.JID
 		var err error
@@ -579,4 +592,18 @@ func (cli *Client) forgetRemoteIdentity(ctx context.Context, from types.JID) {
 			cli.Log.Warnf("Remote Signal store failed to forget identity of %s: %v", user, err)
 		}
 	}
+}
+
+// migrateRemoteSessions asks the remote store to move pn's Signal state to
+// lid, once per user per client, as SQLStore.MigratePNToLID does locally.
+func (cli *Client) migrateRemoteSessions(ctx context.Context, pn, lid types.JID) {
+	pn, lid = pn.ToNonAD(), lid.ToNonAD()
+	if _, done := cli.remoteMigratedPN.Load(pn.User); done {
+		return
+	}
+	if err := cli.remoteSignal.MigratePNToLID(ctx, pn, lid); err != nil {
+		cli.Log.Errorf("Remote Signal store failed to migrate %s to %s: %v", pn, lid, err)
+		return
+	}
+	cli.remoteMigratedPN.Store(pn.User, struct{}{})
 }
