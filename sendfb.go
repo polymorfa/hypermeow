@@ -52,6 +52,10 @@ func (cli *Client) SendFBMessage(
 		err = ErrClientIsNil
 		return
 	}
+	if cli.isRemoteSignal() {
+		err = fmt.Errorf("SendFBMessage: %w; use SendPrebuiltStanza", ErrRemoteSignalUnsupported)
+		return
+	}
 	var req SendRequestExtra
 	if len(extra) > 1 {
 		err = errors.New("only one extra parameter may be provided to SendMessage")

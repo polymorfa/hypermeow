@@ -15,6 +15,7 @@ import (
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waAdv"
+	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
@@ -33,6 +34,7 @@ type fakeRemoteSignal struct {
 	ownJIDs    []types.JID
 	resends    []RemoteResend
 	resendWith []byte
+	forgotten  []types.JID
 }
 
 func (f *fakeRemoteSignal) Receive(ctx context.Context, req RemoteReceive) (*RemoteReceiveResult, error) {
@@ -75,6 +77,13 @@ func (f *fakeRemoteSignal) SetOwnJIDs(ctx context.Context, pn, lid types.JID) er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ownJIDs = append(f.ownJIDs, pn, lid)
+	return nil
+}
+
+func (f *fakeRemoteSignal) ForgetIdentity(ctx context.Context, user types.JID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgotten = append(f.forgotten, user)
 	return nil
 }
 
@@ -266,21 +275,40 @@ func TestRemoteUndecodableMessageIsNacked(t *testing.T) {
 	}
 }
 
-func TestRemotePreKeyStoreMarksWholeBatches(t *testing.T) {
+func TestRemotePreKeyStoreReusesUnuploadedKeysAndMarksOnlyTheUploadedBatch(t *testing.T) {
 	_, remote, _ := newTestRemote(t)
 	pk := &remotePreKeyStore{remote: remote}
 	ctx := context.Background()
-	first, _ := pk.GetOrGenPreKeys(ctx, 3)  // IDs 1..3
-	second, _ := pk.GetOrGenPreKeys(ctx, 2) // IDs 4..5, generated before the first is marked
-	if err := pk.MarkPreKeysAsUploaded(ctx, first[len(first)-1].KeyID); err != nil {
+	ids := func(batch []*keys.PreKey) []uint32 {
+		var out []uint32
+		for _, k := range batch {
+			out = append(out, k.KeyID)
+		}
+		return out
+	}
+	first, _ := pk.GetOrGenPreKeys(ctx, 3) // 1..3; the upload then fails, nothing is marked
+	again, _ := pk.GetOrGenPreKeys(ctx, 3)
+	if !equalIDs(ids(again), ids(first)) || remote.nextID != 3 {
+		t.Fatalf("retry after a failed upload got %v (generated up to %d), want the same keys", ids(again), remote.nextID)
+	}
+	partial, _ := pk.GetOrGenPreKeys(ctx, 2) // 1..2 of the pending three
+	if err := pk.MarkPreKeysAsUploaded(ctx, partial[len(partial)-1].KeyID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pk.MarkPreKeysAsUploaded(ctx, second[len(second)-1].KeyID); err != nil {
+	if len(remote.marked) != 1 || !equalIDs(remote.marked[0], []uint32{1, 2}) {
+		t.Fatalf("marked %v, want only the uploaded batch [1 2]", remote.marked)
+	}
+	next, _ := pk.GetOrGenPreKeys(ctx, 2) // 3 is still pending; one new key
+	if !equalIDs(ids(next), []uint32{3, 4}) {
+		t.Fatalf("next batch %v, want [3 4]", ids(next))
+	}
+	retry, err := pk.GenOnePreKey(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]uint32{{1, 2, 3}, {4, 5}}
-	if len(remote.marked) != 2 || !equalIDs(remote.marked[0], want[0]) || !equalIDs(remote.marked[1], want[1]) {
-		t.Fatalf("marked %v, want %v", remote.marked, want)
+	last := remote.marked[len(remote.marked)-1]
+	if !equalIDs(last, []uint32{retry.KeyID}) {
+		t.Fatalf("retry-receipt prekey %d was not marked published (last mark %v)", retry.KeyID, last)
 	}
 	if n, _ := pk.UploadedPreKeyCount(ctx); n != 7 {
 		t.Fatalf("UploadedPreKeyCount = %d", n)
@@ -299,22 +327,34 @@ func equalIDs(a, b []uint32) bool {
 	return true
 }
 
-func TestRemoteDeviceSignatureChecksTheSignedDetails(t *testing.T) {
-	cli, remote, _ := newTestRemote(t)
-	verified := &waAdv.ADVSignedDeviceIdentity{Details: []byte("details")}
-	sign := func(details []byte, sigLen int) []byte {
-		b, _ := proto.Marshal(&waAdv.ADVSignedDeviceIdentity{Details: details, DeviceSignature: make([]byte, sigLen)})
+func TestRemoteDeviceSignatureMustVerify(t *testing.T) {
+	identity := keys.NewKeyPair()
+	remoteIdentity := testRemoteIdentity
+	remoteIdentity.IdentityKey = *identity.Pub
+	remote := &fakeRemoteSignal{}
+	cli := NewRemoteSignalClient(&store.Device{}, remoteIdentity, remote, nil)
+	account := keys.NewKeyPair()
+	verified := &waAdv.ADVSignedDeviceIdentity{Details: []byte("details"), AccountSignatureKey: account.Pub[:]}
+	signedBy := func(details []byte, signature []byte) []byte {
+		b, _ := proto.Marshal(&waAdv.ADVSignedDeviceIdentity{Details: details, DeviceSignature: signature})
 		return b
 	}
-	remote.signed = sign([]byte("other details"), 64)
+	valid := generateDeviceSignature(verified, identity)[:]
+
+	remote.signed = signedBy([]byte("other details"), valid)
 	if _, err := cli.remoteDeviceSignature(context.Background(), nil, verified); err == nil {
 		t.Fatal("a signature over different details was accepted")
 	}
-	remote.signed = sign([]byte("details"), 10)
+	remote.signed = signedBy([]byte("details"), make([]byte, 64))
 	if _, err := cli.remoteDeviceSignature(context.Background(), nil, verified); err == nil {
-		t.Fatal("a short signature was accepted")
+		t.Fatal("a 64-byte signature that does not verify was accepted")
 	}
-	remote.signed = sign([]byte("details"), 64)
+	other := generateDeviceSignature(verified, keys.NewKeyPair())[:]
+	remote.signed = signedBy([]byte("details"), other)
+	if _, err := cli.remoteDeviceSignature(context.Background(), nil, verified); err == nil {
+		t.Fatal("a signature by a different identity was accepted")
+	}
+	remote.signed = signedBy([]byte("details"), valid)
 	if sig, err := cli.remoteDeviceSignature(context.Background(), nil, verified); err != nil || len(sig) != 64 {
 		t.Fatalf("valid signature rejected: %v", err)
 	}
@@ -406,5 +446,67 @@ func TestRemoteClientRefusesLocalSends(t *testing.T) {
 	}
 	if _, err := cli.PairPhone(context.Background(), "15550001111", false, PairClientChrome, "Chrome (Linux)"); !errors.Is(err, ErrRemoteSignalUnsupported) {
 		t.Fatalf("PairPhone err = %v", err)
+	}
+}
+
+func TestRemoteStoreOutageNeitherAcksNorRetries(t *testing.T) {
+	cli, remote, sent := newTestRemote(t)
+	remote.receiveErr = errors.New("connection refused")
+	announced := 0
+	cli.AddEventHandler(func(evt any) {
+		switch evt.(type) {
+		case *events.RemoteMessage, *events.UndecryptableMessage:
+			announced++
+		}
+	})
+	info, node := encMessage("msg")
+	cli.decryptMessages(context.Background(), info, node)
+	if tags := sent.tags(); len(tags) != 0 {
+		t.Fatalf("sent %v during a store outage; the server must redeliver", tags)
+	}
+	if announced != 0 {
+		t.Fatal("no event should be emitted for a payload the store never processed")
+	}
+}
+
+func TestRemoteRetryHonoursPreRetryCallback(t *testing.T) {
+	cli, remote, sent := newTestRemote(t)
+	var gotMessage bool
+	cli.PreRetryCallback = func(_ *events.Receipt, id types.MessageID, _ int, msg *waE2E.Message) bool {
+		gotMessage = msg != nil
+		return false
+	}
+	requester := types.JID{User: "123", Server: types.HiddenUserServer, Device: 2}
+	receipt := &events.Receipt{MessageSource: types.MessageSource{Chat: requester.ToNonAD(), Sender: requester}}
+	node := &waBinary.Node{
+		Tag:   "receipt",
+		Attrs: waBinary.Attrs{"id": "MSG8", "from": requester, "type": "retry"},
+		Content: []waBinary.Node{{
+			Tag:   "retry",
+			Attrs: waBinary.Attrs{"id": "MSG8", "t": "1700000000", "count": "1"},
+		}},
+	}
+	if err := cli.handleRetryReceipt(context.Background(), receipt, node); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.resends) != 0 || len(sent.tags()) != 0 || gotMessage {
+		t.Fatalf("rejected retry still resent (resends=%d, sent=%v, message=%v)", len(remote.resends), sent.tags(), gotMessage)
+	}
+}
+
+func TestRemoteIdentityChangeReachesTheStore(t *testing.T) {
+	cli, remote, _ := newTestRemote(t)
+	from := types.JID{User: "123", Server: types.HiddenUserServer, Device: 3}
+	cli.deleteIdentityChangeState(context.Background(), from)
+	if len(remote.forgotten) != 1 || remote.forgotten[0] != from.ToNonAD() {
+		t.Fatalf("forgotten = %v, want [%s]", remote.forgotten, from.ToNonAD())
+	}
+}
+
+func TestRemoteClientRefusesLocalFBSends(t *testing.T) {
+	cli, _, _ := newTestRemote(t)
+	_, err := cli.SendFBMessage(context.Background(), types.NewJID("123", types.DefaultUserServer), nil, nil)
+	if !errors.Is(err, ErrRemoteSignalUnsupported) {
+		t.Fatalf("SendFBMessage err = %v", err)
 	}
 }

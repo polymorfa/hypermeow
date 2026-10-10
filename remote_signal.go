@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
 	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
@@ -53,6 +54,9 @@ type RemoteSignal interface {
 	// Resend answers a retry receipt with a re-encrypted stanza for the
 	// requester, built from the remote store's own record of the message.
 	Resend(ctx context.Context, req RemoteResend) ([]byte, error)
+	// ForgetIdentity drops the stored identity and sessions for every device
+	// of user after the server reports an identity change.
+	ForgetIdentity(ctx context.Context, user types.JID) error
 }
 
 // RemoteIdentity is the public material a remote-keyed device registers with.
@@ -191,25 +195,44 @@ type remotePreKeyStore struct {
 	remote RemoteSignal
 
 	mu sync.Mutex
-	// pending holds IDs handed out for upload but not yet marked uploaded.
-	pending []uint32
+	// pending holds keys handed out for upload but not yet marked uploaded,
+	// oldest first. A failed upload leaves them here to be offered again.
+	pending []*keys.PreKey
+	// lastBatch is the set GetOrGenPreKeys returned most recently, the only
+	// keys MarkPreKeysAsUploaded may mark.
+	lastBatch map[uint32]struct{}
 }
 
 var _ store.PreKeyStore = (*remotePreKeyStore)(nil)
 
+// GetOrGenPreKeys returns still-unuploaded keys first and generates only the
+// rest, as the SQL store does, so a failed upload never strands a batch.
 func (s *remotePreKeyStore) GetOrGenPreKeys(ctx context.Context, count uint32) ([]*keys.PreKey, error) {
-	generated, err := s.remote.GeneratePreKeys(ctx, count)
-	if err != nil {
-		return nil, err
+	s.mu.Lock()
+	batch := append([]*keys.PreKey(nil), s.pending[:min(int(count), len(s.pending))]...)
+	s.mu.Unlock()
+	if missing := int(count) - len(batch); missing > 0 {
+		generated, err := s.remote.GeneratePreKeys(ctx, uint32(missing))
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		s.pending = append(s.pending, generated...)
+		s.mu.Unlock()
+		batch = append(batch, generated...)
+	}
+	ids := make(map[uint32]struct{}, len(batch))
+	for _, key := range batch {
+		ids[key.KeyID] = struct{}{}
 	}
 	s.mu.Lock()
-	for _, key := range generated {
-		s.pending = append(s.pending, key.KeyID)
-	}
+	s.lastBatch = ids
 	s.mu.Unlock()
-	return generated, nil
+	return batch, nil
 }
 
+// GenOnePreKey creates a key for a retry receipt. The receipt publishes it,
+// so it is marked uploaded at once, as the SQL store does.
 func (s *remotePreKeyStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, error) {
 	generated, err := s.remote.GeneratePreKeys(ctx, 1)
 	if err != nil {
@@ -217,6 +240,9 @@ func (s *remotePreKeyStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, err
 	}
 	if len(generated) != 1 {
 		return nil, fmt.Errorf("remote store returned %d prekeys, want 1", len(generated))
+	}
+	if err = s.remote.MarkPreKeysUploaded(ctx, []uint32{generated[0].KeyID}); err != nil {
+		return nil, fmt.Errorf("failed to mark retry prekey as published: %w", err)
 	}
 	return generated[0], nil
 }
@@ -229,15 +255,15 @@ func (s *remotePreKeyStore) RemovePreKey(ctx context.Context, id uint32) error {
 	return fmt.Errorf("RemovePreKey(%d): %w", id, ErrRemoteSignalUnsupported)
 }
 
-// MarkPreKeysAsUploaded marks every key handed out by GetOrGenPreKeys with
-// an ID up to upToID. Prekey IDs wrap at 2^24, but one upload batch never
-// spans the wrap in practice, so a plain comparison is enough.
+// MarkPreKeysAsUploaded marks the keys of the most recent GetOrGenPreKeys
+// batch with an ID up to upToID. Prekey IDs wrap at 2^24, but one upload
+// batch never spans the wrap in practice, so a plain comparison is enough.
 func (s *remotePreKeyStore) MarkPreKeysAsUploaded(ctx context.Context, upToID uint32) error {
 	s.mu.Lock()
 	var marked []uint32
-	for _, id := range s.pending {
-		if id <= upToID {
-			marked = append(marked, id)
+	for _, key := range s.pending {
+		if _, inBatch := s.lastBatch[key.KeyID]; inBatch && key.KeyID <= upToID {
+			marked = append(marked, key.KeyID)
 		}
 	}
 	s.mu.Unlock()
@@ -247,16 +273,15 @@ func (s *remotePreKeyStore) MarkPreKeysAsUploaded(ctx context.Context, upToID ui
 	if err := s.remote.MarkPreKeysUploaded(ctx, marked); err != nil {
 		return err
 	}
-	// Remove only what was marked: a batch generated meanwhile stays pending.
 	done := make(map[uint32]struct{}, len(marked))
 	for _, id := range marked {
 		done[id] = struct{}{}
 	}
 	s.mu.Lock()
 	kept := s.pending[:0]
-	for _, id := range s.pending {
-		if _, ok := done[id]; !ok {
-			kept = append(kept, id)
+	for _, key := range s.pending {
+		if _, ok := done[key.KeyID]; !ok {
+			kept = append(kept, key)
 		}
 	}
 	s.pending = kept
@@ -323,6 +348,13 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 			cli.Log.Warnf("Remote store could not decode message %s from %s: %v", info.ID, info.SourceString(), err)
 			undecodable = true
 			continue
+		case !isDecryptErr:
+			// The remote store may never have seen the payload (outage,
+			// timeout). Neither ack nor send a retry receipt: the server
+			// redelivers the stanza, and acknowledging it could lose the
+			// message for good.
+			cli.Log.Errorf("Remote Signal store unavailable for message %s from %s: %v", info.ID, info.SourceString(), err)
+			return
 		default:
 			cli.Log.Warnf("Error decrypting message %s from %s remotely: %v", info.ID, info.SourceString(), err)
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
@@ -387,6 +419,13 @@ func (cli *Client) remoteDeviceSignature(ctx context.Context, container []byte, 
 	if len(identity.GetDeviceSignature()) != 64 {
 		return nil, fmt.Errorf("remote Signal store returned a %d-byte device signature", len(identity.GetDeviceSignature()))
 	}
+	// Check it is a valid signature by the advertised identity key over the
+	// exact message generateDeviceSignature signs.
+	message := concatBytes(AdvDeviceSignaturePrefix, verified.Details, cli.Store.IdentityKey.Pub[:], verified.AccountSignatureKey)
+	signature := *(*[64]byte)(identity.GetDeviceSignature())
+	if !ecc.VerifySignature(ecc.NewDjbECPublicKey(*cli.Store.IdentityKey.Pub), message, signature) {
+		return nil, fmt.Errorf("remote Signal store returned a device signature that does not verify")
+	}
 	return identity.GetDeviceSignature(), nil
 }
 
@@ -394,6 +433,11 @@ func (cli *Client) remoteDeviceSignature(ctx context.Context, container []byte, 
 // store re-encrypts from its own record of the message.
 func (cli *Client) handleRetryReceiptRemote(ctx context.Context, receipt *events.Receipt, node *waBinary.Node, messageID types.MessageID, retryCount int) error {
 	if !cli.acceptIncomingRetry(receipt.Sender, messageID) {
+		return nil
+	}
+	// The remote store holds the message, so the callback gets no content.
+	if cli.PreRetryCallback != nil && !cli.PreRetryCallback(receipt, messageID, retryCount, nil) {
+		cli.Log.Debugf("Cancelled retry receipt in PreRetryCallback")
 		return nil
 	}
 	req := RemoteResend{
@@ -509,4 +553,30 @@ func (cli *Client) SendPrebuiltStanza(ctx context.Context, stanza []byte, phash 
 	}
 	setParticipantHashMismatch(&resp, phash, ag.OptionalString("phash"))
 	return resp, nil
+}
+
+// forgetRemoteIdentity asks the remote store to drop identity and session
+// state for from and its PN/LID alternate, mirroring deleteIdentityChangeState.
+func (cli *Client) forgetRemoteIdentity(ctx context.Context, from types.JID) {
+	users := []types.JID{from.ToNonAD()}
+	if cli.Store.LIDs != nil {
+		var alternate types.JID
+		var err error
+		switch from.Server {
+		case types.DefaultUserServer, types.HostedServer:
+			alternate, err = cli.Store.LIDs.GetLIDForPN(ctx, types.NewJID(from.User, types.DefaultUserServer))
+		case types.HiddenUserServer, types.HostedLIDServer:
+			alternate, err = cli.Store.LIDs.GetPNForLID(ctx, types.NewJID(from.User, types.HiddenUserServer))
+		}
+		if err != nil {
+			cli.Log.Warnf("Failed to resolve alternate JID for identity change from %s: %v", from, err)
+		} else if !alternate.IsEmpty() {
+			users = append(users, alternate.ToNonAD())
+		}
+	}
+	for _, user := range users {
+		if err := cli.remoteSignal.ForgetIdentity(ctx, user); err != nil {
+			cli.Log.Warnf("Remote Signal store failed to forget identity of %s: %v", user, err)
+		}
+	}
 }
