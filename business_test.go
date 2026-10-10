@@ -811,8 +811,8 @@ func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	button := buttons.GetButtonsMessage().GetButtons()[0]
-	if button.GetType() != waE2E.ButtonsMessage_Button_NATIVE_FLOW || button.GetNativeFlowInfo().GetName() != "cta_url" {
+	button := buttons.GetInteractiveMessage().GetNativeFlowMessage().GetButtons()[0]
+	if buttons.GetButtonsMessage() != nil || buttons.GetInteractiveMessage().GetNativeFlowMessage().GetMessageVersion() != 1 || button.GetName() != "cta_url" {
 		t.Fatalf("unexpected native-flow button: %#v", button)
 	}
 }
@@ -1162,9 +1162,9 @@ func TestBusinessProductListAndNativeFlowTextLimits(t *testing.T) {
 		Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: `{}`}},
 	}
 	nativeMutations := map[string]func(*BusinessNativeFlowButtonsMessageParams){
-		"header": func(params *BusinessNativeFlowButtonsMessageParams) { params.Title = strings.Repeat("h", 61) },
-		"body":   func(params *BusinessNativeFlowButtonsMessageParams) { params.Body = strings.Repeat("b", 1025) },
-		"footer": func(params *BusinessNativeFlowButtonsMessageParams) { params.Footer = strings.Repeat("f", 61) },
+		"header": func(params *BusinessNativeFlowButtonsMessageParams) { params.Title = strings.Repeat("h", 257) },
+		"body":   func(params *BusinessNativeFlowButtonsMessageParams) { params.Body = strings.Repeat("b", 4097) },
+		"footer": func(params *BusinessNativeFlowButtonsMessageParams) { params.Footer = strings.Repeat("f", 257) },
 	}
 	for name, mutate := range nativeMutations {
 		t.Run("native flow "+name, func(t *testing.T) {
@@ -1851,5 +1851,42 @@ func TestBusinessCoverPhotoValidationAndNodes(t *testing.T) {
 	}
 	if _, err = buildBusinessCoverPhotoDeleteNode(""); err == nil {
 		t.Fatal("expected empty cover ID error")
+	}
+}
+
+func TestNativeButtonsWebConstraintsAndBusinessMetadata(t *testing.T) {
+	reply := BusinessNativeFlowButton{Name: "quick_reply", ParamsJSON: `{"display_text":"Reply","id":"synthetic"}`}
+	url := BusinessNativeFlowButton{Name: "cta_url", ParamsJSON: `{"display_text":"Open","url":"https://example.com"}`}
+	copyButton := BusinessNativeFlowButton{Name: "cta_copy", ParamsJSON: `{"display_text":"Copy","copy_code":"synthetic"}`}
+	for _, tc := range []struct {
+		name     string
+		buttons  []BusinessNativeFlowButton
+		valid    bool
+		flowName string
+	}{
+		{"ten replies", []BusinessNativeFlowButton{reply, reply, reply, reply, reply, reply, reply, reply, reply, reply}, true, "quick_reply"},
+		{"eleven replies", []BusinessNativeFlowButton{reply, reply, reply, reply, reply, reply, reply, reply, reply, reply, reply}, false, ""},
+		{"three CTA", []BusinessNativeFlowButton{url, copyButton, url}, true, "mixed"},
+		{"four CTA", []BusinessNativeFlowButton{url, url, url, url}, false, ""},
+		{"reply with CTA", []BusinessNativeFlowButton{reply, url}, false, ""},
+		{"unsupported name", []BusinessNativeFlowButton{{Name: "unsupported", ParamsJSON: `{}`}}, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{Body: "Choose", Buttons: tc.buttons})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+			if err != nil {
+				return
+			}
+			if got := getButtonTypeFromMessage(msg); got != "native_flow" {
+				t.Fatalf("transport kind=%s", got)
+			}
+			biz := buildNativeFlowBizNode(msg, 1)
+			interactive := biz.GetChildren()[0]
+			if interactive.Attrs["type"] != "native_flow" || interactive.GetChildren()[0].Attrs["name"] != tc.flowName {
+				t.Fatalf("wrong business metadata: %#v", biz)
+			}
+		})
 	}
 }
