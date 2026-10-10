@@ -330,6 +330,36 @@ func (cli *Client) handlePlaintextMessage(ctx context.Context, info *types.Messa
 	return cli.dispatchEvent(evt.UnwrapRaw())
 }
 
+// notifyDecryptedPayload hands one plaintext to [Client.DecryptedPayloadHandler].
+//
+// Called from both the path where the library goes on to interpret the
+// plaintext and the path where something between Signal and that interpretation
+// refused it, because the hook promises the bytes in either case.
+//
+// Both call sites test the handler themselves before calling. That reads like
+// a duplicate of the test below and is not: this function misses the inliner
+// by a point (cost 81, budget 80), so without the outer test an unset hook
+// pays a call per <enc> instead of a compare. The test stays here too because
+// nothing about the signature says the caller has to make it.
+func (cli *Client) notifyDecryptedPayload(
+	ctx context.Context,
+	info *types.MessageInfo,
+	node *waBinary.Node,
+	childIndex int,
+	encType string,
+	plaintext []byte,
+) {
+	if h := cli.DecryptedPayloadHandler; h != nil {
+		h(ctx, DecryptedPayload{
+			Info:       info,
+			Node:       node,
+			ChildIndex: childIndex,
+			EncType:    encType,
+			Plaintext:  plaintext,
+		})
+	}
+}
+
 func (cli *Client) migrateSessionStore(ctx context.Context, pn, lid types.JID) {
 	err := cli.Store.Sessions.MigratePNToLID(ctx, pn, lid)
 	if err != nil {
@@ -382,7 +412,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		}
 	}
 	var recognizedStanza, protobufFailed bool
-	for _, child := range children {
+	for childIndex, child := range children {
 		if child.Tag != "enc" {
 			continue
 		}
@@ -438,6 +468,13 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			cli.Log.Warnf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
 		} else if err != nil {
+			// A non-nil plaintext here means Signal succeeded and something
+			// after it refused the result, so this is the last moment those
+			// bytes exist. Handing them over is the whole reason the hook is
+			// not simply placed on the success path.
+			if decrypted != nil && cli.DecryptedPayloadHandler != nil {
+				cli.notifyDecryptedPayload(ctx, info, node, childIndex, encType, decrypted)
+			}
 			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 				return
@@ -463,7 +500,17 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			return
 		}
 		retryCount := ag.OptionalInt("count")
+		// Cancelled before the hook runs: a handler that blocks would
+		// otherwise let the pending phone rerequest fire for a message that
+		// did arrive and did decrypt.
 		cli.cancelDelayedRequestFromPhone(info.ID)
+
+		// Before anything reads the plaintext, including the protobuf
+		// unmarshal below: decryption already advanced the ratchet, so a
+		// payload this library cannot interpret is one nobody can recover.
+		if cli.DecryptedPayloadHandler != nil {
+			cli.notifyDecryptedPayload(ctx, info, node, childIndex, encType, decrypted)
+		}
 
 		var msg waE2E.Message
 		var handlerFailed bool
@@ -643,10 +690,15 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 			return nil, nil, fmt.Errorf("failed to decrypt normal message: %w", err)
 		}
 	}
+	// The raw Signal output is returned alongside the error when unpadding
+	// rejects it. The ratchet has already advanced at this point, so those
+	// bytes are the only copy that will ever exist; discarding them here
+	// would put them out of reach of [Client.DecryptedPayloadHandler].
+	raw := plaintext
 	var err error
-	plaintext, err = unpadMessage(plaintext, child.AttrGetter().Int("v"))
+	plaintext, err = unpadMessage(raw, child.AttrGetter().Int("v"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unpad message: %w", err)
+		return raw, &ciphertextHash, fmt.Errorf("failed to unpad message: %w", err)
 	}
 	return plaintext, &ciphertextHash, nil
 }
@@ -670,9 +722,11 @@ func (cli *Client) decryptGroupMsg(ctx context.Context, child *waBinary.Node, fr
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to decrypt group message: %w", err)
 	}
-	plaintext, err = unpadMessage(plaintext, child.AttrGetter().Int("v"))
+	// Returned alongside the error for the same reason as in decryptDM.
+	raw := plaintext
+	plaintext, err = unpadMessage(raw, child.AttrGetter().Int("v"))
 	if err != nil {
-		return nil, nil, err
+		return raw, &ciphertextHash, err
 	}
 	return plaintext, &ciphertextHash, nil
 }
