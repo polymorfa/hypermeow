@@ -1643,6 +1643,22 @@ type BusinessNativeFlowButtonsMessageParams struct {
 	ContextInfo *waE2E.ContextInfo
 }
 
+// BusinessCarouselCard carries already uploaded image or video media and native controls.
+// Exactly one media field must be set; reply IDs must be unique across the carousel.
+type BusinessCarouselCard struct {
+	Body    string
+	Image   *waE2E.ImageMessage
+	Video   *waE2E.VideoMessage
+	Buttons []BusinessNativeFlowButton
+}
+
+type BusinessCarouselMessageParams struct {
+	Body        string
+	Footer      string
+	Cards       []BusinessCarouselCard
+	ContextInfo *waE2E.ContextInfo
+}
+
 type BusinessAddressMessageParams struct {
 	Body        string
 	ButtonText  string
@@ -1900,6 +1916,55 @@ func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessa
 		message.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(params.Footer)}
 	}
 	return &waE2E.Message{InteractiveMessage: message}, nil
+}
+
+// BuildBusinessCarouselMessage builds one bounded Linked Devices carousel.
+// The shipped Web parser accepts more cards; this sender deliberately allows 2–10.
+func BuildBusinessCarouselMessage(params BusinessCarouselMessageParams) (*waE2E.Message, error) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 4096) || !bounded(params.Footer, 256) {
+		return nil, errors.New("invalid business carousel text")
+	}
+	if len(params.Cards) < 2 || len(params.Cards) > 10 {
+		return nil, errors.New("business carousel must contain 2 to 10 cards")
+	}
+	cards := make([]*waE2E.InteractiveMessage, len(params.Cards))
+	replyIDs := make(map[string]struct{})
+	for i, card := range params.Cards {
+		if (card.Image == nil) == (card.Video == nil) {
+			return nil, fmt.Errorf("carousel card %d requires exactly one image or video", i)
+		}
+		msg, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{Body: card.Body, Buttons: card.Buttons})
+		if err != nil {
+			return nil, fmt.Errorf("carousel card %d: %w", i, err)
+		}
+		for _, button := range card.Buttons {
+			if button.Name == "quick_reply" {
+				var fields struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(button.ParamsJSON), &fields); err != nil || strings.TrimSpace(fields.ID) == "" || !bounded(fields.ID, 256) {
+					return nil, fmt.Errorf("carousel card %d has an invalid reply ID", i)
+				}
+				if _, exists := replyIDs[fields.ID]; exists {
+					return nil, errors.New("carousel reply IDs must be unique")
+				}
+				replyIDs[fields.ID] = struct{}{}
+			}
+		}
+		interactive := msg.InteractiveMessage
+		interactive.Header = &waE2E.InteractiveMessage_Header{HasMediaAttachment: proto.Bool(true)}
+		if card.Image != nil {
+			interactive.Header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{ImageMessage: card.Image}
+		} else {
+			interactive.Header.Media = &waE2E.InteractiveMessage_Header_VideoMessage{VideoMessage: card.Video}
+		}
+		cards[i] = interactive
+	}
+	interactive := &waE2E.InteractiveMessage{Body: &waE2E.InteractiveMessage_Body{Text: proto.String(params.Body)}, ContextInfo: params.ContextInfo, InteractiveMessage: &waE2E.InteractiveMessage_CarouselMessage_{CarouselMessage: &waE2E.InteractiveMessage_CarouselMessage{Cards: cards, MessageVersion: proto.Int32(1)}}}
+	if params.Footer != "" {
+		interactive.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(params.Footer)}
+	}
+	return &waE2E.Message{InteractiveMessage: interactive}, nil
 }
 
 func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Message, error) {
