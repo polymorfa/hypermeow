@@ -236,6 +236,12 @@ type Client struct {
 	// client (see [NewShadowClient]): it has no socket, Connect is guarded,
 	// and outbound nodes plus Signal/keying oracle ops are delegated here.
 	shadowRelay ShadowRelay
+	// remoteSignal holds this device's Signal keys when they live outside
+	// the client; see NewRemoteSignalClient.
+	remoteSignal RemoteSignal
+	// testSendHook captures marshaled outbound nodes when there is no
+	// socket. Only tests set it.
+	testSendHook func(payload []byte) error
 
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
@@ -1063,6 +1069,13 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 			}
 			cli.sendLog.Debugf("%s", &node)
 			return payload, cli.shadowRelay.SendNode(ctx, payload)
+		}
+		if cli.testSendHook != nil {
+			payload, err := waBinary.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal node: %w", err)
+			}
+			return payload, cli.testSendHook(payload)
 		}
 		return nil, ErrNotConnected
 	}

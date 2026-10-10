@@ -195,6 +195,12 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		err = ErrClientIsNil
 		return
 	}
+	if cli.isRemoteSignal() {
+		// The remote Signal store builds and encrypts outgoing stanzas; this
+		// client only transmits them.
+		err = fmt.Errorf("SendMessage: %w; use SendPrebuiltStanza", ErrRemoteSignalUnsupported)
+		return
+	}
 	var req SendRequestExtra
 	if len(extra) > 1 {
 		err = errors.New("only one extra parameter may be provided to SendMessage")

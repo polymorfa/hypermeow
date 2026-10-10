@@ -381,6 +381,10 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			info.SenderAlt = lid
 		}
 	}
+	if cli.isRemoteSignal() {
+		cli.decryptMessagesRemote(ctx, info, node, senderEncryptionJID)
+		return
+	}
 	var recognizedStanza, protobufFailed bool
 	for _, child := range children {
 		if child.Tag != "enc" {
