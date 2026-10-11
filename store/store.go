@@ -265,8 +265,12 @@ type Device struct {
 
 	FacebookUUID uuid.UUID
 
-	Initialized   bool
-	Deleted       bool
+	Initialized bool
+	Deleted     bool
+	// RemoteKeys marks a device whose Signal private keys live outside this
+	// process. Its private key fields are zero and must never be used; the
+	// local Signal store panics instead of computing with them.
+	RemoteKeys    bool
 	Identities    IdentityStore
 	Sessions      SessionStore
 	PreKeys       PreKeyStore

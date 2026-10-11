@@ -228,6 +228,30 @@ func (cli *Client) tryHandleRetryReceipt(ctx context.Context, receipt *events.Re
 }
 
 // handleRetryReceipt handles an incoming retry receipt for an outgoing message.
+// acceptIncomingRetry counts a retry request from sender for messageID and
+// reports whether it is still within the limits.
+func (cli *Client) acceptIncomingRetry(sender types.JID, messageID types.MessageID) bool {
+	retryKey := incomingRetryKey{sender, messageID}
+	cli.incomingRetryRequestCounterLock.Lock()
+	internalCounter, accepted := incrementBoundedCounter(
+		ensureMap(&cli.incomingRetryRequestCounter),
+		retryKey,
+		maxIncomingRetryEntries,
+		&cli.incomingRetryRequestCounterReset,
+		time.Now(),
+	)
+	cli.incomingRetryRequestCounterLock.Unlock()
+	if !accepted {
+		cli.Log.Warnf("Dropping retry request from %s for %s: retry counter capacity reached", messageID, sender)
+		return false
+	}
+	if internalCounter >= 10 {
+		cli.Log.Warnf("Dropping retry request from %s for %s: internal retry counter is %d", messageID, sender, internalCounter)
+		return false
+	}
+	return true
+}
+
 func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Receipt, node *waBinary.Node) error {
 	if cli.isShadow() && receipt.IsGroup {
 		return ErrShadowGroupUnsupported
@@ -242,6 +266,11 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 	retryCount := ag.Int("count")
 	if !ag.OK() {
 		return ag.Error()
+	}
+	if cli.isRemoteSignal() {
+		// The remote store keeps the sent message; this client never had
+		// its plaintext.
+		return cli.handleRetryReceiptRemote(ctx, receipt, node, messageID, retryCount)
 	}
 	msg, err := cli.getMessageForRetry(ctx, receipt, messageID)
 	if err != nil {
@@ -263,22 +292,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 		}
 	}
 
-	retryKey := incomingRetryKey{receipt.Sender, messageID}
-	cli.incomingRetryRequestCounterLock.Lock()
-	internalCounter, accepted := incrementBoundedCounter(
-		ensureMap(&cli.incomingRetryRequestCounter),
-		retryKey,
-		maxIncomingRetryEntries,
-		&cli.incomingRetryRequestCounterReset,
-		time.Now(),
-	)
-	cli.incomingRetryRequestCounterLock.Unlock()
-	if !accepted {
-		cli.Log.Warnf("Dropping retry request from %s for %s: retry counter capacity reached", messageID, receipt.Sender)
-		return nil
-	}
-	if internalCounter >= 10 {
-		cli.Log.Warnf("Dropping retry request from %s for %s: internal retry counter is %d", messageID, receipt.Sender, internalCounter)
+	if !cli.acceptIncomingRetry(receipt.Sender, messageID) {
 		return nil
 	}
 

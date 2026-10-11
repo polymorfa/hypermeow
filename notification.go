@@ -64,6 +64,10 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 }
 
 func (cli *Client) deleteIdentityChangeState(ctx context.Context, from types.JID) {
+	if cli.isRemoteSignal() {
+		cli.forgetRemoteIdentity(ctx, from)
+		return
+	}
 	users := identityChangeSignalUsers(from)
 	if cli.Store.LIDs != nil {
 		var alternate types.JID

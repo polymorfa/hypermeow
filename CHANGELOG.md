@@ -17,6 +17,10 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 - `events.Message.UnwrapRaw` opens `AssociatedChildMessage`, as WhatsApp Web opens it as a future-proof wrapper, and sets the new `IsAssociatedChild` flag. The wrapper's `MessageContextInfo` (including `messageAssociation` and its parent key) is overlaid onto the child's context field by field, wrapper fields winning, as WhatsApp Web does; `RawMessage` is left unmodified. Consumers that inspected `Message.AssociatedChildMessage` after unwrapping must check `IsAssociatedChild` or `RawMessage` instead.
 
+### Added
+
+- Added remote Signal keys: `NewRemoteSignalClient` runs a linked device whose Signal private keys, sessions and message plaintext live in an external store reached through `RemoteSignal`. The client keeps its socket, receipts, retry receipts, prekey uploads and QR pairing, hands each received payload to the store, receives only delivery metadata (`events.RemoteMessage`), and transmits stanzas the store built with `SendPrebuiltStanza`. The store also handles identity changes (`ForgetIdentity`) and phone-number-to-LID session moves (`MigratePNToLID`). Pair-code pairing, local `SendMessage` and `SendFBMessage` return `ErrRemoteSignalUnsupported` for such clients, and `PreRetryCallback` receives a nil message.
+
 ### Documentation
 
 - Added an evidence-backed comparison with upstream WhatsMeow.
