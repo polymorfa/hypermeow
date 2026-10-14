@@ -1,7 +1,10 @@
 package whatsmeow
 
 import (
+	"bytes"
 	"testing"
+
+	waBinary "github.com/polymorfa/hypermeow/binary"
 
 	"google.golang.org/protobuf/proto"
 
@@ -45,6 +48,26 @@ func TestHydratedMixedButtonsRoundTrip(t *testing.T) {
 	} {
 		if _, err := BuildBusinessHydratedButtonsMessage(bad); err == nil {
 			t.Fatal("invalid hydrated button message accepted")
+		}
+	}
+}
+
+func TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims(t *testing.T) {
+	message, err := BuildBusinessHydratedButtonsMessage(BusinessHydratedButtonsMessageParams{Body: "Offer", Buttons: []BusinessNativeFlowButton{{Name: "quick_reply", ParamsJSON: `{"display_text":"Reply","id":"stable"}`}, {Name: "cta_url", ParamsJSON: `{"display_text":"Open","url":"https://example.com"}`}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext := []byte("opaque encrypted payload")
+	content := (&Client{}).getMessageContent(waBinary.Node{Tag: "enc", Content: ciphertext}, message, nil, false, nodeExtraParams{})
+	if len(content) != 3 || content[0].Tag != "enc" || content[1].Tag != "biz" || content[2].Tag != "hsm" {
+		t.Fatal("missing root format envelope")
+	}
+	if !bytes.Equal(content[0].Content.([]byte), ciphertext) {
+		t.Fatal("ciphertext changed")
+	}
+	for _, node := range content[1:] {
+		if len(node.Attrs) != 0 || node.Content != nil {
+			t.Fatal("format metadata asserted provider approval or identity")
 		}
 	}
 }
