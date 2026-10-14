@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
 func carouselCard(index int, video bool) BusinessCarouselCard {
