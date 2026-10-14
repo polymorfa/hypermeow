@@ -811,8 +811,8 @@ func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	button := buttons.GetButtonsMessage().GetButtons()[0]
-	if button.GetType() != waE2E.ButtonsMessage_Button_NATIVE_FLOW || button.GetNativeFlowInfo().GetName() != "cta_url" {
+	button := buttons.GetInteractiveMessage().GetNativeFlowMessage().GetButtons()[0]
+	if buttons.GetButtonsMessage() != nil || buttons.GetInteractiveMessage().GetNativeFlowMessage().GetMessageVersion() != 1 || button.GetName() != "cta_url" {
 		t.Fatalf("unexpected native-flow button: %#v", button)
 	}
 }
@@ -855,13 +855,25 @@ func TestBuildBusinessListRequiresBodyAndCapsRows(t *testing.T) {
 	if _, err := BuildBusinessListMessage(missingBody); err == nil {
 		t.Fatal("list without a body unexpectedly passed")
 	}
+	thirtyRows := valid
+	thirtyRows.Title = strings.Repeat("t", 256)
+	thirtyRows.Description = strings.Repeat("b", 4096)
+	thirtyRows.ButtonText = strings.Repeat("v", 64)
+	thirtyRows.Footer = strings.Repeat("f", 256)
+	thirtyRows.Sections = []BusinessListSection{{Title: strings.Repeat("s", 256), Rows: make([]BusinessListRow, 30)}}
+	for index := range thirtyRows.Sections[0].Rows {
+		thirtyRows.Sections[0].Rows[index] = BusinessListRow{ID: fmt.Sprintf("row-%d", index), Title: strings.Repeat("r", 256), Description: strings.Repeat("d", 1024)}
+	}
+	if message, err := BuildBusinessListMessage(thirtyRows); err != nil || len(message.GetListMessage().GetSections()[0].GetRows()) != 30 {
+		t.Fatalf("thirty-row native list at API bounds failed: %v", err)
+	}
 	tooManyRows := valid
-	tooManyRows.Sections[0].Rows = make([]BusinessListRow, 11)
+	tooManyRows.Sections[0].Rows = make([]BusinessListRow, 31)
 	for index := range tooManyRows.Sections[0].Rows {
 		tooManyRows.Sections[0].Rows[index] = BusinessListRow{ID: fmt.Sprintf("row-%d", index), Title: "Row"}
 	}
 	if _, err := BuildBusinessListMessage(tooManyRows); err == nil {
-		t.Fatal("list with more than ten rows unexpectedly passed")
+		t.Fatal("list with more than thirty rows unexpectedly passed")
 	}
 }
 
@@ -1162,9 +1174,9 @@ func TestBusinessProductListAndNativeFlowTextLimits(t *testing.T) {
 		Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: `{}`}},
 	}
 	nativeMutations := map[string]func(*BusinessNativeFlowButtonsMessageParams){
-		"header": func(params *BusinessNativeFlowButtonsMessageParams) { params.Title = strings.Repeat("h", 61) },
-		"body":   func(params *BusinessNativeFlowButtonsMessageParams) { params.Body = strings.Repeat("b", 1025) },
-		"footer": func(params *BusinessNativeFlowButtonsMessageParams) { params.Footer = strings.Repeat("f", 61) },
+		"header": func(params *BusinessNativeFlowButtonsMessageParams) { params.Title = strings.Repeat("h", 257) },
+		"body":   func(params *BusinessNativeFlowButtonsMessageParams) { params.Body = strings.Repeat("b", 4097) },
+		"footer": func(params *BusinessNativeFlowButtonsMessageParams) { params.Footer = strings.Repeat("f", 257) },
 	}
 	for name, mutate := range nativeMutations {
 		t.Run("native flow "+name, func(t *testing.T) {
@@ -1183,15 +1195,15 @@ func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
 		Sections: []BusinessListSection{{Title: "Section", Rows: []BusinessListRow{{ID: "one", Title: "One", Description: "Description"}}}},
 	}
 	mutations := map[string]func(*BusinessListMessageParams){
-		"header":        func(params *BusinessListMessageParams) { params.Title = strings.Repeat("h", 61) },
-		"body":          func(params *BusinessListMessageParams) { params.Description = strings.Repeat("b", 1025) },
-		"button":        func(params *BusinessListMessageParams) { params.ButtonText = strings.Repeat("c", 21) },
-		"footer":        func(params *BusinessListMessageParams) { params.Footer = strings.Repeat("f", 61) },
-		"section title": func(params *BusinessListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 25) },
-		"row ID":        func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].ID = strings.Repeat("i", 201) },
-		"row title":     func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].Title = strings.Repeat("r", 25) },
+		"header":        func(params *BusinessListMessageParams) { params.Title = strings.Repeat("h", 257) },
+		"body":          func(params *BusinessListMessageParams) { params.Description = strings.Repeat("b", 4097) },
+		"button":        func(params *BusinessListMessageParams) { params.ButtonText = strings.Repeat("c", 65) },
+		"footer":        func(params *BusinessListMessageParams) { params.Footer = strings.Repeat("f", 257) },
+		"section title": func(params *BusinessListMessageParams) { params.Sections[0].Title = strings.Repeat("s", 257) },
+		"row ID":        func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].ID = strings.Repeat("i", 257) },
+		"row title":     func(params *BusinessListMessageParams) { params.Sections[0].Rows[0].Title = strings.Repeat("r", 257) },
 		"row description": func(params *BusinessListMessageParams) {
-			params.Sections[0].Rows[0].Description = strings.Repeat("d", 73)
+			params.Sections[0].Rows[0].Description = strings.Repeat("d", 1025)
 		},
 	}
 	for name, mutate := range mutations {
@@ -1209,8 +1221,8 @@ func TestBusinessListMessageEnforcesProtocolTextLimits(t *testing.T) {
 		{Rows: []BusinessListRow{{ID: "one", Title: "One"}}},
 		{Title: "Second", Rows: []BusinessListRow{{ID: "two", Title: "Two"}}},
 	}
-	if _, err := BuildBusinessListMessage(multipleSections); err == nil {
-		t.Fatal("multiple sections with an empty title unexpectedly passed")
+	if _, err := BuildBusinessListMessage(multipleSections); err != nil {
+		t.Fatalf("native list optional section title failed: %v", err)
 	}
 }
 
@@ -1851,5 +1863,42 @@ func TestBusinessCoverPhotoValidationAndNodes(t *testing.T) {
 	}
 	if _, err = buildBusinessCoverPhotoDeleteNode(""); err == nil {
 		t.Fatal("expected empty cover ID error")
+	}
+}
+
+func TestNativeButtonsWebConstraintsAndBusinessMetadata(t *testing.T) {
+	reply := BusinessNativeFlowButton{Name: "quick_reply", ParamsJSON: `{"display_text":"Reply","id":"synthetic"}`}
+	url := BusinessNativeFlowButton{Name: "cta_url", ParamsJSON: `{"display_text":"Open","url":"https://example.com"}`}
+	copyButton := BusinessNativeFlowButton{Name: "cta_copy", ParamsJSON: `{"display_text":"Copy","copy_code":"synthetic"}`}
+	for _, tc := range []struct {
+		name     string
+		buttons  []BusinessNativeFlowButton
+		valid    bool
+		flowName string
+	}{
+		{"ten replies", []BusinessNativeFlowButton{reply, reply, reply, reply, reply, reply, reply, reply, reply, reply}, true, "quick_reply"},
+		{"eleven replies", []BusinessNativeFlowButton{reply, reply, reply, reply, reply, reply, reply, reply, reply, reply, reply}, false, ""},
+		{"three CTA", []BusinessNativeFlowButton{url, copyButton, url}, true, "mixed"},
+		{"four CTA", []BusinessNativeFlowButton{url, url, url, url}, false, ""},
+		{"reply with CTA", []BusinessNativeFlowButton{reply, url}, false, ""},
+		{"unsupported name", []BusinessNativeFlowButton{{Name: "unsupported", ParamsJSON: `{}`}}, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{Body: "Choose", Buttons: tc.buttons})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+			if err != nil {
+				return
+			}
+			if got := getButtonTypeFromMessage(msg); got != "native_flow" {
+				t.Fatalf("transport kind=%s", got)
+			}
+			biz := buildNativeFlowBizNode(msg, 1)
+			interactive := biz.GetChildren()[0]
+			if interactive.Attrs["type"] != "native_flow" || interactive.GetChildren()[0].Attrs["name"] != tc.flowName {
+				t.Fatalf("wrong business metadata: %#v", biz)
+			}
+		})
 	}
 }
