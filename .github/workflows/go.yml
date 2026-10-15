@@ -31,9 +31,11 @@ jobs:
     - name: Test
       run: go test -v ./...
 
+    # Pinned: golang.org/x/tools v0.50.0 and later require Go 1.26, which
+    # breaks the Go 1.25 job. v0.49.0 is the newest release on Go 1.25.
     - name: Install goimports
       run: |
-        go install golang.org/x/tools/cmd/goimports@latest
+        go install golang.org/x/tools/cmd/goimports@v0.49.0
         export PATH="$HOME/go/bin:$PATH"
 
     - name: Run pre-commit

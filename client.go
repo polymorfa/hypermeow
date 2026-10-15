@@ -163,9 +163,11 @@ type Client struct {
 	// closed switch) lets a headless shadow Client dispatch injected nodes
 	// synchronously and lets embedders that reach for it via reflection keep
 	// working.
-	nodeHandlers      map[string]nodeHandler
-	eventHandlers     []wrappedEventHandler
-	eventHandlersLock sync.RWMutex
+	nodeHandlers                map[string]nodeHandler
+	eventHandlers               []wrappedEventHandler
+	eventHandlersLock           sync.RWMutex
+	connectionEventHandlers     []wrappedConnectionEventHandler
+	connectionEventHandlersLock sync.Mutex
 
 	messageRetries      map[string]int
 	messageRetriesLock  sync.Mutex
@@ -208,6 +210,8 @@ type Client struct {
 	GetMessageForRetry func(requester, to types.JID, id types.MessageID) *waE2E.Message
 	// PreRetryCallback is called before a retry receipt is accepted.
 	// If it returns false, the accepting will be cancelled and the retry receipt will be ignored.
+	// On a client from NewRemoteSignalClient, msg is always nil: the remote
+	// Signal store keeps sent messages and this client never has their content.
 	PreRetryCallback func(receipt *events.Receipt, id types.MessageID, retryCount int, msg *waE2E.Message) bool
 	// Should whatsmeow store recently sent messages in the database so that retry receipts can be accepted
 	// even if the process is restarted? If false, only the in-memory cache and GetMessageForRetry will be used.
@@ -236,6 +240,15 @@ type Client struct {
 	// client (see [NewShadowClient]): it has no socket, Connect is guarded,
 	// and outbound nodes plus Signal/keying oracle ops are delegated here.
 	shadowRelay ShadowRelay
+	// remoteSignal holds this device's Signal keys when they live outside
+	// the client; see NewRemoteSignalClient.
+	remoteSignal RemoteSignal
+	// remoteMigratedPN records phone-number users whose Signal state the
+	// remote store has already moved to their LID.
+	remoteMigratedPN sync.Map
+	// testSendHook captures marshaled outbound nodes when there is no
+	// socket. Only tests set it.
+	testSendHook func(payload []byte) error
 
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
@@ -582,7 +595,7 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 	err := cli.unlockedConnect(ctx)
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
-		go cli.dispatchEvent(&events.Disconnected{})
+		go cli.dispatchConnectionEvent(ctx, &events.Disconnected{})
 		go cli.autoReconnect(ctx)
 		return nil
 	}
@@ -662,7 +675,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 		cli.clearResponseWaiters(xmlStreamEndNode)
 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
 			cli.Log.Debugf("Emitting Disconnected event")
-			go cli.dispatchEvent(&events.Disconnected{})
+			go cli.dispatchConnectionEvent(ctx, &events.Disconnected{})
 			go cli.autoReconnect(ctx)
 		} else if remote {
 			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
@@ -1063,6 +1076,13 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 			}
 			cli.sendLog.Debugf("%s", &node)
 			return payload, cli.shadowRelay.SendNode(ctx, payload)
+		}
+		if cli.testSendHook != nil {
+			payload, err := waBinary.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal node: %w", err)
+			}
+			return payload, cli.testSendHook(payload)
 		}
 		return nil, ErrNotConnected
 	}

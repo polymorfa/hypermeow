@@ -288,6 +288,19 @@ const (
 	UnavailableTypeViewOnce UnavailableType = "view_once"
 )
 
+// RemoteMessage is emitted by a client whose Signal keys are remote (see
+// whatsmeow.NewRemoteSignalClient) when a message payload was handed to the
+// remote store. The remote store delivers the content to the application; this
+// event carries only delivery metadata.
+type RemoteMessage struct {
+	Info types.MessageInfo
+	// Redelivered means the remote store served the payload from its buffer.
+	Redelivered bool
+	// SenderKeyRejected means a sender-key distribution in the message could
+	// not be stored.
+	SenderKeyRejected bool
+}
+
 // UndecryptableMessage is emitted when receiving a new message that failed to decrypt.
 //
 // The library will automatically ask the sender to retry. If the sender resends the message,
