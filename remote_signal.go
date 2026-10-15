@@ -77,6 +77,11 @@ type RemoteIdentity struct {
 
 // RemoteReceive is one `<enc>` payload of a received message.
 type RemoteReceive struct {
+	// Timestamp is the provider message time; a missing value remains zero.
+	Timestamp time.Time
+	// SenderAlt is the other provider address when Sender is normalized for
+	// Signal encryption (for example, PN when Sender is a LID).
+	SenderAlt      types.JID
 	Chat           types.JID
 	Sender         types.JID
 	MessageID      types.MessageID
@@ -332,7 +337,16 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 			cli.Log.Warnf("Encrypted payload from %s is not a byte slice", info.SourceString())
 			continue
 		}
+		senderAlt := info.SenderAlt
+		// The encryption address can be the alternate LID of a PN-addressed
+		// stanza. Keep the PN as its counterpart instead of forwarding the
+		// same LID as both sender fields.
+		if senderEncryptionJID == info.SenderAlt && senderEncryptionJID != info.Sender {
+			senderAlt = info.Sender
+		}
 		result, err := cli.remoteSignal.Receive(ctx, RemoteReceive{
+			Timestamp:      info.Timestamp,
+			SenderAlt:      senderAlt,
 			Chat:           info.Chat,
 			Sender:         senderEncryptionJID,
 			MessageID:      info.ID,
