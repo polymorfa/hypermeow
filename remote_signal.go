@@ -42,7 +42,16 @@ type RemoteSignal interface {
 	// GeneratePreKeys creates one-time prekeys. Only public halves and IDs
 	// are returned; private halves stay remote.
 	GeneratePreKeys(ctx context.Context, count uint32) ([]*keys.PreKey, error)
-	// MarkPreKeysUploaded records that these prekeys reached the server.
+	// PreparePreKeyUpload durably prepares a public upload batch. count is
+	// only the allocation size when no live pending batch exists: an existing
+	// batch is returned in full, in its original order, without topping up.
+	PreparePreKeyUpload(ctx context.Context, count uint32) (*RemotePreKeyUploadBatch, error)
+	// AcknowledgePreKeyUpload atomically acknowledges all surviving keys in
+	// the prepared batch after the upload IQ succeeds. Exact ACKs are replayable
+	// after a lost response; consumed original members may remain in ids.
+	AcknowledgePreKeyUpload(ctx context.Context, batchID string, ids []uint32) error
+	// MarkPreKeysUploaded marks fresh retry-receipt keys only. Prepared upload
+	// batches require AcknowledgePreKeyUpload and must never use this operation.
 	MarkPreKeysUploaded(ctx context.Context, ids []uint32) error
 	// UploadedPreKeyCount reports how many uploaded prekeys remain unused.
 	UploadedPreKeyCount(ctx context.Context) (int, error)
@@ -61,6 +70,15 @@ type RemoteSignal interface {
 	// user's devices, including hosted devices, to the user's LID. Calling it
 	// again after a successful migration is a no-op.
 	MigratePNToLID(ctx context.Context, pn, lid types.JID) error
+}
+
+// RemotePreKeyUploadBatch contains only public one-time prekeys and an opaque
+// durable batch token. Private halves and pending records stay in the remote
+// store. A batch contains 1..812 unique IDs in 1..0xFFFFFF; BatchID is a
+// 32-character lowercase hexadecimal token, never an ordering key.
+type RemotePreKeyUploadBatch struct {
+	BatchID string
+	PreKeys []*keys.PreKey
 }
 
 // RemoteIdentity is the public material a remote-keyed device registers with.
@@ -204,45 +222,80 @@ type remotePreKeyStore struct {
 	remote RemoteSignal
 
 	mu sync.Mutex
-	// pending holds keys handed out for upload but not yet marked uploaded,
-	// oldest first. A failed upload leaves them here to be offered again.
-	pending []*keys.PreKey
-	// lastBatch is the set GetOrGenPreKeys returned most recently, the only
-	// keys MarkPreKeysAsUploaded may mark.
-	lastBatch map[uint32]struct{}
+	// The ACK authority is captured before returning mutable public key objects
+	// to callers. It never relies on their pointers or numeric ID ordering.
+	batchID string
+	ids     []uint32
+	// awaitingACK means the IQ succeeded and an ACK was attempted. Resolve that
+	// exact receipt before preparing another batch if its response was lost.
+	awaitingACK bool
 }
 
 var _ store.PreKeyStore = (*remotePreKeyStore)(nil)
 
-// GetOrGenPreKeys returns still-unuploaded keys first and generates only the
-// rest, as the SQL store does, so a failed upload never strands a batch.
+// GetOrGenPreKeys returns the complete durable pending batch. A process restart
+// or a changed requested count cannot truncate it or allocate a fresh top-up.
 func (s *remotePreKeyStore) GetOrGenPreKeys(ctx context.Context, count uint32) ([]*keys.PreKey, error) {
+	if count == 0 || count > 812 {
+		return nil, errors.New("remote prekey upload count must be between 1 and 812")
+	}
 	s.mu.Lock()
-	batch := append([]*keys.PreKey(nil), s.pending[:min(int(count), len(s.pending))]...)
-	s.mu.Unlock()
-	if missing := int(count) - len(batch); missing > 0 {
-		generated, err := s.remote.GeneratePreKeys(ctx, uint32(missing))
-		if err != nil {
+	defer s.mu.Unlock()
+	if s.awaitingACK {
+		if err := s.acknowledgeLocked(ctx); err != nil {
 			return nil, err
 		}
-		s.mu.Lock()
-		s.pending = append(s.pending, generated...)
-		s.mu.Unlock()
-		batch = append(batch, generated...)
 	}
-	ids := make(map[uint32]struct{}, len(batch))
-	for _, key := range batch {
-		ids[key.KeyID] = struct{}{}
+	batch, err := s.remote.PreparePreKeyUpload(ctx, count)
+	if err != nil {
+		return nil, err
 	}
-	s.mu.Lock()
-	s.lastBatch = ids
-	s.mu.Unlock()
-	return batch, nil
+	if batch == nil || !validRemotePreKeyBatchID(batch.BatchID) || len(batch.PreKeys) == 0 || len(batch.PreKeys) > 812 {
+		return nil, errors.New("remote store returned an invalid prekey upload batch")
+	}
+	public, ids, err := copyRemotePreKeys(batch.PreKeys)
+	if err != nil {
+		return nil, err
+	}
+	s.batchID, s.ids = batch.BatchID, ids
+	return public, nil
+}
+
+func validRemotePreKeyBatchID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, c := range []byte(id) {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// copyRemotePreKeys validates the public-only boundary and returns independent
+// public key objects plus an ID snapshot that neither caller nor remote can edit.
+func copyRemotePreKeys(input []*keys.PreKey) ([]*keys.PreKey, []uint32, error) {
+	public := make([]*keys.PreKey, 0, len(input))
+	ids := make([]uint32, 0, len(input))
+	seen := make(map[uint32]bool, len(input))
+	for _, key := range input {
+		if key == nil || key.Pub == nil || *key.Pub == [32]byte{} || key.Priv != nil || key.Signature != nil || key.KeyID == 0 || key.KeyID > 0xFFFFFF || seen[key.KeyID] {
+			return nil, nil, errors.New("remote store returned an invalid public prekey")
+		}
+		pub := *key.Pub
+		public = append(public, &keys.PreKey{KeyPair: keys.KeyPair{Pub: &pub}, KeyID: key.KeyID})
+		ids = append(ids, key.KeyID)
+		seen[key.KeyID] = true
+	}
+	return public, ids, nil
 }
 
 // GenOnePreKey creates a key for a retry receipt. The receipt publishes it,
 // so it is marked uploaded at once, as the SQL store does.
 func (s *remotePreKeyStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	generated, err := s.remote.GeneratePreKeys(ctx, 1)
 	if err != nil {
 		return nil, err
@@ -250,10 +303,19 @@ func (s *remotePreKeyStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, err
 	if len(generated) != 1 {
 		return nil, fmt.Errorf("remote store returned %d prekeys, want 1", len(generated))
 	}
-	if err = s.remote.MarkPreKeysUploaded(ctx, []uint32{generated[0].KeyID}); err != nil {
+	public, ids, err := copyRemotePreKeys(generated)
+	if err != nil {
+		return nil, err
+	}
+	for _, pendingID := range s.ids {
+		if ids[0] == pendingID {
+			return nil, errors.New("remote store returned a prepared upload key for a fresh retry")
+		}
+	}
+	if err = s.remote.MarkPreKeysUploaded(ctx, ids); err != nil {
 		return nil, fmt.Errorf("failed to mark retry prekey as published: %w", err)
 	}
-	return generated[0], nil
+	return public[0], nil
 }
 
 func (s *remotePreKeyStore) GetPreKey(ctx context.Context, id uint32) (*keys.PreKey, error) {
@@ -264,37 +326,24 @@ func (s *remotePreKeyStore) RemovePreKey(ctx context.Context, id uint32) error {
 	return fmt.Errorf("RemovePreKey(%d): %w", id, ErrRemoteSignalUnsupported)
 }
 
-// MarkPreKeysAsUploaded marks the keys of the most recent GetOrGenPreKeys
-// batch with an ID up to upToID. Prekey IDs wrap at 2^24, but one upload
-// batch never spans the wrap in practice, so a plain comparison is enough.
+// MarkPreKeysAsUploaded requires the literal last returned ID and acknowledges
+// every ID captured for that upload, including IDs across 24-bit wrap.
 func (s *remotePreKeyStore) MarkPreKeysAsUploaded(ctx context.Context, upToID uint32) error {
 	s.mu.Lock()
-	var marked []uint32
-	for _, key := range s.pending {
-		if _, inBatch := s.lastBatch[key.KeyID]; inBatch && key.KeyID <= upToID {
-			marked = append(marked, key.KeyID)
-		}
+	defer s.mu.Unlock()
+	if len(s.ids) == 0 || upToID != s.ids[len(s.ids)-1] {
+		return errors.New("prekey upload acknowledgement does not match the prepared batch")
 	}
-	s.mu.Unlock()
-	if len(marked) == 0 {
-		return nil
-	}
-	if err := s.remote.MarkPreKeysUploaded(ctx, marked); err != nil {
+	s.awaitingACK = true
+	return s.acknowledgeLocked(ctx)
+}
+
+func (s *remotePreKeyStore) acknowledgeLocked(ctx context.Context) error {
+	// Implementations may retain or mutate arguments. Preserve our retry authority.
+	if err := s.remote.AcknowledgePreKeyUpload(ctx, s.batchID, append([]uint32(nil), s.ids...)); err != nil {
 		return err
 	}
-	done := make(map[uint32]struct{}, len(marked))
-	for _, id := range marked {
-		done[id] = struct{}{}
-	}
-	s.mu.Lock()
-	kept := s.pending[:0]
-	for _, key := range s.pending {
-		if _, ok := done[key.KeyID]; !ok {
-			kept = append(kept, key)
-		}
-	}
-	s.pending = kept
-	s.mu.Unlock()
+	s.batchID, s.ids, s.awaitingACK = "", nil, false
 	return nil
 }
 

@@ -6,6 +6,8 @@ package whatsmeow
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +39,59 @@ type fakeRemoteSignal struct {
 	forgotten  []types.JID
 	migrated   [][2]types.JID
 	migrateErr error
+	batchSeq   uint32
+	batch      *RemotePreKeyUploadBatch
+	prepares   []uint32
+	acks       []testPreKeyACK
+	ackErr     error
+	ackLost    bool
+	lastACK    testPreKeyACK
+	operations []string
+}
+
+type testPreKeyACK struct {
+	batchID string
+	ids     []uint32
+}
+
+func (f *fakeRemoteSignal) PreparePreKeyUpload(ctx context.Context, count uint32) (*RemotePreKeyUploadBatch, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prepares = append(f.prepares, count)
+	f.operations = append(f.operations, "prepare")
+	if f.batch == nil {
+		f.batchSeq++
+		f.batch = &RemotePreKeyUploadBatch{BatchID: fmt.Sprintf("%032x", f.batchSeq), PreKeys: f.generateLocked(count)}
+	}
+	return f.batch, nil
+}
+
+func (f *fakeRemoteSignal) AcknowledgePreKeyUpload(ctx context.Context, batchID string, ids []uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ack := testPreKeyACK{batchID, append([]uint32(nil), ids...)}
+	f.acks = append(f.acks, ack)
+	f.operations = append(f.operations, "ack")
+	if f.ackErr != nil {
+		return f.ackErr
+	}
+	if batchID == f.lastACK.batchID && equalIDs(ids, f.lastACK.ids) {
+		return nil
+	}
+	if f.batch == nil || f.batch.BatchID != batchID {
+		return errors.New("unexpected batch ACK")
+	}
+	for _, key := range f.batch.PreKeys {
+		if !slices.Contains(ids, key.KeyID) {
+			return errors.New("batch ACK omitted a surviving key")
+		}
+	}
+	f.lastACK, f.batch = ack, nil
+	if f.ackLost {
+		f.ackLost = false
+		return errors.New("synthetic lost ACK response")
+	}
+	return nil
 }
 
 func (f *fakeRemoteSignal) MigratePNToLID(ctx context.Context, pn, lid types.JID) error {
@@ -60,13 +115,17 @@ func (f *fakeRemoteSignal) Receive(ctx context.Context, req RemoteReceive) (*Rem
 func (f *fakeRemoteSignal) GeneratePreKeys(ctx context.Context, count uint32) ([]*keys.PreKey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.generateLocked(count), nil
+}
+
+func (f *fakeRemoteSignal) generateLocked(count uint32) []*keys.PreKey {
 	out := make([]*keys.PreKey, 0, count)
 	for i := uint32(0); i < count; i++ {
 		f.nextID++
-		pub := [32]byte{byte(f.nextID)}
+		pub := [32]byte{byte(f.nextID%255 + 1)}
 		out = append(out, &keys.PreKey{KeyPair: keys.KeyPair{Pub: &pub}, KeyID: f.nextID})
 	}
-	return out, nil
+	return out
 }
 
 func (f *fakeRemoteSignal) MarkPreKeysUploaded(ctx context.Context, ids []uint32) error {
@@ -322,7 +381,20 @@ func TestRemoteUndecodableMessageIsNacked(t *testing.T) {
 	}
 }
 
-func TestRemotePreKeyStoreReusesUnuploadedKeysAndMarksOnlyTheUploadedBatch(t *testing.T) {
+func TestRemotePreKeyStoreDoesNotTruncateAnOutstandingInitialUpload(t *testing.T) {
+	_, remote, _ := newTestRemote(t)
+	pk := &remotePreKeyStore{remote: remote}
+	first, err := pk.GetOrGenPreKeys(context.Background(), 812)
+	if err != nil || len(first) != 812 {
+		t.Fatalf("initial batch len=%d err=%v", len(first), err)
+	}
+	recovered, err := pk.GetOrGenPreKeys(context.Background(), 50)
+	if err != nil || len(recovered) != 812 {
+		t.Fatalf("outstanding batch len=%d err=%v, want all812", len(recovered), err)
+	}
+}
+
+func TestRemotePreKeyStoreReusesFullBatchAndKeepsFreshRetryKeysSeparate(t *testing.T) {
 	_, remote, _ := newTestRemote(t)
 	pk := &remotePreKeyStore{remote: remote}
 	ctx := context.Background()
@@ -338,16 +410,19 @@ func TestRemotePreKeyStoreReusesUnuploadedKeysAndMarksOnlyTheUploadedBatch(t *te
 	if !equalIDs(ids(again), ids(first)) || remote.nextID != 3 {
 		t.Fatalf("retry after a failed upload got %v (generated up to %d), want the same keys", ids(again), remote.nextID)
 	}
-	partial, _ := pk.GetOrGenPreKeys(ctx, 2) // 1..2 of the pending three
-	if err := pk.MarkPreKeysAsUploaded(ctx, partial[len(partial)-1].KeyID); err != nil {
+	full, _ := pk.GetOrGenPreKeys(ctx, 2) // requested count cannot truncate pending three
+	if !equalIDs(ids(full), []uint32{1, 2, 3}) {
+		t.Fatalf("pending batch was truncated: %v", ids(full))
+	}
+	if err := pk.MarkPreKeysAsUploaded(ctx, full[len(full)-1].KeyID); err != nil {
 		t.Fatal(err)
 	}
-	if len(remote.marked) != 1 || !equalIDs(remote.marked[0], []uint32{1, 2}) {
-		t.Fatalf("marked %v, want only the uploaded batch [1 2]", remote.marked)
+	if len(remote.acks) != 1 || !equalIDs(remote.acks[0].ids, []uint32{1, 2, 3}) || len(remote.marked) != 0 {
+		t.Fatalf("acks=%v fresh marks=%v, want complete batch ACK only", remote.acks, remote.marked)
 	}
-	next, _ := pk.GetOrGenPreKeys(ctx, 2) // 3 is still pending; one new key
-	if !equalIDs(ids(next), []uint32{3, 4}) {
-		t.Fatalf("next batch %v, want [3 4]", ids(next))
+	next, _ := pk.GetOrGenPreKeys(ctx, 2)
+	if !equalIDs(ids(next), []uint32{4, 5}) {
+		t.Fatalf("next batch %v, want [4 5]", ids(next))
 	}
 	retry, err := pk.GenOnePreKey(ctx)
 	if err != nil {
