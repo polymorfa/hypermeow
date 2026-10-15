@@ -231,6 +231,44 @@ func TestRemoteReceiveDeliversMetadataAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestRemoteReceivePreservesProviderTimeAndAlternateSender(t *testing.T) {
+	pn := types.NewJID("15551234567", types.DefaultUserServer)
+	lid := types.NewJID("123456789", types.HiddenUserServer)
+	stamp := time.Unix(1720000000, 123456789).UTC()
+	for _, tc := range []struct {
+		name                string
+		sender, alternate   types.JID
+		wantSender, wantAlt types.JID
+		timestamp           time.Time
+	}{
+		{"lid addressed", lid, pn, lid, pn, stamp},
+		{"pn normalized to lid", pn, lid, lid, pn, stamp},
+		{"absent metadata", lid, types.JID{}, lid, types.JID{}, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli, remote, sent := newTestRemote(t)
+			info, node := encMessage("pkmsg")
+			info.Sender, info.SenderAlt = tc.sender, tc.alternate
+			info.Chat = tc.sender.ToNonAD()
+			info.Timestamp = tc.timestamp
+			cli.decryptMessages(context.Background(), info, node)
+			if len(remote.receives) != 1 {
+				t.Fatalf("Receive calls = %d, want 1", len(remote.receives))
+			}
+			req := remote.receives[0]
+			if !req.Timestamp.Equal(tc.timestamp) || req.Sender != tc.wantSender || req.SenderAlt != tc.wantAlt {
+				t.Fatalf("receive metadata = (%v, %s, %s), want (%v, %s, %s)", req.Timestamp, req.Sender, req.SenderAlt, tc.timestamp, tc.wantSender, tc.wantAlt)
+			}
+			if req.Kind != "pkmsg" || req.MessageID != info.ID || req.Chat != info.Chat || string(req.Ciphertext) != "ciphertext" {
+				t.Fatal("adding receive metadata changed the encrypted payload or routing")
+			}
+			if tags := sent.tags(); len(tags) != 1 || !strings.HasPrefix(tags[0], "receipt:") {
+				t.Fatalf("sent %v, want the unchanged delivery receipt", tags)
+			}
+		})
+	}
+}
+
 func TestRemoteAlreadyDeliveredOnlyAcknowledges(t *testing.T) {
 	cli, remote, sent := newTestRemote(t)
 	remote.result = RemoteReceiveResult{AlreadyDelivered: true}
