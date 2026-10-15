@@ -163,9 +163,11 @@ type Client struct {
 	// closed switch) lets a headless shadow Client dispatch injected nodes
 	// synchronously and lets embedders that reach for it via reflection keep
 	// working.
-	nodeHandlers      map[string]nodeHandler
-	eventHandlers     []wrappedEventHandler
-	eventHandlersLock sync.RWMutex
+	nodeHandlers                map[string]nodeHandler
+	eventHandlers               []wrappedEventHandler
+	eventHandlersLock           sync.RWMutex
+	connectionEventHandlers     []wrappedConnectionEventHandler
+	connectionEventHandlersLock sync.Mutex
 
 	messageRetries      map[string]int
 	messageRetriesLock  sync.Mutex
@@ -601,7 +603,7 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 	err := cli.unlockedConnect(ctx)
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
-		go cli.dispatchEvent(&events.Disconnected{})
+		go cli.dispatchConnectionEvent(ctx, &events.Disconnected{})
 		go cli.autoReconnect(ctx)
 		return nil
 	}
@@ -681,7 +683,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 		cli.clearResponseWaiters(xmlStreamEndNode)
 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
 			cli.Log.Debugf("Emitting Disconnected event")
-			go cli.dispatchEvent(&events.Disconnected{})
+			go cli.dispatchConnectionEvent(ctx, &events.Disconnected{})
 			go cli.autoReconnect(ctx)
 		} else if remote {
 			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
