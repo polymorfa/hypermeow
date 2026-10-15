@@ -77,7 +77,7 @@ func (cli *Client) handlePairDevice(ctx context.Context, node *waBinary.Node) {
 		evt.Codes = append(evt.Codes, cli.makeQRData(content, cli.getQRClientType()))
 	}
 
-	cli.dispatchEvent(evt)
+	cli.dispatchConnectionEvent(ctx, evt)
 }
 
 func (cli *Client) getQRClientType() PairClientType {

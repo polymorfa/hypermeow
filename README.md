@@ -170,3 +170,22 @@ Polymorfa-added files: Copyright (c) 2026 Rajeh Taher, licensed under the
 [MIT License](LICENSE-MIT).
 
 See [LICENSING.md](LICENSING.md) for the file-level boundary.
+
+### Connection lifecycle observers
+
+`AddConnectionEventHandler(func(context.Context, any))` observes `Connected`,
+`Disconnected`, `QR`, `LoggedOut` and `StreamReplaced`. The context is the original
+connection's `ConnectContext` argument, captured before asynchronous delivery.
+A delayed event can arrive after that context is cancelled. Compare it with the
+connection authority your application owns before updating state; do not label an
+old event using the newest connection. `RemoveConnectionEventHandler(id)` removes
+a registration; an already captured callback can still arrive. Callbacks run
+without the observer registry lock and can remove themselves.
+
+Generic `AddEventHandler` consumers still receive these events. Other event types
+retain their existing API. Connection observers do not authorize a send, undo
+bytes already sent or prove that a cancelled socket has finished closing.
+Disconnect and wait for owned work to settle before accepting replacement
+connection authority. `FrameSocket.SetDisconnectHandler` synchronizes callback
+ownership with socket shutdown; assign the legacy field only before connecting.
+These additions are unreleased until their reviewed main commit is adopted.
