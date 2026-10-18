@@ -6,12 +6,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"errors"
-	"github.com/coder/websocket"
-	waLog "github.com/polymorfa/hypermeow/util/log"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"github.com/coder/websocket"
+
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 func testAdmittedSocket(t *testing.T) *NoiseSocket {
