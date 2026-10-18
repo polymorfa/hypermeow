@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
+
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/types"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var ErrNativeSendUnsupported = errors.New("native admission requires a preallocated ordinary text DM")

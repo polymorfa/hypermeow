@@ -3,10 +3,12 @@ package whatsmeow
 import (
 	"context"
 	"errors"
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/types"
-	"google.golang.org/protobuf/proto"
-	"testing"
 )
 
 func TestNativeSendRejectsUnsupportedBeforePreparation(t *testing.T) {
