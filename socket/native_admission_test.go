@@ -6,6 +6,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"errors"
+	"github.com/coder/websocket"
+	waLog "github.com/polymorfa/hypermeow/util/log"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 )
@@ -20,7 +24,7 @@ func testAdmittedSocket(t *testing.T) *NoiseSocket {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &NoiseSocket{fs: newTestFrameSocket(t), writeKey: key}
+	return &NoiseSocket{fs: newNativeTestFrameSocket(t), writeKey: key}
 }
 
 func TestNativeAdmissionDenialPreservesNonceAndHeader(t *testing.T) {
@@ -110,4 +114,25 @@ func TestNativeAdmissionEntryIsInsideWriteAndBeforeReturn(t *testing.T) {
 	if err != nil || len(order) != 3 || order[0] != "admit" || order[1] != "entered" || order[2] != "written" {
 		t.Fatalf("wrong entry order: %v, %v", order, err)
 	}
+}
+
+func newNativeTestFrameSocket(t *testing.T) *FrameSocket {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.CloseNow()
+		<-conn.CloseRead(r.Context()).Done()
+	}))
+	t.Cleanup(server.Close)
+	fs := NewFrameSocket(waLog.Noop, server.Client())
+	fs.URL = server.URL
+	if err := fs.Connect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fs.Close(0) })
+	return fs
 }
