@@ -151,6 +151,10 @@ func setParticipantHashMismatch(resp *SendResponse, sent, acknowledged string) b
 //
 // Trying to add multiple extra parameters will return an error.
 type SendRequestExtra struct {
+	// NativeSend is an optional process-local final-frame admission. Supported
+	// only for a preallocated-ID ordinary one-to-one text send. Nil preserves
+	// the existing send path. It never crosses a serialized request.
+	NativeSend *NativeSendHooks
 	// The message ID to use when sending. If this is not provided, a random message ID will be generated
 	ID types.MessageID
 	// JID of the bot to be invoked (optional)
@@ -204,6 +208,15 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		return
 	} else if len(extra) == 1 {
 		req = extra[0]
+	}
+	if req.NativeSend != nil {
+		if req.ID == "" || req.NativeSend.Admit == nil || req.NativeSend.Entered == nil || req.Peer || !req.InlineBotJID.IsEmpty() ||
+			(to.Server != types.DefaultUserServer && to.Server != types.HiddenUserServer) || !validNativeText(message) || req.Meta != nil || req.AdditionalNodes != nil || req.MediaHandle != "" || to.IsBot() {
+			err = ErrNativeSendUnsupported
+			return
+		}
+		hooks := *req.NativeSend
+		req.NativeSend = &hooks
 	}
 	if to.Device > 0 && !req.Peer {
 		err = ErrRecipientADJID
@@ -307,6 +320,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		}
 	}
 
+	extraParams.nativeSend = req.NativeSend
+
 	var groupParticipants []types.JID
 	if to.Server == types.GroupServer || to.Server == types.BroadcastServer {
 		start := time.Now()
@@ -385,7 +400,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	defer cli.messageSendLock.Unlock()
 
 	// Peer message retries aren't implemented yet
-	if !req.Peer {
+	if !req.Peer && req.NativeSend == nil {
 		err = cli.addRecentMessage(ctx, to, req.ID, message, nil)
 		if err != nil {
 			return
@@ -442,6 +457,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		return
 	}
 	resp.DebugTimings.Resp = time.Since(start)
+	if isDisconnectNode(respNode) && req.NativeSend != nil {
+		err = &DisconnectedError{Action: "guarded message send"}
+		return
+	}
 	if isDisconnectNode(respNode) {
 		start = time.Now()
 		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
@@ -749,6 +768,7 @@ func (cli *Client) sendNewsletter(
 }
 
 type nodeExtraParams struct {
+	nativeSend      *NativeSendHooks
 	botNode         *waBinary.Node
 	metaNode        *waBinary.Node
 	additionalNodes *[]waBinary.Node
@@ -907,7 +927,7 @@ func (cli *Client) sendDM(
 	}
 
 	start = time.Now()
-	data, err := cli.sendNodeAndGetData(ctx, *node)
+	data, err := cli.sendNativeMessageNode(ctx, *node, id, extraParams.nativeSend)
 	timings.Send = time.Since(start)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to send message node: %w", err)
