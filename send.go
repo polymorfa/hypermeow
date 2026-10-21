@@ -129,6 +129,9 @@ type SendResponse struct {
 
 	// PHashMismatch indicates the server acknowledged a different participant list hash.
 	PHashMismatch bool
+
+	// The chat JID the message was actually sent to.
+	Chat types.JID
 }
 
 func setParticipantHashMismatch(resp *SendResponse, sent, acknowledged string) bool {
@@ -253,8 +256,12 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 
 	if isBotMode {
 		if message.MessageContextInfo.BotMetadata == nil {
+			personaID := "867051314767696$760019659443059"
+			if to == types.MuseJID {
+				personaID = "1807055946647697$1"
+			}
 			message.MessageContextInfo.BotMetadata = &waAICommon.BotMetadata{
-				PersonaID: proto.String("867051314767696$760019659443059"),
+				PersonaID: proto.String(personaID),
 			}
 		}
 
@@ -367,6 +374,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	}
 
 	resp.Sender = ownID
+	resp.Chat = to
 
 	start := time.Now()
 	// Sending multiple messages at a time can cause weird issues and makes it harder to retry safely
@@ -862,9 +870,16 @@ func (cli *Client) sendDM(
 		return "", nil, err
 	}
 
+	recipientPlaintext := messagePlaintext
+	if to == types.MuseJID {
+		recipientPlaintext, err = cli.encryptWASAMessage(ctx, to, id, message)
+		if err != nil {
+			return "", nil, err
+		}
+	}
 	node, allDevices, err := cli.prepareMessageNode(
 		ctx, to, id, message, []types.JID{to, ownID.ToNonAD()},
-		messagePlaintext, deviceSentMessagePlaintext, timings, extraParams,
+		recipientPlaintext, deviceSentMessagePlaintext, timings, extraParams,
 	)
 	if err != nil {
 		return "", nil, err

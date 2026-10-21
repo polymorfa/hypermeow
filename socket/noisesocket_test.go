@@ -41,7 +41,7 @@ func newTestFrameSocket(t *testing.T) *FrameSocket {
 func TestNoiseSocketStopConcurrentClose(t *testing.T) {
 	for range 100 {
 		fs := newTestFrameSocket(t)
-		ns, err := newNoiseSocket(t.Context(), fs, nil, nil, nil, func(context.Context, *NoiseSocket, bool) {})
+		ns, err := newNoiseSocket(fs, nil, nil, nil, func(context.Context, *NoiseSocket, bool) {})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,7 +70,7 @@ func TestNewNoiseSocketConcurrentClose(t *testing.T) {
 			fs.Close(0)
 		})
 		close(start)
-		ns, err := newNoiseSocket(t.Context(), fs, nil, nil, nil, func(context.Context, *NoiseSocket, bool) {})
+		ns, err := newNoiseSocket(fs, nil, nil, nil, func(context.Context, *NoiseSocket, bool) {})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestNoiseSocketStop(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := newTestFrameSocket(t)
 			called := make(chan bool, 2)
-			ns, err := newNoiseSocket(t.Context(), fs, nil, nil, nil, func(ctx context.Context, socket *NoiseSocket, remote bool) {
+			ns, err := newNoiseSocket(fs, nil, nil, nil, func(ctx context.Context, socket *NoiseSocket, remote bool) {
 				if ctx != t.Context() {
 					t.Error("Unexpected disconnect context")
 				}
@@ -143,7 +143,7 @@ func TestNoiseSocketStop(t *testing.T) {
 func TestNoiseSocketRemoteDisconnect(t *testing.T) {
 	fs := newTestFrameSocket(t)
 	called := make(chan bool, 1)
-	ns, err := newNoiseSocket(t.Context(), fs, nil, nil, nil, func(ctx context.Context, socket *NoiseSocket, remote bool) {
+	ns, err := newNoiseSocket(fs, nil, nil, nil, func(ctx context.Context, socket *NoiseSocket, remote bool) {
 		socket.Stop(false, false)
 		fs.Close(0)
 		called <- remote

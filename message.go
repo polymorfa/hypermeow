@@ -23,6 +23,7 @@ import (
 	"github.com/polymorfa/libsignal-protocol-go/protocol"
 	"github.com/polymorfa/libsignal-protocol-go/session"
 	"github.com/polymorfa/libsignal-protocol-go/signalerror"
+	"github.com/polymorfa/libsignal-protocol-go/state/record"
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
@@ -126,9 +127,8 @@ func (cli *Client) parseMessageSource(node *waBinary.Node, requireParticipant bo
 		} else {
 			source.Sender = ag.OptionalJIDOrEmpty("participant")
 		}
-		if source.AddressingMode == types.AddressingModeLID {
-			source.SenderAlt = ag.OptionalJIDOrEmpty("participant_pn")
-		} else {
+		source.SenderAlt = ag.OptionalJIDOrEmpty("participant_pn")
+		if source.SenderAlt.IsEmpty() && source.AddressingMode != types.AddressingModeLID {
 			source.SenderAlt = ag.OptionalJIDOrEmpty("participant_lid")
 		}
 		if source.Sender.User == clientID.User || source.Sender.User == clientLID.User {
@@ -218,11 +218,12 @@ func (cli *Client) parseMsgBotInfo(node waBinary.Node) (botInfo types.MsgBotInfo
 	botNode := node.GetChildByTag("bot")
 
 	ag := botNode.AttrGetter()
-	botInfo.EditType = types.BotEditType(ag.String("edit"))
-	if botInfo.EditType == types.EditTypeInner || botInfo.EditType == types.EditTypeLast {
-		botInfo.EditTargetID = types.MessageID(ag.String("edit_target_id"))
+	botInfo.EditType = types.BotEditType(ag.OptionalString("edit"))
+	if botInfo.EditType == types.EditTypeInner || botInfo.EditType == types.EditTypeLast || botInfo.EditType == types.EditTypeFull {
+		botInfo.EditTargetID = types.MessageID(ag.OptionalString("edit_target_id"))
 		botInfo.EditSenderTimestampMS = ag.UnixMilli("sender_timestamp_ms")
 	}
+	botInfo.ClientThreadID = ag.OptionalString("client_thread_id")
 	err = ag.Error()
 	return
 }
@@ -409,11 +410,9 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 					targetSenderJID = cli.getOwnID()
 				}
 			}
-			var decryptMessageID string
-			if info.MsgBotInfo.EditType == types.EditTypeInner || info.MsgBotInfo.EditType == types.EditTypeLast {
+			decryptMessageID := info.ID
+			if (info.MsgBotInfo.EditType == types.EditTypeInner || info.MsgBotInfo.EditType == types.EditTypeLast || info.MsgBotInfo.EditType == types.EditTypeFull) && info.MsgBotInfo.EditTargetID != "" {
 				decryptMessageID = info.MsgBotInfo.EditTargetID
-			} else {
-				decryptMessageID = info.ID
 			}
 			var msMsg waE2E.MessageSecretMessage
 			var messageSecret []byte
@@ -425,13 +424,19 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 				err = fmt.Errorf("failed to unmarshal MessageSecretMessage protobuf: %v", err)
 			} else {
 				decrypted, err = cli.decryptBotMessage(ctx, messageSecret, &msMsg, decryptMessageID, targetSenderJID, info)
+				if err != nil && decryptMessageID != info.ID {
+					decrypted, err = cli.decryptBotMessage(ctx, messageSecret, &msMsg, info.ID, targetSenderJID, info)
+					if err == nil {
+						cli.Log.Debugf("Decrypted bot message %s using own ID instead of edit target ID %s", info.ID, decryptMessageID)
+					}
+				}
 			}
 		} else {
 			cli.Log.Warnf("Unhandled encrypted message (type %s) from %s", encType, info.SourceString())
 			continue
 		}
 
-		if errors.Is(err, EventAlreadyProcessed) {
+		if errors.Is(err, ErrEventAlreadyProcessed) {
 			cli.Log.Debugf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
 		} else if errors.Is(err, signalerror.ErrOldCounter) {
@@ -585,7 +590,7 @@ func (cli *Client) bufferedDecrypt(
 				Hex("ciphertext_hash", ciphertextHash[:]).
 				Time("insertion_time", buf.InsertTime).
 				Msg("Returning event already processed error")
-			err = fmt.Errorf("%w at %s", EventAlreadyProcessed, buf.InsertTime.String())
+			err = fmt.Errorf("%w at %s", ErrEventAlreadyProcessed, buf.InsertTime.String())
 			return
 		}
 		zerolog.Ctx(ctx).Debug().
@@ -615,6 +620,14 @@ func (cli *Client) bufferedDecrypt(
 	return
 }
 
+type sessionlessSignalStore struct {
+	*store.Device
+}
+
+func (sessionlessSignalStore) StoreSession(_ context.Context, _ *protocol.SignalAddress, _ *record.Session) error {
+	return nil
+}
+
 func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from types.JID, isPreKey bool, serverTS time.Time) ([]byte, *[32]byte, error) {
 	if cli.isShadow() {
 		// A headless client holds no live Signal session; delegate
@@ -627,6 +640,10 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 	}
 
 	builder := session.NewBuilderFromSignal(cli.Store, from.SignalAddress(), pbSerializer)
+	if isPreKey && child.AttrGetter().OptionalString("state") == "false" {
+		cli.Log.Debugf("Not storing session from stateless prekey message from %s", from)
+		builder = session.NewBuilderFromSignal(sessionlessSignalStore{cli.Store}, from.SignalAddress(), pbSerializer)
+	}
 	cipher := session.NewCipher(builder, from.SignalAddress())
 	var plaintext []byte
 	var ciphertextHash [32]byte
@@ -1088,11 +1105,24 @@ func (cli *Client) processProtocolParts(ctx context.Context, info *types.Message
 
 func (cli *Client) storeMessageSecret(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) {
 	if msgSecret := msg.GetMessageContextInfo().GetMessageSecret(); len(msgSecret) > 0 {
-		err := cli.Store.MsgSecrets.PutMessageSecret(ctx, info.Chat, info.Sender, info.ID, msgSecret)
+		targetChat := info.Chat
+		dsm := msg
+		if msg.GetDeviceSentMessage().GetMessage() != nil {
+			dsm = msg.GetDeviceSentMessage().GetMessage()
+		}
+		if targetChatJID := dsm.GetRootSecretDistributeMessage().GetChatJID(); targetChatJID != "" && info.IsFromMe {
+			var err error
+			targetChat, err = types.ParseJID(targetChatJID)
+			if err != nil {
+				cli.Log.Warnf("Failed to parse chat JID %s from root secret distribute message: %v", targetChatJID, err)
+				return
+			}
+		}
+		err := cli.Store.MsgSecrets.PutMessageSecret(ctx, targetChat, info.Sender, info.ID, msgSecret)
 		if err != nil {
 			cli.Log.Errorf("Failed to store message secret key for %s: %v", info.ID, err)
 		} else {
-			cli.Log.Debugf("Stored message secret key for %s", info.ID)
+			cli.Log.Debugf("Stored message secret key for %s/%s/%s", info.Chat, info.Sender, info.ID)
 		}
 	}
 }

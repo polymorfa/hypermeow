@@ -21,6 +21,7 @@ import (
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/proto/waServerSync"
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
@@ -44,7 +45,13 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 		return nil, ErrClientIsNil
 	}
 	cli.appStateSyncLock.Lock()
-	defer cli.appStateSyncLock.Unlock()
+	var syncError *events.AppStateSyncError
+	defer func() {
+		cli.appStateSyncLock.Unlock()
+		if syncError != nil {
+			cli.dispatchEvent(syncError)
+		}
+	}()
 	if fullSync {
 		err := cli.Store.AppState.DeleteAppStateVersion(ctx, string(name))
 		if err != nil {
@@ -73,6 +80,9 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	for hasMore {
 		patches, err := cli.fetchAppStatePatches(ctx, name, state.Version, wantSnapshot)
 		if err != nil {
+			if fullSync && ctx.Err() == nil && cli.BackgroundEventCtx.Err() == nil {
+				syncError = &events.AppStateSyncError{Name: name, FullSync: fullSync, Error: err}
+			}
 			return nil, fmt.Errorf("failed to fetch app state %s patches: %w", name, err)
 		} else if !wantSnapshot && patches.Snapshot != nil {
 			return nil, fmt.Errorf("server unexpectedly returned snapshot for %s without asking", name)
@@ -472,6 +482,38 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 			ID:           mutation.Index[1],
 			Action:       mutation.Action.GetQuickReplyAction(),
 			FromFullSync: fullSync,
+		}
+	case appstate.IndexWasaRootSecretAction:
+		if len(mutation.Index) < 2 {
+			return
+		}
+		botJID, _ := types.ParseJID(mutation.Index[1])
+		ownLID := cli.getOwnLID()
+		inputSecrets := mutation.Action.GetWasaRootSecretAction().GetSecrets()
+		ids := make([]string, 0, len(inputSecrets))
+		storeUpdateError = cli.Store.MsgSecrets.PutMessageSecrets(ctx, exslices.CastFunc(inputSecrets, func(secret *waSyncAction.WASARootSecretAction_RootSecretEntry) store.MessageSecretInsert {
+			ids = append(ids, secret.GetID())
+			return store.MessageSecretInsert{
+				Chat:   botJID,
+				Sender: ownLID,
+				ID:     secret.GetID(),
+				Secret: secret.GetRootSecret(),
+			}
+		}))
+		if storeUpdateError == nil && cli.Store.ChatSettings != nil {
+			var active *waSyncAction.WASARootSecretAction_RootSecretEntry
+			for _, secret := range inputSecrets {
+				if secret.GetStatus() == waSyncAction.WASARootSecretAction_RootSecretEntry_ACTIVE && (active == nil || secret.GetEpoch() > active.GetEpoch()) {
+					active = secret
+				}
+			}
+			storeUpdateError = cli.Store.ChatSettings.PutWASARootSecretID(ctx, botJID, types.MessageID(active.GetID()))
+		}
+		if storeUpdateError == nil {
+			zerolog.Ctx(ctx).Debug().
+				Strs("ids", ids).
+				Stringer("bot_jid", botJID).
+				Msg("Stored WASA root secrets from app state")
 		}
 	}
 	if storeUpdateError != nil {

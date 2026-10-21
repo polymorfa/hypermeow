@@ -11,9 +11,20 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
+- Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
+- Report the destination in `SendFBMessage` responses and decrypt full bot edits using their target message ID.
+- Dispatch full-sync fetch errors after releasing the app-state sync lock so callbacks can retry.
+- Preserve rich-response JSON objects and type names during round trips, and return malformed known-value decoding errors.
+
 - Sending a message wrapped in `AssociatedChildMessage` (for example the HD half of an image or video dual upload) now derives the stanza `type` and enc `mediatype` from the child, as WhatsApp Web does, so an HD image child is sent as `type="media"` with `mediatype="image"` instead of `type="text"`. Retry receipts use the same attributes.
 
 ### Changed
+
+- Sync upstream protocol definitions and runtime changes through `c386243a72bacad080ba2938b37e1e4e0f1ca3b2`, while retaining HyperMeow's module path, Signal fork, bounded queues, and SQL batching.
+- Require Go 1.26 and select Go 1.27.1 as the preferred toolchain.
+- Add `SendResponse.Chat`, `Client.PreKeysUploaded`, pairing-secret rotation events, rich-response types, and bot root-secret methods on `store.ChatSettingsStore`. SQL-backed stores upgrade to schema version 19.
+- Deprecate `SetGroupDescription` in favor of `SetGroupTopic`.
 
 - `events.Message.UnwrapRaw` opens `AssociatedChildMessage`, as WhatsApp Web opens it as a future-proof wrapper, and sets the new `IsAssociatedChild` flag. The wrapper's `MessageContextInfo` (including `messageAssociation` and its parent key) is overlaid onto the child's context field by field, wrapper fields winning, as WhatsApp Web does; `RawMessage` is left unmodified. Consumers that inspected `Message.AssociatedChildMessage` after unwrapping must check `IsAssociatedChild` or `RawMessage` instead.
 

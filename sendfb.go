@@ -133,6 +133,7 @@ func (cli *Client) SendFBMessage(
 		req.ID = cli.GenerateMessageID()
 	}
 	resp.ID = req.ID
+	resp.Chat = to
 
 	start := time.Now()
 	// Sending multiple messages at a time can cause weird issues and makes it harder to retry safely

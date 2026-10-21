@@ -8,17 +8,21 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        go-version: ["1.25", "1.26"]
-    name: Build ${{ matrix.go-version == '1.26' && '(latest)' || '(old)' }}
+        go-version: ["1.26", "1.27"]
+    name: Build ${{ matrix.go-version == '1.27' && '(latest)' || '(old)' }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: ${{ matrix.go-version }}
 
@@ -31,11 +35,16 @@ jobs:
     - name: Test
       run: go test -v ./...
 
-    - name: Install goimports
+    - name: Install dependencies
       run: |
-        # x/tools v0.50.0+ requires Go 1.26; pin the last release that builds on the old matrix entry.
-        go install golang.org/x/tools/cmd/goimports@v0.49.0
+        go install golang.org/x/tools/cmd/goimports@v0.51.0
+        # Staticcheck v0.8.1 cannot read Go 1.27.2 export data. Pin the
+        # upstream snapshot using x/tools v0.51.0, which supports it.
+        go install honnef.co/go/tools/cmd/staticcheck@v0.7.0-0.dev.0.20261009230814-452d5bb86b45
         export PATH="$HOME/go/bin:$PATH"
 
     - name: Run pre-commit
       uses: pre-commit/action@v3.0.1
+      env:
+        # go 1.26's formatter doesn't agree with 1.27 on some things
+        SKIP: ${{ matrix.go-version == '1.26' && 'go-imports-repo' || '' }}
