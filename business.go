@@ -1643,6 +1643,22 @@ type BusinessNativeFlowButtonsMessageParams struct {
 	ContextInfo *waE2E.ContextInfo
 }
 
+// BusinessCarouselCard carries already uploaded image or video media and native controls.
+// Exactly one media field must be set; reply IDs must be unique across the carousel.
+type BusinessCarouselCard struct {
+	Body    string
+	Image   *waE2E.ImageMessage
+	Video   *waE2E.VideoMessage
+	Buttons []BusinessNativeFlowButton
+}
+
+type BusinessCarouselMessageParams struct {
+	Body        string
+	Footer      string
+	Cards       []BusinessCarouselCard
+	ContextInfo *waE2E.ContextInfo
+}
+
 type BusinessAddressMessageParams struct {
 	Body        string
 	ButtonText  string
@@ -1814,7 +1830,7 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 }
 
 func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message, error) {
-	if !bounded(params.Title, 60) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 1024) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 20) || !bounded(params.Footer, 60) {
+	if !bounded(params.Title, 256) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 4096) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Footer, 256) {
 		return nil, errors.New("invalid business list text")
 	}
 	if len(params.Sections) == 0 || len(params.Sections) > 10 {
@@ -1824,16 +1840,16 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 	seen := make(map[string]struct{})
 	rowCount := 0
 	for sectionIndex, section := range params.Sections {
-		if !bounded(section.Title, 24) || len(section.Rows) == 0 || (len(params.Sections) > 1 && strings.TrimSpace(section.Title) == "") {
+		if !bounded(section.Title, 256) || len(section.Rows) == 0 {
 			return nil, fmt.Errorf("invalid business list section %d", sectionIndex)
 		}
-		if len(section.Rows) > 10-rowCount {
-			return nil, errors.New("business list exceeds 10 rows")
+		if len(section.Rows) > 30-rowCount {
+			return nil, errors.New("business list exceeds 30 rows")
 		}
 		rowCount += len(section.Rows)
 		rows := make([]*waE2E.ListMessage_Row, len(section.Rows))
 		for rowIndex, row := range section.Rows {
-			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 200) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 24) || !bounded(row.Description, 72) {
+			if strings.TrimSpace(row.ID) == "" || !bounded(row.ID, 256) || strings.TrimSpace(row.Title) == "" || !bounded(row.Title, 256) || !bounded(row.Description, 1024) {
 				return nil, fmt.Errorf("invalid business list row %d in section %d", rowIndex, sectionIndex)
 			}
 			if _, exists := seen[row.ID]; exists {
@@ -1850,39 +1866,105 @@ func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message,
 	}}, nil
 }
 
+// BuildBusinessNativeFlowButtonsMessage creates the native InteractiveMessage form.
+// Web supports up to ten quick replies or three CTA buttons, without mixing them.
 func BuildBusinessNativeFlowButtonsMessage(params BusinessNativeFlowButtonsMessageParams) (*waE2E.Message, error) {
-	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 1024) || !bounded(params.Title, 60) || !bounded(params.Footer, 60) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 4096) || !bounded(params.Title, 256) || !bounded(params.Footer, 256) {
 		return nil, errors.New("invalid business native-flow text")
 	}
-	if len(params.Buttons) == 0 || len(params.Buttons) > 3 {
-		return nil, errors.New("business native-flow message must contain 1 to 3 buttons")
+	if len(params.Buttons) == 0 || len(params.Buttons) > 10 {
+		return nil, errors.New("business native-flow message must contain 1 to 10 buttons")
 	}
-	buttons := make([]*waE2E.ButtonsMessage_Button, len(params.Buttons))
+	buttons := make([]*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton, len(params.Buttons))
+	replies := 0
 	for index, button := range params.Buttons {
-		if strings.TrimSpace(button.Name) == "" || !bounded(button.Name, 64) || strings.TrimSpace(button.ParamsJSON) == "" || !bounded(button.ParamsJSON, 8192) {
+		switch button.Name {
+		case "quick_reply":
+			replies++
+		case "cta_url", "cta_call", "cta_copy", "cta_catalog":
+		default:
+			return nil, fmt.Errorf("unsupported business native-flow button %d", index)
+		}
+		if strings.TrimSpace(button.ParamsJSON) == "" || !bounded(button.ParamsJSON, 8192) {
 			return nil, fmt.Errorf("invalid business native-flow button %d", index)
 		}
 		var object map[string]any
 		if err := json.Unmarshal([]byte(button.ParamsJSON), &object); err != nil || object == nil {
 			return nil, fmt.Errorf("invalid business native-flow params for button %d", index)
 		}
-		buttons[index] = &waE2E.ButtonsMessage_Button{
-			Type: waE2E.ButtonsMessage_Button_NATIVE_FLOW.Enum(),
-			NativeFlowInfo: &waE2E.ButtonsMessage_Button_NativeFlowInfo{
-				Name: proto.String(button.Name), ParamsJSON: proto.String(button.ParamsJSON),
-			},
+		buttons[index] = &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+			Name: proto.String(button.Name), ButtonParamsJSON: proto.String(button.ParamsJSON),
 		}
 	}
-	headerType := waE2E.ButtonsMessage_EMPTY
-	message := &waE2E.ButtonsMessage{
-		ContentText: proto.String(params.Body), FooterText: optionalString(params.Footer), Buttons: buttons, HeaderType: headerType.Enum(), ContextInfo: params.ContextInfo,
+	if replies != 0 && replies != len(buttons) {
+		return nil, errors.New("business native-flow quick replies cannot be mixed with CTA buttons")
+	}
+	if replies == 0 && len(buttons) > 3 {
+		return nil, errors.New("business native-flow message exceeds 3 CTA buttons")
+	}
+	message := &waE2E.InteractiveMessage{
+		Body:        &waE2E.InteractiveMessage_Body{Text: proto.String(params.Body)},
+		ContextInfo: params.ContextInfo,
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			Buttons: buttons, MessageVersion: proto.Int32(1),
+		}},
 	}
 	if params.Title != "" {
-		headerType = waE2E.ButtonsMessage_TEXT
-		message.HeaderType = headerType.Enum()
-		message.Header = &waE2E.ButtonsMessage_Text{Text: params.Title}
+		message.Header = &waE2E.InteractiveMessage_Header{Title: proto.String(params.Title)}
 	}
-	return &waE2E.Message{ButtonsMessage: message}, nil
+	if params.Footer != "" {
+		message.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(params.Footer)}
+	}
+	return &waE2E.Message{InteractiveMessage: message}, nil
+}
+
+// BuildBusinessCarouselMessage builds one bounded Linked Devices carousel.
+// The shipped Web parser accepts more cards; this sender deliberately allows 2–10.
+func BuildBusinessCarouselMessage(params BusinessCarouselMessageParams) (*waE2E.Message, error) {
+	if strings.TrimSpace(params.Body) == "" || !bounded(params.Body, 4096) || !bounded(params.Footer, 256) {
+		return nil, errors.New("invalid business carousel text")
+	}
+	if len(params.Cards) < 2 || len(params.Cards) > 10 {
+		return nil, errors.New("business carousel must contain 2 to 10 cards")
+	}
+	cards := make([]*waE2E.InteractiveMessage, len(params.Cards))
+	replyIDs := make(map[string]struct{})
+	for i, card := range params.Cards {
+		if (card.Image == nil) == (card.Video == nil) {
+			return nil, fmt.Errorf("carousel card %d requires exactly one image or video", i)
+		}
+		msg, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{Body: card.Body, Buttons: card.Buttons})
+		if err != nil {
+			return nil, fmt.Errorf("carousel card %d: %w", i, err)
+		}
+		for _, button := range card.Buttons {
+			if button.Name == "quick_reply" {
+				var fields struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(button.ParamsJSON), &fields); err != nil || strings.TrimSpace(fields.ID) == "" || !bounded(fields.ID, 256) {
+					return nil, fmt.Errorf("carousel card %d has an invalid reply ID", i)
+				}
+				if _, exists := replyIDs[fields.ID]; exists {
+					return nil, errors.New("carousel reply IDs must be unique")
+				}
+				replyIDs[fields.ID] = struct{}{}
+			}
+		}
+		interactive := msg.InteractiveMessage
+		interactive.Header = &waE2E.InteractiveMessage_Header{HasMediaAttachment: proto.Bool(true)}
+		if card.Image != nil {
+			interactive.Header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{ImageMessage: card.Image}
+		} else {
+			interactive.Header.Media = &waE2E.InteractiveMessage_Header_VideoMessage{VideoMessage: card.Video}
+		}
+		cards[i] = interactive
+	}
+	interactive := &waE2E.InteractiveMessage{Body: &waE2E.InteractiveMessage_Body{Text: proto.String(params.Body)}, ContextInfo: params.ContextInfo, InteractiveMessage: &waE2E.InteractiveMessage_CarouselMessage_{CarouselMessage: &waE2E.InteractiveMessage_CarouselMessage{Cards: cards, MessageVersion: proto.Int32(1)}}}
+	if params.Footer != "" {
+		interactive.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(params.Footer)}
+	}
+	return &waE2E.Message{InteractiveMessage: interactive}, nil
 }
 
 func BuildBusinessAddressMessage(params BusinessAddressMessageParams) (*waE2E.Message, error) {
