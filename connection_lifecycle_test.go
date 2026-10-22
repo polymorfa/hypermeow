@@ -65,6 +65,18 @@ type finalConnectionContextKey struct{}
 func TestFinalConnectionSuccessJoinsBlockedOwnedTask(t *testing.T) {
 	blocking := &finalConnectionPrekeys{entered: make(chan context.Context, 1), release: make(chan struct{})}
 	c := NewClient(&store.Device{PreKeys: blocking}, nil)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(blocking.release) }) }
+	// Register before any assertion so failure cannot strand the native task
+	// or its teardown. The explicit release below and cleanup share one close.
+	t.Cleanup(func() {
+		release()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := c.FinalClose(ctx); !errors.Is(err, ErrClientShutdownIncomplete) {
+			t.Errorf("post-connect cleanup: %v", err)
+		}
+	})
 	c.paired.Store(true)
 	c.lastTCTokenDBPrune = time.Now() // Do not launch the separately unbound prune.
 	parent := context.WithValue(context.Background(), finalConnectionContextKey{}, "preserved-value")
@@ -79,10 +91,12 @@ func TestFinalConnectionSuccessJoinsBlockedOwnedTask(t *testing.T) {
 		t.Fatal("event context value lost")
 	}
 	finalTestBlocked(t, c)
+	// Root cancellation does not order the asynchronous forwarding callback.
+	finalTestWait(t, inherited.Done())
 	if !errors.Is(inherited.Err(), context.Canceled) {
 		t.Fatal("post-connect task did not receive final cancellation")
 	}
-	close(blocking.release)
+	release()
 	if err := c.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
 		t.Fatalf("post-connect join: %v", err)
 	}
