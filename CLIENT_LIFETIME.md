@@ -31,6 +31,14 @@ the deadline ends its waiter and does not manufacture completion.
   asynchronous socket close, and asynchronous writes. Client installs the socket
   launcher before dialing. The launcher records owned completion before scheduling.
   A write remains tracked after SendFrame returns on context cancellation.
+- Connection-event async dispatch wrappers, the 515 disconnect/reconnect task,
+  and the connect-success task. Context-aware tasks acquire an owned forwarding
+  context before scheduling; their existing store/prekey/IQ bodies are unchanged.
+- GetQRChannel registration and its one cleanup worker, each admitted QR emitter,
+  output sends, terminal closure and exact handler removal. The channel lifetime
+  starts before Connect, including when no QR event ever arrives. Caller/final
+  cancellation ends that lifetime. Ordinary Disconnect stops an emitter as before
+  and leaves the channel available for subsequent events.
 - One teardown task, whose completion is recorded before launch. Context forwarding
   uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
   those small cancellation callbacks are not a joined product-worker claim.
@@ -68,6 +76,37 @@ subset, and releases the established-context references. No successful return or
 stop receipt follows from that cleanup. Tests of the context-transfer helper do
 not establish a live handshake/socket acceptance result.
 
+## QR channel closure and boundaries
+
+One reserved cleanup worker owns each output close and handler removal. Sends
+register under the QR-local mutex, then wait without it. Closure seals new sends
+and waits for existing sends outside locks before closing output. Terminal event
+callbacks are released before cleanup acquires the handler-list write lock, so
+removal cannot deadlock on the callback's own read lock. FinalClose joins the
+cleanup and emitter tasks even if removal is blocked by another callback.
+QR-local closure and emitter admission also share one lock. Timers retain the
+existing 20-second/60-second values and are stopped on every interrupted wait.
+
+Caller cancellation or final close can close output without a terminal pairing
+status. Output backpressure keeps its prior nonblocking code-emission shutdown
+behavior. A caller must not treat output close as a successful pairing, a joined
+whole-client lifetime or a stop receipt. The cleanup worker can still be removing
+its handler after output closes; FinalClose tracks that completion separately.
+
+Expiry/caller cancellation may disconnect only the exact socket pointer observed
+by the QR emitter if it is still current. No observed socket means no disconnect;
+a retired pointer cannot stop a replacement socket on the same Client. This is
+local lifetime protection, not authenticated event-origin or placement custody.
+Synthetic injected QR events and externally started operations remain the caller's
+responsibility. No pairing/protocol/Signal/key/store body or payload changed.
+The existing automatic passkey-confirmation method is invoked synchronously by
+its admitted QR callback, not reclassified as an accepted Signal producer.
+
+Notifications/AB-props and privacy pruning were deliberately not folded into
+this group. Connection-success's pruning call still reaches an unbound task as
+listed below. External RefreshCAT implementations, store/transport internals and
+user-spawned callbacks do not gain owned completion proof from these wrappers.
+
 ## Still unbound
 
 The following existing client-owned producers retain their prior behavior and
@@ -79,14 +118,12 @@ owning-library work before any successful stop result is possible.
 
 | Source at base 29a42459 | Unbound lifetime |
 | --- | --- |
-| connectionevents.go:33,187 | Stream cleanup, connect-success/prekey/upload/session work and async event-dispatch launch wrappers. Event callback invocation itself is sealed by dispatchEvent, but the wrapper goroutine is unbound. |
 | notification.go:57,522-566,603 | Privacy token, encryption/app-state/account-sync, code/passkey pairing, and server AB-props sync tasks. |
 | message.go:82-89,373-374,469-470,520,549,770,887,1005-1037 | Name updates, retry/ack work, event-buffer cleanup, event-dispatch wrapper, history download/storage/notification loops, key-share and peer-data work. |
 | appstate.go:162,645,659 | Missing-key request and async event batches. |
 | pair.go:138-147 | Pair completion, PrePairCallback and unified-session child task. |
 | receipt.go:27,36,109,128; retry.go:469,541 | Async ack/retry handlers and delayed phone rerequests. Cancellation of delayed requests is not their join. |
-| presence.go:71; send.go:903; tctoken.go:150 | Unified-session, privacy-token persistence and expired-token pruning. |
-| qrchan.go:80,102,119,135,195 | QR emission and async handler removals. |
+| presence.go:71; send.go:903; tctoken.go:150 | Unified-session, privacy-token persistence and expired-token pruning. The prune called synchronously by connect-success still launches this separate unbound task. |
 | handshake.go:98-103 | GetClientPayload callback admission is not separately sealed; an admitted connection can reach it. The enclosing connect is counted, which is not full callback-admission coverage. |
 
 Caller-invoked public API methods, DangerousInternals, external HTTP transports,

@@ -30,17 +30,17 @@ func (cli *Client) handleStreamError(ctx context.Context, node *waBinary.Node) {
 			return
 		}
 		cli.Log.Infof("Got 515 code, reconnecting...")
-		go func() {
+		cli.startConnectionTask(ctx, func(ctx context.Context) {
 			cli.Disconnect()
 			err := cli.connect(ctx)
 			if err != nil {
 				cli.Log.Errorf("Failed to reconnect after 515 code: %v", err)
 			}
-		}()
+		})
 	case code == "401" && conflictType == "device_removed":
 		cli.expectDisconnect()
 		cli.Log.Infof("Got device removed stream error, sending LoggedOut event and deleting session")
-		go cli.dispatchEvent(&events.LoggedOut{OnConnect: false, Reason: events.ConnectFailureLoggedOut})
+		cli.dispatchEventAsync(&events.LoggedOut{OnConnect: false, Reason: events.ConnectFailureLoggedOut})
 		err := cli.Store.Delete(ctx)
 		if err != nil {
 			cli.Log.Warnf("Failed to delete store after device_removed error: %v", err)
@@ -48,7 +48,7 @@ func (cli *Client) handleStreamError(ctx context.Context, node *waBinary.Node) {
 	case conflictType == "replaced":
 		cli.expectDisconnect()
 		cli.Log.Infof("Got replaced stream error, sending StreamReplaced event")
-		go cli.dispatchEvent(&events.StreamReplaced{})
+		cli.dispatchEventAsync(&events.StreamReplaced{})
 	case code == "503":
 		// This seems to happen when the server wants to restart or something.
 		// The disconnection will be emitted as an events.Disconnected and then the auto-reconnect will do its thing.
@@ -61,11 +61,11 @@ func (cli *Client) handleStreamError(ctx context.Context, node *waBinary.Node) {
 		if err != nil {
 			cli.Log.Errorf("Failed to refresh CAT: %v", err)
 			cli.expectDisconnect()
-			go cli.dispatchEvent(&events.CATRefreshError{Error: err})
+			cli.dispatchEventAsync(&events.CATRefreshError{Error: err})
 		}
 	default:
 		cli.Log.Errorf("Unknown stream error: %s", node)
-		go cli.dispatchEvent(&events.StreamError{Code: code, Raw: node})
+		cli.dispatchEventAsync(&events.StreamError{Code: code, Raw: node})
 	}
 }
 
@@ -75,7 +75,7 @@ func (cli *Client) handleIB(ctx context.Context, node *waBinary.Node) {
 		ag := child.AttrGetter()
 		switch child.Tag {
 		case "downgrade_webclient":
-			go cli.dispatchEvent(&events.QRScannedWithoutMultidevice{})
+			cli.dispatchEventAsync(&events.QRScannedWithoutMultidevice{})
 		case "offline_preview":
 			cli.dispatchEvent(&events.OfflineSyncPreview{
 				Total:          ag.Int("count"),
@@ -125,33 +125,33 @@ func (cli *Client) handleConnectFailure(ctx context.Context, node *waBinary.Node
 	}
 	if reason.IsLoggedOut() {
 		cli.Log.Infof("Got %s connect failure, sending LoggedOut event and deleting session", reason)
-		go cli.dispatchEvent(&events.LoggedOut{OnConnect: true, Reason: reason})
+		cli.dispatchEventAsync(&events.LoggedOut{OnConnect: true, Reason: reason})
 		err := cli.Store.Delete(ctx)
 		if err != nil {
 			cli.Log.Warnf("Failed to delete store after %d failure: %v", int(reason), err)
 		}
 	} else if reason == events.ConnectFailureTempBanned {
 		cli.Log.Warnf("Temporary ban connect failure: %s", node)
-		go cli.dispatchEvent(&events.TemporaryBan{
+		cli.dispatchEventAsync(&events.TemporaryBan{
 			Code:   events.TempBanReason(ag.Int("code")),
 			Expire: time.Duration(ag.Int("expire")) * time.Second,
 		})
 	} else if reason == events.ConnectFailureClientOutdated {
 		cli.Log.Errorf("Client outdated (405) connect failure (client version: %s)", store.GetWAVersion().String())
-		go cli.dispatchEvent(&events.ClientOutdated{})
+		cli.dispatchEventAsync(&events.ClientOutdated{})
 	} else if reason == events.ConnectFailureCATInvalid || reason == events.ConnectFailureCATExpired {
 		cli.Log.Infof("Got %d/%s connect failure, refreshing CAT before reconnecting...", int(reason), message)
 		err := cli.RefreshCAT(ctx)
 		if err != nil {
 			cli.Log.Errorf("Failed to refresh CAT: %v", err)
 			cli.expectDisconnect()
-			go cli.dispatchEvent(&events.CATRefreshError{Error: err})
+			cli.dispatchEventAsync(&events.CATRefreshError{Error: err})
 		}
 	} else if willAutoReconnect {
 		cli.Log.Warnf("Got %d/%s connect failure, assuming automatic reconnect will handle it", int(reason), message)
 	} else {
 		cli.Log.Warnf("Unknown connect failure: %s", node)
-		go cli.dispatchEvent(&events.ConnectFailure{Reason: reason, Message: message, Raw: node})
+		cli.dispatchEventAsync(&events.ConnectFailure{Reason: reason, Message: message, Raw: node})
 	}
 }
 
@@ -184,7 +184,7 @@ func (cli *Client) handleConnectSuccess(ctx context.Context, node *waBinary.Node
 		cli.StoreLIDPNMapping(ctx, cli.Store.GetLID(), cli.Store.GetJID())
 	}
 	cli.deleteExpiredPrivacyTokens()
-	go func() {
+	cli.startConnectionTask(ctx, func(ctx context.Context) {
 		if dbCount, err := cli.Store.PreKeys.UploadedPreKeyCount(ctx); err != nil {
 			cli.Log.Errorf("Failed to get number of prekeys in database: %v", err)
 		} else if serverCount, err := cli.getServerPreKeyCount(ctx); err != nil {
@@ -203,7 +203,7 @@ func (cli *Client) handleConnectSuccess(ctx context.Context, node *waBinary.Node
 		}
 		cli.dispatchEvent(&events.Connected{})
 		cli.closeSocketWaitChan()
-	}()
+	})
 }
 
 // SetPassive tells the WhatsApp server whether this device is passive or not.

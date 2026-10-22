@@ -70,6 +70,22 @@ func (cli *Client) startNative(fn func()) bool {
 	return true
 }
 
+// startConnectionTask owns a connection-event task and its forwarding context.
+// Registration precedes scheduling even when final close wins before execution.
+func (cli *Client) startConnectionTask(parent context.Context, fn func(context.Context)) bool {
+	done, ok := cli.enterNative()
+	if !ok {
+		return false
+	}
+	ctx, release := cli.nativeContext(parent)
+	go func() { defer done(); defer release(); fn(ctx) }()
+	return true
+}
+
+func (cli *Client) dispatchEventAsync(evt any) bool {
+	return cli.startNative(func() { cli.dispatchEvent(evt) })
+}
+
 func (cli *Client) nativeDone() <-chan struct{} {
 	l := &cli.lifetime
 	l.mu.Lock()
