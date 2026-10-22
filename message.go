@@ -79,14 +79,14 @@ func (cli *Client) updateMessageContactNames(ctx context.Context, info *types.Me
 		if synchronous {
 			cli.updateBusinessName(ctx, info.Sender, info.SenderAlt, info, verifiedName)
 		} else {
-			go cli.updateBusinessName(ctx, info.Sender, info.SenderAlt, info, verifiedName)
+			cli.startMessageNameUpdate(ctx, info.Sender, info.SenderAlt, info, verifiedName, true)
 		}
 	}
 	if len(info.PushName) > 0 && info.PushName != "-" && (cli.MessengerConfig == nil || info.PushName != "username") {
 		if synchronous {
 			cli.updatePushName(ctx, info.Sender, info.SenderAlt, info, info.PushName)
 		} else {
-			go cli.updatePushName(ctx, info.Sender, info.SenderAlt, info, info.PushName)
+			cli.startMessageNameUpdate(ctx, info.Sender, info.SenderAlt, info, info.PushName, false)
 		}
 	}
 }
@@ -348,7 +348,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	if ok && len(node.GetChildrenByTag("enc")) == 0 {
 		uType := events.UnavailableType(unavailableNode.AttrGetter().String("type"))
 		cli.Log.Warnf("Unavailable message %s from %s (type: %q)", info.ID, info.SourceString(), uType)
-		cli.backgroundIfAsyncAck(func() {
+		cli.backgroundIfAsyncAckContext(ctx, func(ctx context.Context) {
 			cli.immediateRequestMessageFromPhone(ctx, info)
 			cli.sendAck(ctx, node, 0)
 		})
@@ -370,8 +370,8 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 				cli.sendRetryReceipt(ctx, node, info, false)
 				cli.sendAck(ctx, node, 0)
 			} else {
-				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, false)
-				go cli.sendAck(ctx, node, 0)
+				cli.startRetryReceipt(context.WithoutCancel(ctx), node, info, false)
+				cli.startAck(ctx, node, 0)
 			}
 			cli.dispatchEvent(&events.UndecryptableMessage{Info: *info})
 			return
@@ -442,7 +442,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			// receipt would only provoke redeliveries. Acknowledge, surface the
 			// message as undecryptable, and move on.
 			cli.Log.Warnf("Ignoring group message %s from %s: %v", info.ID, info.SourceString(), err)
-			cli.backgroundIfAsyncAck(func() {
+			cli.backgroundIfAsyncAckContext(ctx, func(ctx context.Context) {
 				cli.sendAck(ctx, node, 0)
 			})
 			cli.dispatchEvent(&events.UndecryptableMessage{
@@ -458,7 +458,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			}
 			isUnavailable := encType == "skmsg" && !containsDirectMsg && errors.Is(err, signalerror.ErrNoSenderKeyForUser)
 			if encType == "msmsg" {
-				cli.backgroundIfAsyncAck(func() {
+				cli.backgroundIfAsyncAckContext(ctx, func(ctx context.Context) {
 					cli.sendAck(ctx, node, NackMissingMessageSecret)
 				})
 			} else if cli.SynchronousAck {
@@ -466,8 +466,8 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 				// TODO this probably isn't supposed to ack
 				cli.sendAck(ctx, node, 0)
 			} else {
-				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable)
-				go cli.sendAck(ctx, node, 0)
+				cli.startRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable)
+				cli.startAck(ctx, node, 0)
 			}
 			cli.dispatchEvent(&events.UndecryptableMessage{
 				Info:            *info,
@@ -515,18 +515,10 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 					Msg("Deleted event plaintext from buffer")
 			}
 
-			if time.Since(cli.lastDecryptedBufferClear) > 12*time.Hour && ctx.Err() == nil {
-				cli.lastDecryptedBufferClear = time.Now()
-				go func() {
-					err := cli.Store.EventBuffer.DeleteOldBufferedHashes(context.WithoutCancel(ctx))
-					if err != nil {
-						zerolog.Ctx(ctx).Err(err).Msg("Failed to delete old buffered hashes")
-					}
-				}()
-			}
+			cli.startEventBufferCleanup(ctx)
 		}
 	}
-	cli.backgroundIfAsyncAck(func() {
+	cli.backgroundIfAsyncAckContext(ctx, func(ctx context.Context) {
 		if !recognizedStanza {
 			cli.sendAck(ctx, node, NackUnrecognizedStanza)
 		} else if protobufFailed {
@@ -546,7 +538,7 @@ func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID)
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
-	go cli.dispatchEvent(&events.IdentityChange{JID: target, Timestamp: time.Now(), Implicit: true})
+	cli.dispatchEventAsync(&events.IdentityChange{JID: target, Timestamp: time.Now(), Implicit: true})
 	return nil
 }
 
@@ -755,9 +747,9 @@ func (cli *Client) handleSenderKeyDistributionMessage(ctx context.Context, chat,
 	cli.Log.Debugf("Processed sender key distribution message from %s in %s", senderKeyName.Sender().String(), senderKeyName.GroupID())
 }
 
-func (cli *Client) handleHistorySyncNotificationLoop() {
+func (cli *Client) runHistorySyncNotificationLoop(ctx context.Context, owner *historySyncLoopOwner, restart bool) {
 	defer func() {
-		cli.historySyncHandlerStarted.Store(false)
+		released := cli.releaseHistorySyncLoop(owner)
 		err := recover()
 		if err != nil {
 			cli.Log.Errorf("History sync handler panicked: %v\n%s", err, debug.Stack())
@@ -765,14 +757,20 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 
 		// Check in case something new appeared in the channel between the loop stopping
 		// and the atomic variable being updated. If yes, restart the loop.
-		if len(cli.historySyncNotifications) > 0 && cli.historySyncHandlerStarted.CompareAndSwap(false, true) {
-			cli.Log.Warnf("New history sync notifications appeared after loop stopped, restarting loop...")
-			go cli.handleHistorySyncNotificationLoop()
+		if released && !cli.nativeClosed() && len(cli.historySyncNotifications) > 0 {
+			cli.startHistorySyncLoop(true)
 		}
 	}()
-	ctx := cli.BackgroundEventCtx
+	if restart {
+		cli.Log.Warnf("New history sync notifications appeared after loop stopped, restarting loop...")
+	}
 	for {
+		if cli.nativeClosed() {
+			return
+		}
 		select {
+		case <-cli.nativeDone():
+			return
 		case queued := <-cli.historySyncNotifications:
 			blob, err := cli.DownloadHistorySync(ctx, queued.notification, false)
 			if err != nil {
@@ -884,7 +882,7 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 	} else if synchronousStorage {
 		doStorage(storageCtx)
 	} else {
-		go doStorage(storageCtx)
+		cli.startConnectionTask(storageCtx, doStorage)
 	}
 	return &historySync, nil
 }
@@ -1000,18 +998,17 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 
 	if protoMsg.GetHistorySyncNotification() != nil {
 		if !cli.ManualHistorySyncDownload {
-			cli.historySyncNotifications <- historySyncNotification{messageID: info.ID, notification: protoMsg.HistorySyncNotification}
-			if cli.historySyncHandlerStarted.CompareAndSwap(false, true) {
-				go cli.handleHistorySyncNotificationLoop()
+			if !cli.enqueueHistorySyncNotification(historySyncNotification{messageID: info.ID, notification: protoMsg.HistorySyncNotification}) {
+				return false
 			}
 		}
 		if cli.shouldSendHistorySyncReceipt() {
-			go func() {
+			cli.startConnectionTask(ctx, func(ctx context.Context) {
 				err := cli.SendProtocolMessageReceipt(ctx, info.ID, types.ReceiptTypeHistorySync)
 				if err != nil {
 					cli.Log.Warnf("Failed to send acknowledgement for protocol message %s: %v", info.ID, err)
 				}
-			}()
+			})
 		}
 	}
 
@@ -1030,16 +1027,16 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 	}
 
 	if protoMsg.GetAppStateSyncKeyShare() != nil {
-		go cli.handleAppStateSyncKeyShare(context.WithoutCancel(ctx), protoMsg.AppStateSyncKeyShare)
+		cli.startAppStateKeyShare(context.WithoutCancel(ctx), protoMsg.AppStateSyncKeyShare)
 	}
 
 	if info.Category == "peer" {
-		go func() {
+		cli.startConnectionTask(ctx, func(ctx context.Context) {
 			err := cli.SendProtocolMessageReceipt(ctx, info.ID, types.ReceiptTypePeerMsg)
 			if err != nil {
 				cli.Log.Warnf("Failed to send acknowledgement for protocol message %s: %v", info.ID, err)
 			}
-		}()
+		})
 	}
 	return
 }

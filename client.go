@@ -120,6 +120,8 @@ type Client struct {
 	EnableDecryptedEventBuffer    bool
 	synchronousMessageNameUpdates atomic.Bool
 	lastDecryptedBufferClear      time.Time
+	decryptedBufferClearMu        sync.Mutex
+	decryptedBufferClearStarted   bool
 
 	DisableLoginAutoReconnect bool
 
@@ -133,7 +135,7 @@ type Client struct {
 	AppStateDebugLogs              bool
 
 	AutomaticMessageRerequestFromPhone bool
-	pendingPhoneRerequests             map[types.MessageID]context.CancelFunc
+	pendingPhoneRerequests             map[types.MessageID]*pendingPhoneRerequest
 	pendingPhoneRerequestsLock         sync.RWMutex
 
 	appStateProc     *appstate.Processor
@@ -141,6 +143,8 @@ type Client struct {
 
 	historySyncNotifications        chan historySyncNotification
 	historySyncHandlerStarted       atomic.Bool
+	historySyncHandlerMu            sync.Mutex
+	historySyncHandlerOwner         *historySyncLoopOwner
 	ManualHistorySyncDownload       bool
 	DisableManualHistorySyncReceipt bool
 	DisableHistorySyncReceipt       bool

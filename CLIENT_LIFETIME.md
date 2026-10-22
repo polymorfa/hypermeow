@@ -42,6 +42,9 @@ the deadline ends its waiter and does not manufacture completion.
 - Async notification dispatches, server AB-props tasks and their ACK callback,
   privacy-token issuance/persistence, unified-session children and expired-token
   pruning, including the connect-success prune. See the exact boundaries below.
+- Client-owned message name/event/history/storage/receipt/key-share launches,
+  ACK/retry handlers and delayed phone rerequests. Their exact contexts and loop
+  ownership are described below; appstate descendants remain separate gaps.
 - One teardown task, whose completion is recorded before launch. Context forwarding
   uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
   those small cancellation callbacks are not a joined product-worker claim.
@@ -140,6 +143,57 @@ External RefreshCAT implementations, store/transport internals and user-spawned
 callbacks do not gain whole-client completion proof from these wrappers. The
 established-context retention described above remains conservative and unchanged.
 
+## Message, history, ACK and retry task ownership
+
+All explicit async launches in message.go, receipt.go and retry.go register
+before scheduling. Typed helpers capture the original direct go-call arguments
+before launch, including contact-name strings/JIDs, retry booleans, node/key-share
+pointers and the identity event with its time.Now timestamp. The existing
+anonymous history/peer receipt closures still read info.ID when executed.
+Handler, crypto/key/store bodies and payloads are unchanged apart from the
+inventoried scheduling/context/ownership controls.
+
+Name tasks and ACK/retry handlers keep caller contexts and values. Retry sends,
+async history storage and event-buffer cleanup keep WithoutCancel ancestry,
+then add final cancellation independently. History loops and delayed phone work
+keep BackgroundEventCtx ancestry. Every admitted task stays counted until its
+actual store, callback, send or handler returns, even if it ignores cancellation.
+Ordinary Disconnect does not seal or cancel these tasks.
+
+Synchronous ACK/name/storage branches retain their original inline execution
+and contexts, including canceled flags, NACKs and error policy. They are part of
+an already admitted enclosing operation or separate caller-owned work. The
+contextless DangerousInternals async-function adapter joins the supplied function
+but cannot cancel an unknown captured context or own user-spawned descendants.
+
+History loop claims have exact nonzero-size owner tokens. Only that token can
+release its claim or started indicator. Admission refusal releases its claim;
+normal return/panic cleanup can restart queued work through a fresh admitted
+owner. Restart logging runs inside the registered loop with cleanup installed.
+The synchronous DangerousInternals loop adapter now takes the same exclusive
+claim and joins its invocation; it cannot duplicate or clear another running
+owner. This adapter keeps its signature and Background ancestry. Its other
+caller-owned operations remain separate boundaries.
+
+A blocked history enqueue keeps ordinary backpressure and ignores ordinary
+caller cancellation as before. Permanent final close interrupts it without
+closing the queue. The bounded queue can retain pending items on final close;
+no new loop or receipt is admitted to process them. The download/event/media
+branch and one-minute idle timeout are unchanged. A loop stops on final close
+and never restarts after that seal, while its actual in-flight work remains joined.
+
+Event-buffer cleanup retains the twelve-hour interval. A short mutex protects
+its launch guard and timestamp, never a completion wait. Only admitted work
+records the original captured time. Refusal releases the guard without advancing
+that timestamp; actual store return releases it on every exit.
+
+Delayed phone rerequests keep their five-second delay, feature checks, per-ID
+coalescing, cancellation and retry policy. The cancel map stores exact owner
+tokens. Cleanup removes only that owner even after cancellation/replacement;
+canceling an entry is not its completion. Refused launch creates no entry. A
+synchronous DangerousInternals delayed call retains its Background behavior and
+is still caller-owned. No timers/retry counts/protocol algorithms changed.
+
 ## Still unbound
 
 The following existing client-owned producers retain their prior behavior and
@@ -151,10 +205,8 @@ owning-library work before any successful stop result is possible.
 
 | Source at base 29a42459 | Unbound lifetime |
 | --- | --- |
-| message.go:82-89,373-374,469-470,520,549,770,887,1005-1037 | Name updates, retry/ack work, event-buffer cleanup, event-dispatch wrapper, history download/storage/notification loops, key-share and peer-data work. |
 | appstate.go:162,645,659 | Missing-key request and async event batches. |
 | pair.go:138-147 | Outer pair completion and PrePairCallback. Its unified-session child is now tracked; the parent and its other boundaries are not. |
-| receipt.go:27,36,109,128; retry.go:469,541 | Async ack/retry handlers and delayed phone rerequests. Cancellation of delayed requests is not their join. |
 | handshake.go:98-103 | GetClientPayload callback admission is not separately sealed; an admitted connection can reach it. The enclosing connect is counted, which is not full callback-admission coverage. |
 
 Caller-invoked public API methods, DangerousInternals, external HTTP transports,

@@ -24,7 +24,7 @@ func (cli *Client) handleReceipt(ctx context.Context, node *waBinary.Node) {
 	receipt, participants, err := cli.parseReceipt(node)
 	if err != nil {
 		cli.Log.Warnf("Failed to parse receipt: %v", err)
-		go cli.sendAck(ctx, node, NackParsingError)
+		cli.startAck(ctx, node, NackParsingError)
 	} else if participants != nil {
 		defer cli.maybeDeferredAck(ctx, node)(&cancelled)
 		for _, pcp := range participants {
@@ -33,7 +33,7 @@ func (cli *Client) handleReceipt(ctx context.Context, node *waBinary.Node) {
 	} else {
 		if receipt.Type == types.ReceiptTypeRetry {
 			// Ack happens inside the retry receipt handler
-			go cli.tryHandleRetryReceipt(ctx, receipt, node)
+			cli.startRetryHandler(ctx, receipt, node)
 		} else {
 			defer cli.maybeDeferredAck(ctx, node)(&cancelled)
 		}
@@ -106,7 +106,7 @@ func (cli *Client) backgroundIfAsyncAck(fn func()) {
 	if cli.SynchronousAck {
 		fn()
 	} else {
-		go fn()
+		cli.startNative(fn)
 	}
 }
 
@@ -125,7 +125,7 @@ func (cli *Client) maybeDeferredAck(ctx context.Context, node *waBinary.Node) fu
 			cli.sendAck(ctx, node, 0)
 		}
 	} else {
-		go cli.sendAck(ctx, node, 0)
+		cli.startAck(ctx, node, 0)
 		return func(...*bool) {}
 	}
 }
