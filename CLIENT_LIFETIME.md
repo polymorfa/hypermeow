@@ -44,7 +44,9 @@ the deadline ends its waiter and does not manufacture completion.
   pruning, including the connect-success prune. See the exact boundaries below.
 - Client-owned message name/event/history/storage/receipt/key-share launches,
   ACK/retry handlers and delayed phone rerequests. Their exact contexts and loop
-  ownership are described below; appstate descendants remain separate gaps.
+  ownership are described below. The appstate children have their own boundary.
+- Appstate missing-key request and the two contextless send/resync event batches,
+  including their actual synchronous callbacks and request/store return.
 - One teardown task, whose completion is recorded before launch. Context forwarding
   uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
   those small cancellation callbacks are not a joined product-worker claim.
@@ -198,6 +200,41 @@ canceling an entry is not its completion. Refused launch creates no entry. A
 synchronous DangerousInternals delayed call retains its Background behavior and
 is still caller-owned. No timers/retry counts/protocol algorithms changed.
 
+## Appstate asynchronous children
+
+The missing-key request and both send/resync event batches register before
+scheduling. The request keeps the original pre-launch WithoutCancel context
+and PatchList pointer as typed helper parameters. Final cancellation is added
+through the existing owned forwarding context. Refused admission does not enter
+GetMissingKeyIDs, initialize/update/prune the request cache, advance request
+times, log a key request or send. Admitted work stays counted through the actual
+lookup/request return, even when a store or send ignores cancellation. The
+request body, lock, deduplication, 24-hour cooldown, cap and ordering are unchanged.
+
+The two event-batch closures retain their original event-slice capture and range
+order. A contextless batch owns every synchronous dispatch it makes until the
+closure returns. Its private dispatcher keeps the existing handler-list locking,
+callback status and panic recovery behavior, without reapplying the final seal
+between already admitted members/handlers. This permits an admitted batch to
+finish its original callbacks after sealing without dropping or reordering
+members. New batches are refused after sealing. The general dispatchEvent
+admission rules are unchanged; this private dispatcher must not escape to
+independently spawned work. A user-spawned descendant is not joined by the batch.
+
+Ordinary Disconnect does not permanently seal the client or cancel these new
+appstate children; its registered delayed-phone cancellation exception above
+still applies. Batch reentry into bounded FinalClose cannot join its own callback
+until it returns, so a waiter error cannot acknowledge completion. No new state
+lock is held while the lifetime engine waits. The existing handler-list read lock
+around synchronous callbacks is retained, including its existing reentry limits.
+
+Public FetchAppState/SendAppState and DangerousInternals synchronous operations
+keep their signatures, errors and caller ownership. Only their named async
+children gain this admission/join boundary. Appstate patch/decode/crypto/key/store
+algorithms, retry recursion, protocol payloads and timers are unchanged. This is
+not whole-client source closure, native acceptance, Signal ownership or a stop
+receipt. Conservative established-context retention remains unchanged.
+
 ## Still unbound
 
 The following existing client-owned producers retain their prior behavior and
@@ -209,7 +246,6 @@ owning-library work before any successful stop result is possible.
 
 | Source at base 29a42459 | Unbound lifetime |
 | --- | --- |
-| appstate.go:162,645,659 | Missing-key request and async event batches. |
 | pair.go:138-147 | Outer pair completion and PrePairCallback. Its unified-session child is now tracked; the parent and its other boundaries are not. |
 | handshake.go:98-103 | GetClientPayload callback admission is not separately sealed; an admitted connection can reach it. The enclosing connect is counted, which is not full callback-admission coverage. |
 

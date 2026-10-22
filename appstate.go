@@ -159,7 +159,7 @@ func (cli *Client) applyAppStatePatches(
 	mutations, newState, err := cli.appStateProc.DecodePatches(ctx, patches, state, true)
 	if err != nil {
 		if errors.Is(err, appstate.ErrKeyNotFound) {
-			go cli.requestMissingAppStateKeys(context.WithoutCancel(ctx), patches)
+			cli.startMissingAppStateKeyRequest(context.WithoutCancel(ctx), patches)
 		} else {
 			cli.dispatchEvent(&events.AppStateSyncError{Name: name, FullSync: fullSync, Error: err})
 		}
@@ -642,11 +642,11 @@ func (cli *Client) sendAppState(ctx context.Context, patch appstate.PatchInfo, a
 				return fmt.Errorf("%w (also, applying patches in the response failed: %w)", mainErr, err)
 			} else {
 				zerolog.Ctx(ctx).Debug().Msg("Retrying app state send after applying conflicting patches")
-				go func() {
+				cli.startAppStateEventBatch(func(dispatch func(any) bool) {
 					for _, evt := range eventsToDispatch {
-						cli.dispatchEvent(evt)
+						dispatch(evt)
 					}
-				}()
+				})
 				return cli.sendAppState(ctx, patch, false)
 			}
 		}
@@ -656,11 +656,11 @@ func (cli *Client) sendAppState(ctx context.Context, patch appstate.PatchInfo, a
 	if err != nil {
 		return fmt.Errorf("failed to fetch app state after sending update: %w", err)
 	}
-	go func() {
+	cli.startAppStateEventBatch(func(dispatch func(any) bool) {
 		for _, evt := range eventsToDispatch {
-			cli.dispatchEvent(evt)
+			dispatch(evt)
 		}
-	}()
+	})
 
 	return nil
 }
