@@ -48,7 +48,9 @@ func newNoiseSocket(
 	fs.OnDisconnect = func(ctx context.Context, remote bool) {
 		disconnectHandler(ctx, ns, remote)
 	}
-	go ns.consumeFrames(ctx, fs.Frames)
+	if !fs.startWorker(func() { ns.consumeFrames(ctx, fs.Frames) }) {
+		return nil, ErrSocketClosed
+	}
 	return ns, nil
 }
 
@@ -98,9 +100,11 @@ func (ns *NoiseSocket) SendFrame(ctx context.Context, plaintext []byte) error {
 	ciphertext := ns.writeKey.Seal(nil, generateIV(ns.writeCounter), plaintext, nil)
 	ns.writeCounter++
 	doneChan := make(chan error, 1)
-	go func() {
+	if !ns.fs.startWorker(func() {
 		doneChan <- ns.fs.SendFrame(ciphertext)
-	}()
+	}) {
+		return ErrSocketClosed
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

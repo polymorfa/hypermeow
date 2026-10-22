@@ -20,6 +20,8 @@ import (
 )
 
 type FrameSocket struct {
+	workerLauncher func(func()) bool
+
 	parentCtx context.Context
 	cancelCtx context.Context
 	cancel    context.CancelFunc
@@ -60,6 +62,22 @@ func NewFrameSocket(log waLog.Logger, client *http.Client) *FrameSocket {
 	}
 }
 
+// SetWorkerLauncher binds socket-owned goroutines to an owning lifetime. Set it
+// before Connect; do not change it while the socket is in use. The launcher
+// must register work before scheduling and return false after admission closes.
+// A nil launcher retains ordinary standalone socket behavior.
+func (fs *FrameSocket) SetWorkerLauncher(launcher func(func()) bool) {
+	fs.workerLauncher = launcher
+}
+
+func (fs *FrameSocket) startWorker(fn func()) bool {
+	if fs.workerLauncher != nil {
+		return fs.workerLauncher(fn)
+	}
+	go fn()
+	return true
+}
+
 func (fs *FrameSocket) IsConnected() bool {
 	return fs.conn.Load() != nil
 }
@@ -88,7 +106,8 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 	fs.cancel()
 	fs.cancel = nil
 	if fs.OnDisconnect != nil {
-		go fs.OnDisconnect(fs.parentCtx, code == 0)
+		callback, parent, remote := fs.OnDisconnect, fs.parentCtx, code == 0
+		fs.startWorker(func() { callback(parent, remote) })
 	}
 }
 
@@ -114,7 +133,13 @@ func (fs *FrameSocket) Connect(ctx context.Context) error {
 
 	fs.conn.Store(conn)
 
-	go fs.readPump(conn, ctx)
+	if !fs.startWorker(func() { fs.readPump(conn, ctx) }) {
+		fs.conn.Store(nil)
+		fs.closed.Store(true)
+		fs.cancel()
+		_ = conn.CloseNow()
+		return ErrSocketClosed
+	}
 	return nil
 }
 
@@ -160,7 +185,10 @@ func (fs *FrameSocket) frameComplete() {
 	fs.partialHeader = nil
 	fs.incomingLength = 0
 	fs.receivedLength = 0
-	fs.Frames <- data
+	select {
+	case fs.Frames <- data:
+	case <-fs.cancelCtx.Done():
+	}
 }
 
 func (fs *FrameSocket) processData(msg []byte) {
@@ -208,7 +236,7 @@ func (fs *FrameSocket) readPump(conn *websocket.Conn, ctx context.Context) {
 	fs.log.Debugf("Frame websocket read pump starting %p", fs)
 	defer func() {
 		fs.log.Debugf("Frame websocket read pump exiting %p", fs)
-		go fs.Close(0)
+		fs.startWorker(func() { fs.Close(0) })
 	}()
 	for {
 		msgType, data, err := conn.Read(ctx)

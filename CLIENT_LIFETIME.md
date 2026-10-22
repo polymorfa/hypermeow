@@ -1,0 +1,75 @@
+# Final client close
+
+`(*Client).FinalClose(ctx)` permanently seals one exact Client instance. Pass a
+context with a deadline. `Disconnect` keeps its reusable behavior; it does not
+seal the instance. Neither operation logs out or deletes the device store.
+
+This is local lifecycle source, not a published contract or accepted deployment
+producer. **FinalClose never returns nil.** Once the tracked subset joins it
+returns `ErrClientShutdownIncomplete`. Context cancellation/deadline errors mean
+that this waiter did not observe even that subset's completion. A cancelled
+invocation before sealing makes no lifecycle change. A later invocation joins
+the same teardown, rather than retrying it. No stop receipt may be derived from
+any of these errors, a socket disconnect, or a cancelled context.
+
+Concurrent callers share one teardown of the same pointer. Replacement Client
+instances have separate lifetimes. Do not copy Client values. No client or socket
+state lock is held across a completion wait. A blocked external transport or
+callback can keep the owned teardown alive after a caller's deadline. Calling
+FinalClose from a callback cannot finish joining that callback until it returns;
+the deadline ends its waiter and does not manufacture completion.
+
+## Tracked native subset
+
+- ConnectContext and internal reconnect attempts, including admitted dials and
+  handshakes. Final close interrupts their contexts and refuses future attempts.
+- Keepalive and handler-queue loops, connection-triggered disconnected/reconnect
+  tasks, handler-queue reset tasks, and each scheduled node handler.
+- Synchronous receive processing, RawNodeHandler, dispatchEvent and each admitted
+  event handler, plus AutoReconnectHook invoked by tracked reconnect work.
+- FrameSocket read pump, NoiseSocket consume loop, socket disconnect callbacks,
+  asynchronous socket close, and asynchronous writes. Client installs the socket
+  launcher before dialing. The launcher records owned completion before scheduling.
+  A write remains tracked after SendFrame returns on context cancellation.
+- One teardown task, whose completion is recorded before launch. Context forwarding
+  uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
+  those small cancellation callbacks are not a joined product-worker claim.
+
+A permanent seal prevents new admissions to this subset. Work admitted before
+sealing may execute after sealing and remains counted until its function returns.
+Frame delivery can exit when the connection context is cancelled, rather than
+remaining stuck sending to an abandoned consumer. Socket ciphertext, counters,
+keys, handshake and wire formats are unchanged. Standalone FrameSocket users keep
+the default launcher unless they explicitly install their own before Connect.
+
+## Still unbound
+
+The following existing client-owned producers retain their prior behavior and
+are NOT included in the completion claim. Some use BackgroundEventCtx or
+WithoutCancel and can continue launching child work after the core seal. This
+is why the implementation cannot confirm full termination even when its tracked
+count reaches zero. Their admission, cancellation and actual completion need
+owning-library work before any successful stop result is possible.
+
+| Source at base 29a42459 | Unbound lifetime |
+| --- | --- |
+| connectionevents.go:33,187 | Stream cleanup, connect-success/prekey/upload/session work and async event-dispatch launch wrappers. Event callback invocation itself is sealed by dispatchEvent, but the wrapper goroutine is unbound. |
+| notification.go:57,522-566,603 | Privacy token, encryption/app-state/account-sync, code/passkey pairing, and server AB-props sync tasks. |
+| message.go:82-89,373-374,469-470,520,549,770,887,1005-1037 | Name updates, retry/ack work, event-buffer cleanup, event-dispatch wrapper, history download/storage/notification loops, key-share and peer-data work. |
+| appstate.go:162,645,659 | Missing-key request and async event batches. |
+| pair.go:138-147 | Pair completion, PrePairCallback and unified-session child task. |
+| receipt.go:27,36,109,128; retry.go:469,541 | Async ack/retry handlers and delayed phone rerequests. Cancellation of delayed requests is not their join. |
+| presence.go:71; send.go:903; tctoken.go:150 | Unified-session, privacy-token persistence and expired-token pruning. |
+| qrchan.go:80,102,119,135,195 | QR emission and async handler removals. |
+| handshake.go:98-103 | GetClientPayload callback admission is not separately sealed; an admitted connection can reach it. The enclosing connect is counted, which is not full callback-admission coverage. |
+
+Caller-invoked public API methods, DangerousInternals, external HTTP transports,
+user store implementations and goroutines launched by user callbacks remain
+separate caller-owned work. Their owner must stop and join them separately.
+The socket wrapper tracks HyperMeow's explicit goroutines; it does not assert
+joined internals for the third-party websocket/HTTP transport. No Signal
+protocol, identity, state, crypto, custody, funding or placement authority is
+added by this lifecycle source.
+
+API integration, exact client-incarnation custody, runner producers, WAM,
+BanSafe, Calls, Region and full deployment composition remain separate gates.

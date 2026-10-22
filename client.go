@@ -93,6 +93,8 @@ type deviceCache struct {
 
 // Client contains everything necessary to connect to and interact with the WhatsApp web API.
 type Client struct {
+	lifetime clientLifetime
+
 	Store   *store.Device
 	Log     waLog.Logger
 	recvLog waLog.Logger
@@ -584,20 +586,35 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 		return ErrClientIsNil
 	}
 
+	done, ok := cli.enterNative()
+	if !ok {
+		return ErrClientClosed
+	}
+	defer done()
+	ctx = cli.nativeContext(ctx)
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
 
 	err := cli.unlockedConnect(ctx)
+	if cli.nativeClosed() {
+		return ErrClientClosed
+	}
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
-		go cli.dispatchEvent(&events.Disconnected{})
-		go cli.autoReconnect(ctx)
+		cli.startNative(func() { cli.dispatchEvent(&events.Disconnected{}) })
+		cli.startNative(func() { cli.autoReconnect(ctx) })
 		return nil
 	}
 	return err
 }
 
 func (cli *Client) connect(ctx context.Context) error {
+	done, ok := cli.enterNative()
+	if !ok {
+		return ErrClientClosed
+	}
+	defer done()
+	ctx = cli.nativeContext(ctx)
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
 
@@ -605,6 +622,9 @@ func (cli *Client) connect(ctx context.Context) error {
 }
 
 func (cli *Client) unlockedConnect(ctx context.Context) error {
+	if cli.nativeClosed() {
+		return ErrClientClosed
+	}
 	if cli.shadowRelay != nil {
 		// Guard: a shadow client must never open a socket. All Connect
 		// paths (Connect, ConnectContext, autoReconnect) funnel through
@@ -628,6 +648,8 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		client = cli.preLoginHTTP
 	}
 	fs := socket.NewFrameSocket(cli.Log.Sub("Socket"), client)
+	releaseSocket := cli.bindSocket(fs)
+	defer releaseSocket()
 	if userAgent := cli.getUserAgent(); userAgent != "" {
 		fs.HTTPHeaders.Set("User-Agent", userAgent)
 	}
@@ -651,8 +673,8 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}
-	go cli.keepAliveLoop(ctx, fs.Context())
-	go cli.handlerQueueLoop(ctx, fs.Context())
+	cli.startNative(func() { cli.keepAliveLoop(ctx, fs.Context()) })
+	cli.startNative(func() { cli.handlerQueueLoop(ctx, fs.Context()) })
 	return nil
 }
 
@@ -670,8 +692,8 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 		cli.clearResponseWaiters(xmlStreamEndNode)
 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
 			cli.Log.Debugf("Emitting Disconnected event")
-			go cli.dispatchEvent(&events.Disconnected{})
-			go cli.autoReconnect(ctx)
+			cli.startNative(func() { cli.dispatchEvent(&events.Disconnected{}) })
+			cli.startNative(func() { cli.autoReconnect(ctx) })
 		} else if remote {
 			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
 		} else {
@@ -697,6 +719,9 @@ func (cli *Client) isExpectedDisconnect() bool {
 }
 
 func (cli *Client) autoReconnect(ctx context.Context) {
+	if cli.nativeClosed() {
+		return
+	}
 	if !cli.EnableAutoReconnect || cli.Store.ID == nil {
 		return
 	}
@@ -712,6 +737,9 @@ func (cli *Client) autoReconnect(ctx context.Context) {
 			return
 		}
 		err := cli.connect(ctx)
+		if errors.Is(err, ErrClientClosed) || cli.nativeClosed() {
+			return
+		}
 		if errors.Is(err, ErrAlreadyConnected) {
 			cli.Log.Debugf("Connect() said we're already connected after autoreconnect sleep")
 			return
@@ -721,9 +749,16 @@ func (cli *Client) autoReconnect(ctx context.Context) {
 				return
 			}
 			cli.Log.Errorf("Error reconnecting after autoreconnect sleep: %v", err)
-			if cli.AutoReconnectHook != nil && !cli.AutoReconnectHook(err) {
-				cli.Log.Debugf("AutoReconnectHook returned false, not reconnecting")
-				return
+			if hook := cli.AutoReconnectHook; hook != nil {
+				doneCallback, admitted := cli.enterNative()
+				if !admitted {
+					return
+				}
+				retry := func() bool { defer doneCallback(); return hook(err) }()
+				if !retry {
+					cli.Log.Debugf("AutoReconnectHook returned false, not reconnecting")
+					return
+				}
 			}
 		} else {
 			return
@@ -761,7 +796,7 @@ func (cli *Client) Disconnect() {
 // ResetConnection disconnects from the WhatsApp web websocket and forces an automatic reconnection.
 // This will not do anything if the socket is already disconnected or if EnableAutoReconnect is false.
 func (cli *Client) ResetConnection() {
-	if cli == nil {
+	if cli == nil || cli.nativeClosed() {
 		return
 	}
 	cli.socketLock.Lock()
@@ -908,6 +943,11 @@ func (cli *Client) RemoveEventHandlers() {
 }
 
 func (cli *Client) handleFrame(ctx context.Context, data []byte) {
+	done, ok := cli.enterNative()
+	if !ok {
+		return
+	}
+	defer done()
 	decompressed, err := waBinary.Unpack(data)
 	if err != nil {
 		cli.Log.Warnf("Failed to decompress frame: %v", err)
@@ -921,7 +961,14 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 		return
 	}
 	if h := cli.RawNodeHandler; h != nil {
-		modified, drop := h(ctx, node)
+		doneCallback, admitted := cli.enterNative()
+		if !admitted {
+			return
+		}
+		modified, drop := func() (*waBinary.Node, bool) {
+			defer doneCallback()
+			return h(ctx, node)
+		}()
 		if drop {
 			cli.recvLog.Debugf("RawNodeHandler dropped node: %s", node)
 			return
@@ -978,13 +1025,15 @@ func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
 	default:
 		if cli.forceAutoReconnect.CompareAndSwap(false, true) {
 			cli.Log.Errorf("Handler queue is full, resetting connection")
-			go cli.ResetConnection()
+			cli.startNative(func() { cli.ResetConnection() })
 		}
 	}
 }
 
 func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context) {
+	finalDone := cli.nativeDone()
 	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	ticker.Stop()
 	cli.Log.Debugf("Starting handler queue loop")
 Loop:
@@ -993,26 +1042,32 @@ Loop:
 		case node := <-cli.handlerQueue:
 			doneChan := make(chan struct{})
 			start := time.Now()
-			go func() {
+			if !cli.startNative(func() {
 				cli.handleNode(evtCtx, node)
 				duration := time.Since(start)
 				close(doneChan)
 				if duration > 5*time.Second {
 					cli.Log.Warnf("Node handling took %s for %s", duration, node)
 				}
-			}()
+			}) {
+				return
+			}
 			ticker.Reset(30 * time.Second)
 			for i := 0; i < 10; i++ {
 				select {
 				case <-doneChan:
 					ticker.Stop()
 					continue Loop
+				case <-finalDone:
+					return
 				case <-ticker.C:
 					cli.Log.Warnf("Node handling is taking long for %s (started %s ago)", node, time.Since(start))
 				}
 			}
 			cli.Log.Warnf("Continuing handling of %s in background as it's taking too long", node)
 			ticker.Stop()
+		case <-finalDone:
+			return
 		case <-connCtx.Done():
 			cli.Log.Debugf("Closing handler queue loop")
 			return
@@ -1090,6 +1145,11 @@ func (cli *Client) sendNode(ctx context.Context, node waBinary.Node) error {
 }
 
 func (cli *Client) dispatchEvent(evt any) (handlerFailed bool) {
+	done, ok := cli.enterNative()
+	if !ok {
+		return true
+	}
+	defer done()
 	cli.eventHandlersLock.RLock()
 	defer func() {
 		cli.eventHandlersLock.RUnlock()
@@ -1099,7 +1159,12 @@ func (cli *Client) dispatchEvent(evt any) (handlerFailed bool) {
 		}
 	}()
 	for _, handler := range cli.eventHandlers {
-		if !handler.fn(evt) {
+		doneCallback, admitted := cli.enterNative()
+		if !admitted {
+			return true
+		}
+		success := func() bool { defer doneCallback(); return handler.fn(evt) }()
+		if !success {
 			return true
 		}
 	}
