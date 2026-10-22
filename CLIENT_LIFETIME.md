@@ -47,6 +47,9 @@ the deadline ends its waiter and does not manufacture completion.
   ownership are described below. The appstate children have their own boundary.
 - Appstate missing-key request and the two contextless send/resync event batches,
   including their actual synchronous callbacks and request/store return.
+- Outer pairing task through handlePair and its existing error/success
+  continuations; PrePair decision/callback and handshake payload selection/custom
+  callback through actual synchronous return. See the continuation boundary below.
 - One teardown task, whose completion is recorded before launch. Context forwarding
   uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
   those small cancellation callbacks are not a joined product-worker claim.
@@ -131,8 +134,8 @@ final cancellation and stay counted through the actual IQ/store/send return,
 including a store or transport that ignores cancellation. The synchronous
 DangerousInternals entry points keep their original signatures and Background
 semantics; they remain caller-owned. Both presence and pairing's unified child
-launches are gated, but the outer pairing producer and PrePairCallback remain
-unbound. No pairing body or protocol payload changed.
+launches are gated. Outer pairing and PrePairCallback now have the separate
+boundary below. No pairing algorithm or protocol payload changed.
 
 Expired-token pruning, including the connect-success child, registers before
 launch. Its existing TryLock guard coalesces work until the store actually
@@ -235,19 +238,59 @@ algorithms, retry recursion, protocol payloads and timers are unchanged. This is
 not whole-client source closure, native acceptance, Signal ownership or a stop
 receipt. Conservative established-context retention remains unchanged.
 
+## Outer pairing and client callbacks
+
+The outer handlePairSuccess closure registers with startConnectionTask before
+scheduling. It keeps its original parsed local variables, props pointer and
+caller-context ancestry/values, adding owned final cancellation. It remains
+counted through handlePair and its original log/Disconnect/PairError or
+unified-session/PairSuccess continuations. Refusal runs none of that async body.
+The original synchronous parsing, time-offset update and possible props-parse
+warning before launch are unchanged; this does not seal the entire caller API.
+
+PrePair callback decisions and handshake payload selection take a synchronous
+native reservation before invocation. Nil PrePair still allows normally, false
+still reaches the unchanged local-rejection branch, and the custom payload or
+built-in Store.GetClientPayload fallback keeps its original value/bytes. A normal
+nil custom payload remains nil; it is not replaced with a default. Refusal is
+ErrClientClosed, so a sealed payload request cannot marshal an invented payload.
+Both helpers release their count on actual return or panic, without swallowing
+or translating the original panic policy. There is no implicit cancellation
+argument for either contextless public callback signature.
+
+If final sealing is observed after the callback/selection returns, its result is
+rejected with ErrClientClosed before the pairing persistence or handshake payload
+marshalling continuation. A late true PrePair result is not accepted as a decision;
+a late payload is not treated as success. The new closed branch is distinct from
+the unchanged normal false rejection branch. A seal after that post-call check
+can still race an already admitted continuation. The enclosing owned pair task
+or connection remains counted until actual return; no rollback or arbitrary
+revocation of already admitted store/protocol work is introduced.
+
+ConnectContext's existing closed checks and successful-context pin guard remain
+intact and are not bypassed by the new callback error path. Already admitted
+handshake continuations remain subject to those existing guards; no stronger
+atomic no-effect or revocation contract is introduced. Public/DangerousInternals parents
+beyond their named children remain separately caller-owned. This does not add
+whole-request admission or authenticated ingress/custody. Callbacks can spawn
+independent work whose completion is not established by their own return.
+
+No new state lock is held while waiting. Existing Connect holds its socket lock
+while invoking the handshake callback, as before; FinalClose reentry from that
+callback needs a bounded waiter and cannot join itself until it returns. The
+waiter ending is never completion. Ordinary Disconnect remains reusable, with
+its registered delayed-phone cancellation exception unchanged. Contextless
+callbacks retain their original cancellation behavior and signatures. Client
+callback fields gain no new concurrent-setter contract or copied/global owner.
+
 ## Still unbound
 
-The following existing client-owned producers retain their prior behavior and
-are NOT included in the completion claim. Some use BackgroundEventCtx or
-WithoutCancel and can continue launching child work after the core seal. This
-is why the implementation cannot confirm full termination even when its tracked
-count reaches zero. Their admission, cancellation and actual completion need
-owning-library work before any successful stop result is possible.
-
-| Source at base 29a42459 | Unbound lifetime |
-| --- | --- |
-| pair.go:138-147 | Outer pair completion and PrePairCallback. Its unified-session child is now tracked; the parent and its other boundaries are not. |
-| handshake.go:98-103 | GetClientPayload callback admission is not separately sealed; an admitted connection can reach it. The enclosing connect is counted, which is not full callback-admission coverage. |
+The bounded source groups described above do not establish an exhaustive
+producer inventory or complete client termination. Other caller/custom/callback
+boundaries and the complete bounded successful-context inventory remain open.
+No additional producer group or independent native acceptance was established
+by these wrappers. FinalClose remains unconditionally incomplete after its
+tracked join; missing ownership cannot be inferred from a zero tracked count.
 
 Caller-invoked public API methods, DangerousInternals, external HTTP transports,
 user store implementations and goroutines launched by user callbacks remain

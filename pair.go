@@ -135,7 +135,7 @@ func (cli *Client) handlePairSuccess(ctx context.Context, node *waBinary.Node) {
 		cli.Log.Warnf("Failed to parse client pairing props: %v", err)
 	}
 
-	go func() {
+	cli.startConnectionTask(ctx, func(ctx context.Context) {
 		err := cli.handlePair(ctx, deviceIdentityBytes, id, businessName, platform, jid, lid)
 		if err != nil {
 			cli.Log.Errorf("Failed to pair device: %v", err)
@@ -146,7 +146,7 @@ func (cli *Client) handlePairSuccess(ctx context.Context, node *waBinary.Node) {
 			cli.startUnifiedSession()
 			cli.dispatchEvent(&events.PairSuccess{ID: jid, LID: lid, BusinessName: businessName, Platform: platform, Props: &props})
 		}
-	}()
+	})
 }
 
 func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, reqID, businessName, platform string, jid, lid types.JID) error {
@@ -191,7 +191,11 @@ func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, r
 
 	deviceIdentity.DeviceSignature = generateDeviceSignature(&deviceIdentity, cli.Store.IdentityKey)[:]
 
-	if cli.PrePairCallback != nil && !cli.PrePairCallback(jid, platform, businessName) {
+	allowed, err := cli.prePairCallbackDecision(jid, platform, businessName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
 		cli.sendPairError(ctx, reqID, 500, "internal-error")
 		return ErrPairRejectedLocally
 	}
