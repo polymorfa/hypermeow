@@ -158,7 +158,11 @@ async history storage and event-buffer cleanup keep WithoutCancel ancestry,
 then add final cancellation independently. History loops and delayed phone work
 keep BackgroundEventCtx ancestry. Every admitted task stays counted until its
 actual store, callback, send or handler returns, even if it ignores cancellation.
-Ordinary Disconnect does not seal or cancel these tasks.
+Ordinary Disconnect does not permanently seal the reusable client or apply
+final cancellation to all these scopes. It retains its existing cancellation of
+pending delayed phone requests whose owners are registered in the cancel map.
+That cancellation does not prove actual return or join, and does not mean every
+scheduled or admitted task has stopped.
 
 Synchronous ACK/name/storage branches retain their original inline execution
 and contexts, including canceled flags, NACKs and error policy. They are part of
