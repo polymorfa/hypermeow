@@ -54,7 +54,7 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 			senderTS := cli.getTCTokenSenderTS(storageLID)
 			if !senderTS.IsZero() {
 				cli.Log.Debugf("Identity changed for %s, re-issuing tctoken", from)
-				go cli.issuePrivacyTokenAndSave(storageLID, senderTS)
+				cli.startPrivacyTokenIssue(storageLID, senderTS)
 			}
 		}
 		cli.dispatchEvent(&events.IdentityChange{JID: from, Timestamp: ts})
@@ -519,11 +519,11 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	}
 	switch notifType {
 	case "encrypt":
-		go cli.handleEncryptNotification(ctx, node)
+		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleEncryptNotification(ctx, node) })
 	case "server_sync":
-		go cli.handleAppStateNotification(ctx, node)
+		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleAppStateNotification(ctx, node) })
 	case "account_sync":
-		go cli.handleAccountSyncNotification(ctx, node)
+		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleAccountSyncNotification(ctx, node) })
 	case "devices":
 		cli.handleDeviceNotification(ctx, node)
 	case "fbid:devices":
@@ -551,7 +551,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "privacy_token":
 		cli.handlePrivacyTokenNotification(ctx, node)
 	case "link_code_companion_reg":
-		go cli.tryHandleCodePairNotification(ctx, node)
+		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandleCodePairNotification(ctx, node) })
 	case "newsletter":
 		cli.handleNewsletterNotification(ctx, node)
 	case "mex":
@@ -563,7 +563,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "business":
 		cli.handleQueuedBusinessCatalogNotification(node)
 	case "crsc_continuation":
-		go cli.tryHandlePasskeyContinuationNotification(ctx, node)
+		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandlePasskeyContinuationNotification(ctx, node) })
 	// Other types: disappearing_mode, server, status, pay, psa
 	default:
 		cli.Log.Debugf("Unhandled notification with type %s", notifType)
@@ -600,21 +600,33 @@ func (cli *Client) deferServerABProps(ctx context.Context, node *waBinary.Node, 
 	}
 	cli.serverABPropsPending[key] = struct{}{}
 	cli.serverABPropsMu.Unlock()
-	go func() {
+	cleanup := func() {
+		cli.serverABPropsMu.Lock()
+		delete(cli.serverABPropsPending, key)
+		cli.serverABPropsMu.Unlock()
+	}
+	if !cli.startConnectionTask(ctx, func(ctx context.Context) {
 		// Allow three 30-second attempts, two retry waits and durable completion.
 		taskCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		defer func() {
-			cli.serverABPropsMu.Lock()
-			delete(cli.serverABPropsPending, key)
-			cli.serverABPropsMu.Unlock()
-		}()
+		defer cleanup()
 		if ctx.Err() != nil {
 			return
 		}
 		if err := cli.ServerABPropsSync(taskCtx); err == nil && taskCtx.Err() == nil {
-			ack()
+			// Admission orders the ACK against the final seal even when context
+			// cancellation forwarding has not run yet. Join the actual callback.
+			done, admitted := cli.enterNative()
+			if !admitted {
+				return
+			}
+			defer done()
+			if taskCtx.Err() == nil {
+				ack()
+			}
 		}
-	}()
+	}) {
+		cleanup()
+	}
 	return true
 }

@@ -39,6 +39,9 @@ the deadline ends its waiter and does not manufacture completion.
   starts before Connect, including when no QR event ever arrives. Caller/final
   cancellation ends that lifetime. Ordinary Disconnect stops an emitter as before
   and leaves the channel available for subsequent events.
+- Async notification dispatches, server AB-props tasks and their ACK callback,
+  privacy-token issuance/persistence, unified-session children and expired-token
+  pruning, including the connect-success prune. See the exact boundaries below.
 - One teardown task, whose completion is recorded before launch. Context forwarding
   uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
   those small cancellation callbacks are not a joined product-worker claim.
@@ -102,10 +105,40 @@ responsibility. No pairing/protocol/Signal/key/store body or payload changed.
 The existing automatic passkey-confirmation method is invoked synchronously by
 its admitted QR callback, not reclassified as an accepted Signal producer.
 
-Notifications/AB-props and privacy pruning were deliberately not folded into
-this group. Connection-success's pruning call still reaches an unbound task as
-listed below. External RefreshCAT implementations, store/transport internals and
-user-spawned callbacks do not gain owned completion proof from these wrappers.
+## Notification and privacy task ownership
+
+The five async notification dispatches (encrypt, server_sync, account_sync,
+link_code_companion_reg and crsc_continuation) register before scheduling and
+own their forwarding contexts until the called handler returns. Their existing
+handler bodies remain unchanged, apart from the encrypt handler's privacy child
+launch. Child producers inside those handlers still require the boundaries below.
+
+Server AB-props tasks retain the original two-minute bound and pending-ID
+coalescing. Refused admission removes the reserved pending entry. Task exit also
+removes it on success, failure or cancellation. ACK admission checks the final
+seal independently of asynchronous context forwarding, and the task counts the
+actual ACK callback until return. Refusal withholds ACK; it never reports sync
+success. No pending-map lock is held during the handler or completion wait.
+
+Privacy issuance/persistence and unified-session children keep their original
+BackgroundEventCtx ancestry and values. They now derive a forwarding context for
+final cancellation and stay counted through the actual IQ/store/send return,
+including a store or transport that ignores cancellation. The synchronous
+DangerousInternals entry points keep their original signatures and Background
+semantics; they remain caller-owned. Both presence and pairing's unified child
+launches are gated, but the outer pairing producer and PrePairCallback remain
+unbound. No pairing body or protocol payload changed.
+
+Expired-token pruning, including the connect-success child, registers before
+launch. Its existing TryLock guard coalesces work until the store actually
+returns. Refused admission releases that guard without consuming the prune
+timestamp. An admitted task records the original captured timestamp under the
+guard. The 24-hour interval, cutoff algorithm and store body are unchanged.
+Ordinary Disconnect does not seal or cancel these background tasks.
+
+External RefreshCAT implementations, store/transport internals and user-spawned
+callbacks do not gain whole-client completion proof from these wrappers. The
+established-context retention described above remains conservative and unchanged.
 
 ## Still unbound
 
@@ -118,12 +151,10 @@ owning-library work before any successful stop result is possible.
 
 | Source at base 29a42459 | Unbound lifetime |
 | --- | --- |
-| notification.go:57,522-566,603 | Privacy token, encryption/app-state/account-sync, code/passkey pairing, and server AB-props sync tasks. |
 | message.go:82-89,373-374,469-470,520,549,770,887,1005-1037 | Name updates, retry/ack work, event-buffer cleanup, event-dispatch wrapper, history download/storage/notification loops, key-share and peer-data work. |
 | appstate.go:162,645,659 | Missing-key request and async event batches. |
-| pair.go:138-147 | Pair completion, PrePairCallback and unified-session child task. |
+| pair.go:138-147 | Outer pair completion and PrePairCallback. Its unified-session child is now tracked; the parent and its other boundaries are not. |
 | receipt.go:27,36,109,128; retry.go:469,541 | Async ack/retry handlers and delayed phone rerequests. Cancellation of delayed requests is not their join. |
-| presence.go:71; send.go:903; tctoken.go:150 | Unified-session, privacy-token persistence and expired-token pruning. The prune called synchronously by connect-success still launches this separate unbound task. |
 | handshake.go:98-103 | GetClientPayload callback admission is not separately sealed; an admitted connection can reach it. The enclosing connect is counted, which is not full callback-admission coverage. |
 
 Caller-invoked public API methods, DangerousInternals, external HTTP transports,

@@ -1271,7 +1271,18 @@ func (cli *Client) getUnifiedSessionID() string {
 	return strconv.FormatInt(unifiedID, 10)
 }
 
+func (cli *Client) startUnifiedSession() bool {
+	return cli.startConnectionTask(cli.BackgroundEventCtx, cli.sendUnifiedSessionContext)
+}
+
 func (cli *Client) sendUnifiedSession() {
+	if cli == nil {
+		return
+	}
+	cli.sendUnifiedSessionContext(cli.BackgroundEventCtx)
+}
+
+func (cli *Client) sendUnifiedSessionContext(ctx context.Context) {
 	if cli == nil {
 		return
 	}
@@ -1287,7 +1298,7 @@ func (cli *Client) sendUnifiedSession() {
 		}},
 	}
 
-	err := cli.sendNode(cli.BackgroundEventCtx, node)
+	err := cli.sendNode(ctx, node)
 	if err != nil {
 		cli.Log.Debugf("Failed to send unified_session telemetry: %v", err)
 	}
