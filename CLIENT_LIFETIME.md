@@ -42,6 +42,32 @@ remaining stuck sending to an abandoned consumer. Socket ciphertext, counters,
 keys, handshake and wire formats are unchanged. Standalone FrameSocket users keep
 the default launcher unless they explicitly install their own before Connect.
 
+## Forwarding context ownership
+
+Each connect attempt owns a forwarding context and releases that ownership on
+return, including failed, deleted-store and already-connected paths. If initial
+background reconnect is requested, ConnectContext returns nil only when that
+reconnect task was actually admitted. Refused admission returns ErrClientClosed.
+The admitted task retains the context before scheduling and releases it on exit.
+Its internal attempts reuse the same forwarding scope instead of adding one
+watcher per retry. Once no owner remains, cleanup unregisters the lifetime
+AfterFunc and cancels the derived context.
+
+A successful handshake transfers a context reference to the client lifetime
+before ConnectContext can return. These established contexts remain owned until
+final close, including across ordinary Disconnect. This is conservative: the
+unbound producers below may still inherit an established event context after its
+socket workers exit. Their exact completion is not known, so early cancellation
+would change ordinary behavior. Reconnect attempts with that inherited context
+reuse the same scope. Explicit new successful connections with different caller
+contexts can retain separate scopes until final close. This is not a claim of
+complete context/producer joins or bounded successful-connection inventory.
+
+Final close cancels the lifetime outside state locks, waits for the tracked
+subset, and releases the established-context references. No successful return or
+stop receipt follows from that cleanup. Tests of the context-transfer helper do
+not establish a live handshake/socket acceptance result.
+
 ## Still unbound
 
 The following existing client-owned producers retain their prior behavior and

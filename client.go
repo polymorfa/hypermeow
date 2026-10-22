@@ -591,7 +591,8 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 		return ErrClientClosed
 	}
 	defer done()
-	ctx = cli.nativeContext(ctx)
+	ctx, releaseContext := cli.nativeContext(ctx)
+	defer releaseContext()
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
 
@@ -602,7 +603,9 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
 		cli.startNative(func() { cli.dispatchEvent(&events.Disconnected{}) })
-		cli.startNative(func() { cli.autoReconnect(ctx) })
+		if !cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) }) {
+			return ErrClientClosed
+		}
 		return nil
 	}
 	return err
@@ -614,7 +617,8 @@ func (cli *Client) connect(ctx context.Context) error {
 		return ErrClientClosed
 	}
 	defer done()
-	ctx = cli.nativeContext(ctx)
+	ctx, releaseContext := cli.nativeContext(ctx)
+	defer releaseContext()
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
 
@@ -673,6 +677,9 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}
+	if !cli.pinNativeContext(ctx) {
+		return ErrClientClosed
+	}
 	cli.startNative(func() { cli.keepAliveLoop(ctx, fs.Context()) })
 	cli.startNative(func() { cli.handlerQueueLoop(ctx, fs.Context()) })
 	return nil
@@ -693,7 +700,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
 			cli.Log.Debugf("Emitting Disconnected event")
 			cli.startNative(func() { cli.dispatchEvent(&events.Disconnected{}) })
-			cli.startNative(func() { cli.autoReconnect(ctx) })
+			cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) })
 		} else if remote {
 			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
 		} else {

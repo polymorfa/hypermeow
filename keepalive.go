@@ -45,7 +45,7 @@ func (cli *Client) keepAliveLoop(ctx, connCtx context.Context) {
 					cli.Log.Debugf("Forcing reconnect due to keepalive failure")
 					cli.Disconnect()
 					cli.resetExpectedDisconnect()
-					cli.startNative(func() { cli.autoReconnect(ctx) })
+					cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) })
 				}
 			} else {
 				if errorCount > 0 {

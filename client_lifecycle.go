@@ -20,14 +20,15 @@ var (
 )
 
 type clientLifetime struct {
-	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	sealed  bool
-	active  int
-	joined  chan struct{}
-	stopped chan struct{}
-	sockets map[*socket.FrameSocket]int
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	sealed   bool
+	active   int
+	joined   chan struct{}
+	stopped  chan struct{}
+	sockets  map[*socket.FrameSocket]int
+	contexts map[*nativeClientContext]struct{}
 }
 
 func (l *clientLifetime) initLocked() {
@@ -35,6 +36,7 @@ func (l *clientLifetime) initLocked() {
 		l.ctx, l.cancel = context.WithCancel(context.Background())
 		l.joined = make(chan struct{})
 		l.sockets = make(map[*socket.FrameSocket]int)
+		l.contexts = make(map[*nativeClientContext]struct{})
 	}
 }
 
@@ -113,19 +115,96 @@ func (cli *Client) bindSocket(fs *socket.FrameSocket) func() {
 	return release
 }
 
-// nativeContext retains the caller's cancellation and adds final-close
-// cancellation. Its cancellation callback only cancels a context; it performs
-// no user callback, socket operation or protocol work.
-func (cli *Client) nativeContext(parent context.Context) context.Context {
+// nativeClientContext has explicit owners: a connect attempt, an admitted
+// reconnect task, and (after a successful handshake) this client lifetime.
+// Reconnect attempts reuse their inherited owner instead of growing a chain
+// of cancellation watchers. Release never holds a client state lock.
+type nativeClientContext struct {
+	context.Context
+	lifetime *clientLifetime
+	mu       sync.Mutex
+	refs     int
+	cleanup  context.CancelFunc
+}
+
+func (ctx *nativeClientContext) retain() bool {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	if ctx.refs == 0 {
+		return false
+	}
+	ctx.refs++
+	return true
+}
+
+func (ctx *nativeClientContext) release() {
+	ctx.mu.Lock()
+	ctx.refs--
+	var cleanup context.CancelFunc
+	if ctx.refs == 0 {
+		cleanup = ctx.cleanup
+		ctx.cleanup = nil
+	}
+	ctx.mu.Unlock()
+	if cleanup != nil {
+		cleanup()
+	}
+}
+
+// Every attempt releases its owner on return. An admitted reconnect retains it
+// until that task returns. An established socket pins it until final close:
+// still-unbound async producers may inherit the event context after Disconnect,
+// so cancelling it at ordinary socket/loop exit would change their behavior.
+func (cli *Client) nativeContext(parent context.Context) (context.Context, context.CancelFunc) {
 	l := &cli.lifetime
+	if inherited, ok := parent.(*nativeClientContext); ok && inherited.lifetime == l && inherited.retain() {
+		return inherited, inherited.release
+	}
 	l.mu.Lock()
 	l.initLocked()
 	lifetime := l.ctx
 	l.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
 	stop := context.AfterFunc(lifetime, cancel)
-	context.AfterFunc(ctx, func() { stop(); cancel() })
-	return ctx
+	owned := &nativeClientContext{Context: ctx, lifetime: l, refs: 1, cleanup: func() { stop(); cancel() }}
+	return owned, owned.release
+}
+
+// Keep ownership before admission/scheduling, and release even if admission is
+// refused. This does not turn admission into a successful connection or join.
+func (cli *Client) startNativeContext(ctx context.Context, fn func()) bool {
+	release := func() {}
+	if owned, ok := ctx.(*nativeClientContext); ok && owned.lifetime == &cli.lifetime {
+		if !owned.retain() {
+			return false
+		}
+		release = owned.release
+	}
+	if !cli.startNative(func() { defer release(); fn() }) {
+		release()
+		return false
+	}
+	return true
+}
+
+func (cli *Client) pinNativeContext(ctx context.Context) bool {
+	owned, ok := ctx.(*nativeClientContext)
+	if !ok || owned.lifetime != &cli.lifetime {
+		return true
+	} // Caller-owned internal contexts.
+	l := &cli.lifetime
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.sealed {
+		return false
+	}
+	if _, exists := l.contexts[owned]; !exists {
+		if !owned.retain() {
+			return false
+		}
+		l.contexts[owned] = struct{}{}
+	}
+	return true
 }
 
 // FinalClose permanently seals this exact Client pointer. Unlike Disconnect,
@@ -194,5 +273,12 @@ func (cli *Client) finalDisconnect() {
 		fs.Close(0)
 	}
 	<-l.joined
+	l.mu.Lock()
+	contexts := l.contexts
+	l.contexts = nil
+	l.mu.Unlock()
+	for owned := range contexts {
+		owned.release()
+	}
 	close(l.stopped)
 }
