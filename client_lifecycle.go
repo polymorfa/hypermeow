@@ -29,6 +29,8 @@ type clientLifetime struct {
 	stopped  chan struct{}
 	sockets  map[*socket.FrameSocket]int
 	contexts map[*nativeClientContext]struct{}
+
+	forwarders map[*nativeForwarder]struct{}
 }
 
 func (l *clientLifetime) initLocked() {
@@ -181,7 +183,7 @@ func (cli *Client) nativeContext(parent context.Context) (context.Context, conte
 	lifetime := l.ctx
 	l.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
-	stop := context.AfterFunc(lifetime, cancel)
+	stop := l.registerForwarder(lifetime, cancel)
 	owned := &nativeClientContext{Context: ctx, lifetime: l, refs: 1, cleanup: func() { stop(); cancel() }}
 	return owned, owned.release
 }
@@ -296,5 +298,6 @@ func (cli *Client) finalDisconnect() {
 	for owned := range contexts {
 		owned.release()
 	}
+	l.waitForwarders()
 	close(l.stopped)
 }

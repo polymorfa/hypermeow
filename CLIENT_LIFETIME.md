@@ -51,8 +51,9 @@ the deadline ends its waiter and does not manufacture completion.
   continuations; PrePair decision/callback and handshake payload selection/custom
   callback through actual synchronous return. See the continuation boundary below.
 - One teardown task, whose completion is recorded before launch. Context forwarding
-  uses context.AfterFunc only to cancel contexts, with no user/protocol callbacks;
-  those small cancellation callbacks are not a joined product-worker claim.
+  uses context.AfterFunc to cancel derived contexts. Exact completion entries
+  now join those existing forwarder invocations through actual cancel return;
+  stopping their registration alone is not completion.
 
 A permanent seal prevents new admissions to this subset. Work admitted before
 sealing may execute after sealing and remains counted until its function returns.
@@ -69,8 +70,10 @@ background reconnect is requested, ConnectContext returns nil only when that
 reconnect task was actually admitted. Refused admission returns ErrClientClosed.
 The admitted task retains the context before scheduling and releases it on exit.
 Its internal attempts reuse the same forwarding scope instead of adding one
-watcher per retry. Once no owner remains, cleanup unregisters the lifetime
-AfterFunc and cancels the derived context.
+watcher per retry. Once no owner remains, cleanup keeps its original lifetime
+AfterFunc stop followed by derived cancel. Stopped registrations retire at once;
+an already-started forwarder retains a separate completion entry until its actual
+cancel invocation returns.
 
 A successful handshake transfers a context reference to the client lifetime
 before ConnectContext can return. These established contexts remain owned until
@@ -86,6 +89,43 @@ Final close cancels the lifetime outside state locks, waits for the tracked
 subset, and releases the established-context references. No successful return or
 stop receipt follows from that cleanup. Tests of the context-transfer helper do
 not establish a live handshake/socket acceptance result.
+
+## Forwarder actual-return ownership
+
+A nonzero-size entry on the exact client lifetime is registered before AfterFunc
+can schedule its callback, including when an already admitted constructor reaches
+a canceled lifetime. The callback keeps asynchronous AfterFunc behavior and calls
+only the original derived cancel, with deferred entry completion. Its completion
+does not read or depend on publication of the stop function. Stop-before-start
+resolves that exact entry once; an already-running or completed callback makes
+stop return false without pretending it joined. Entries retire on stopped-before-
+start or actual callback completion, rather than retaining completed registrations.
+
+Entries are separate from active reservations and successful context pins. A
+persistent registration counted as active would cycle with pins released only
+after the active join. Final teardown retains its existing cancellation,
+Disconnect and exact socket-close order, joins active work, detaches/releases
+pins, then snapshots and drains remaining entry completions outside lifetime,
+context, socket, store and global locks before closing stopped. Production
+nativeContext constructors in ConnectContext, connect, startConnectionTask,
+GetQRChannel and the synchronous history-loop adapter all have an active owner
+before construction and release their context before completing that owner.
+Therefore no production constructor can add a registration after that drain
+frontier. Private helpers are not a new public admission contract.
+
+Ordinary last-reference cleanup does not acquire a new completion wait: it still
+calls stop then cancel. Either call can have its existing blocking behavior,
+including custom Context cleanup reached by cancel. Final teardown records an
+already-started forwarder's actual return separately. A callback can finish before
+its stop function is published, and bounded or canceled FinalClose waiters still
+coalesce the same teardown. Reentry from a forwarder cannot join itself before
+return and must end its bounded waiter without reporting completion.
+
+SOURCE-1 is locally implemented only, pending new independent review. It does
+not bound successful-context retention, cancel established scopes earlier, join
+user/custom/transport/Signal descendants or establish native/custody acceptance.
+Callback or custom Context return does not prove its spawned descendants ended.
+FinalClose remains always incomplete; no successful stop receipt follows.
 
 ## QR channel closure and boundaries
 
