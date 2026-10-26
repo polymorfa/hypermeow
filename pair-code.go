@@ -90,6 +90,11 @@ func generateCompanionEphemeralKey() (ephemeralKeyPair *keys.KeyPair, ephemeralK
 //
 // See https://faq.whatsapp.com/1324084875126592 for more info
 func (cli *Client) PairPhone(ctx context.Context, phone string, showPushNotification bool, clientType PairClientType, clientDisplayName string) (string, error) {
+	if cli.isRemoteSignal() {
+		// Code pairing runs X25519 with the identity private key; the remote
+		// store does not expose that step yet.
+		return "", fmt.Errorf("pair-code pairing: %w", ErrRemoteSignalUnsupported)
+	}
 	if cli == nil {
 		return "", ErrClientIsNil
 	}
@@ -150,6 +155,9 @@ func (cli *Client) tryHandleCodePairNotification(ctx context.Context, parentNode
 }
 
 func (cli *Client) handleCodePairNotification(ctx context.Context, parentNode *waBinary.Node) error {
+	if cli.isRemoteSignal() {
+		return fmt.Errorf("pair-code pairing: %w", ErrRemoteSignalUnsupported)
+	}
 	node, ok := parentNode.GetOptionalChildByTag("link_code_companion_reg")
 	if !ok {
 		return &ElementMissingError{
