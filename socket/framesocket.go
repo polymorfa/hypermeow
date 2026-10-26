@@ -32,8 +32,7 @@ type FrameSocket struct {
 	HTTPClient  *http.Client
 
 	Frames chan []byte
-	// OnDisconnect may be assigned before Connect. During socket lifetime, use
-	// SetDisconnectHandler to synchronize with concurrent Close/Stop.
+	// Use SetOnDisconnect to change the handler while the socket is in use.
 	OnDisconnect func(ctx context.Context, remote bool)
 
 	Header []byte
@@ -66,11 +65,12 @@ func (fs *FrameSocket) IsConnected() bool {
 	return fs.conn.Load() != nil
 }
 
-// SetDisconnectHandler updates callback ownership under the same lock as Close.
-func (fs *FrameSocket) SetDisconnectHandler(handler func(context.Context, bool)) {
+// SetOnDisconnect replaces the disconnect handler under the socket lock.
+// It does not cancel a callback already scheduled by Close.
+func (fs *FrameSocket) SetOnDisconnect(handler func(ctx context.Context, remote bool)) {
 	fs.lock.Lock()
+	defer fs.lock.Unlock()
 	fs.OnDisconnect = handler
-	fs.lock.Unlock()
 }
 
 func (fs *FrameSocket) Close(code websocket.StatusCode) {
@@ -183,8 +183,8 @@ func (fs *FrameSocket) processData(msg []byte) {
 			if len(msg) >= FrameLengthSize {
 				length := (int(msg[0]) << 16) + (int(msg[1]) << 8) + int(msg[2])
 				fs.incomingLength = length
-				fs.receivedLength = len(msg)
 				msg = msg[FrameLengthSize:]
+				fs.receivedLength = len(msg)
 				if len(msg) >= length {
 					fs.incoming = msg[:length]
 					msg = msg[length:]

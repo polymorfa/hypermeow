@@ -157,8 +157,8 @@ func TestUpgradeFromCurrentDevSchemaAddsUsername(t *testing.T) {
 	if err = db.Upgrade(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if state.version != 18 || state.compatVersion != 8 {
-		t.Fatalf("schema version = %d/%d, want 18/8", state.version, state.compatVersion)
+	if state.version != 19 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 19/8", state.version, state.compatVersion)
 	}
 	want := "ALTER TABLE whatsmeow_contacts ADD COLUMN username TEXT;"
 	for _, query := range state.executed {
@@ -167,4 +167,28 @@ func TestUpgradeFromCurrentDevSchemaAddsUsername(t *testing.T) {
 		}
 	}
 	t.Fatalf("username migration was not executed: %q", state.executed)
+}
+
+func TestUpgradeFromPublishedSchemaAddsWASARootSecret(t *testing.T) {
+	state := &upgradeTestState{version: 18, compatVersion: 8}
+	rawDB := sql.OpenDB(&upgradeTestConnector{state: state})
+	t.Cleanup(func() { _ = rawDB.Close() })
+	db, err := dbutil.NewWithDB(rawDB, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.VersionTable = "whatsmeow_version"
+	db.UpgradeTable = Table
+	if err = db.Upgrade(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if state.version != 19 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 19/8", state.version, state.compatVersion)
+	}
+	for _, query := range state.executed {
+		if strings.Contains(query, "ALTER TABLE whatsmeow_chat_settings ADD COLUMN wasa_root_secret_id TEXT NOT NULL DEFAULT '';") {
+			return
+		}
+	}
+	t.Fatalf("WASA migration was not executed: %q", state.executed)
 }

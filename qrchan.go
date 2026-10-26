@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,13 +57,15 @@ var (
 
 type qrChannel struct {
 	sync.Mutex
-	cli       *Client
-	log       waLog.Logger
-	ctx       context.Context
-	handlerID uint32
-	closed    atomic.Bool
-	output    chan<- QRChannelItem
-	stopQRs   chan struct{}
+	cli             *Client
+	log             waLog.Logger
+	ctx             context.Context
+	handlerID       uint32
+	closed          atomic.Bool
+	output          chan<- QRChannelItem
+	stopQRs         chan struct{}
+	rotateAdv       chan struct{}
+	pendingRotation *events.RotateADVSecret
 }
 
 func (qrc *qrChannel) close() bool {
@@ -74,7 +77,7 @@ func (qrc *qrChannel) emitQRs(codes []string) {
 	for {
 		if len(codes) == 0 {
 			if qrc.close() {
-				qrc.log.Debugf("Ran out of QR codes, closing channel with status %s and disconnecting client", QRChannelTimeout)
+				qrc.log.Debugf("Ran out of QR codes, closing channel with status %s and disconnecting client", QRChannelTimeout.Event)
 				qrc.output <- QRChannelTimeout
 				close(qrc.output)
 				go qrc.cli.RemoveEventHandler(qrc.handlerID)
@@ -91,11 +94,28 @@ func (qrc *qrChannel) emitQRs(codes []string) {
 		if len(codes) == 6 {
 			timeout = 60 * time.Second
 		}
+		qrc.Lock()
+		if rot := qrc.pendingRotation; rot != nil {
+			for i, code := range codes {
+				parts := strings.SplitN(code, ",", 5)
+				if len(parts) == 5 {
+					parts[3] = rot.NewSecret
+					codes[i] = strings.Join(parts, ",")
+				}
+			}
+			qrc.pendingRotation = nil
+		}
+		select {
+		case <-qrc.rotateAdv:
+		default:
+		}
 		nextCode, codes = codes[0], codes[1:]
 		qrc.log.Debugf("Emitting QR code %s", nextCode)
 		select {
 		case qrc.output <- QRChannelItem{Code: nextCode, Timeout: timeout, Event: QRChannelEventCode}:
+			qrc.Unlock()
 		default:
+			qrc.Unlock()
 			qrc.log.Debugf("Output channel didn't accept code, exiting QR emitter")
 			if qrc.close() {
 				close(qrc.output)
@@ -112,6 +132,10 @@ func (qrc *qrChannel) emitQRs(codes []string) {
 		case <-qrc.cli.expectedDisconnect.GetChan():
 			qrc.log.Debugf("Client is expected to disconnect, stopping QR emitter")
 			return
+		case <-qrc.rotateAdv:
+			// Re-emit the active code with the newest secret. The pending
+			// rotation is applied under the lock before the next output.
+			codes = append([]string{nextCode}, codes...)
 		case <-qrc.ctx.Done():
 			qrc.log.Debugf("Context is done, stopping QR emitter")
 			if qrc.close() {
@@ -133,6 +157,19 @@ func (qrc *qrChannel) handleEvent(rawEvt any) {
 	case *events.QR:
 		qrc.log.Debugf("Received QR code event, starting to emit codes to channel")
 		go qrc.emitQRs(slices.Clone(evt.Codes))
+		return
+	case *events.RotateADVSecret:
+		qrc.Lock()
+		if qrc.pendingRotation == nil {
+			qrc.pendingRotation = &events.RotateADVSecret{OldSecret: evt.OldSecret, NewSecret: evt.NewSecret}
+		} else {
+			qrc.pendingRotation.NewSecret = evt.NewSecret
+		}
+		select {
+		case qrc.rotateAdv <- struct{}{}:
+		default:
+		}
+		qrc.Unlock()
 		return
 	case *events.QRScannedWithoutMultidevice:
 		qrc.log.Debugf("QR code scanned without multidevice enabled")
@@ -211,11 +248,12 @@ func (cli *Client) GetQRChannel(ctx context.Context) (<-chan QRChannelItem, erro
 	}
 	ch := make(chan QRChannelItem, 8)
 	qrc := qrChannel{
-		output:  ch,
-		stopQRs: make(chan struct{}),
-		cli:     cli,
-		log:     cli.Log.Sub("QRChannel"),
-		ctx:     ctx,
+		output:    ch,
+		stopQRs:   make(chan struct{}),
+		rotateAdv: make(chan struct{}, 1),
+		cli:       cli,
+		log:       cli.Log.Sub("QRChannel"),
+		ctx:       ctx,
 	}
 	qrc.handlerID = cli.AddEventHandler(qrc.handleEvent)
 	return ch, nil
