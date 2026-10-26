@@ -195,8 +195,20 @@ func nativeRetirementClient(t *testing.T) (*Client, *nativeWriteGate, context.Ca
 	return client, gate, cancel
 }
 
+// Disconnect must not return while the old socket is open, whether the lease
+// lifetime ends before Disconnect or stays active until after it.
 func TestPinnedNativeSocketCancellationRequiresPhysicalRetirement(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cancelFirst bool
+	}{{"lifetime cancelled first", true}, {"lifetime active during Disconnect", false}} {
+		t.Run(tc.name, func(t *testing.T) { testNativeSocketRetirement(t, tc.cancelFirst) })
+	}
+}
+
+func testNativeSocketRetirement(t *testing.T, cancelFirst bool) {
 	client, gate, cancelLifetime := nativeRetirementClient(t)
+	defer cancelLifetime()
 	raw, err := waBinary.Marshal(waBinary.Node{Tag: "message", Attrs: waBinary.Attrs{"id": "synthetic-retirement", "to": "1@s.whatsapp.net"}, Content: []waBinary.Node{{Tag: "enc", Attrs: waBinary.Attrs{"type": "msg", "v": "2"}, Content: []byte{1, 2, 3}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -229,13 +241,17 @@ func TestPinnedNativeSocketCancellationRequiresPhysicalRetirement(t *testing.T) 
 		t.Fatal("detached write falsely settled")
 	default:
 	}
-	cancelLifetime()
+	if cancelFirst {
+		cancelLifetime()
+	}
 	stopped := make(chan struct{})
 	go func() { client.Disconnect(); close(stopped) }()
 	select {
 	case <-stopped:
-	case <-time.After(3 * time.Second):
-		t.Fatal("native Disconnect did not settle after lease cancellation")
+	// With the lifetime active, the close handshake waits behind the stuck
+	// write until Disconnect's five-second bound forces the socket shut.
+	case <-time.After(10 * time.Second):
+		t.Fatal("native Disconnect did not settle")
 	}
 	select {
 	case <-gate.closed:
