@@ -147,6 +147,13 @@ type NewsletterText struct {
 	UpdateTime jsontime.UnixMicroString `json:"update_time"`
 }
 
+// NewsletterViewCount preserves the definition reported on a views_count node.
+// An empty Type is the legacy definition; "views" is a separate definition.
+type NewsletterViewCount struct {
+	Type  string
+	Count int
+}
+
 type NewsletterMessage struct {
 	MessageServerID MessageServerID
 	MessageID       MessageID
@@ -155,6 +162,11 @@ type NewsletterMessage struct {
 	ViewsCount      int
 	ForwardsCount   int
 	ReactionCounts  map[string]int
+	// Presence distinguishes a reported zero from an absent or malformed count.
+	ViewsCountPresent    bool
+	ForwardsCountPresent bool
+	// ViewCounts retains all reported definitions without choosing an account gate.
+	ViewCounts []NewsletterViewCount
 
 	// This is only present when fetching messages, not in live updates
 	Message *waE2E.Message

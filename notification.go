@@ -405,7 +405,11 @@ func (cli *Client) parseNewsletterMessages(node *waBinary.Node) []*types.Newslet
 			ViewsCount:      0,
 			ReactionCounts:  nil,
 		}
-		for _, subchild := range child.GetChildren() {
+		children := child.GetChildren()
+		if !parseNewsletterObservations(&msg, children) {
+			cli.Log.Warnf("Ignoring malformed newsletter observation counters")
+		}
+		for _, subchild := range children {
 			switch subchild.Tag {
 			case "plaintext":
 				byteContent, ok := subchild.Content.([]byte)
@@ -416,16 +420,6 @@ func (cli *Client) parseNewsletterMessages(node *waBinary.Node) []*types.Newslet
 						cli.Log.Warnf("Failed to unmarshal newsletter message: %v", err)
 						msg.Message = nil
 					}
-				}
-			case "views_count":
-				msg.ViewsCount = subchild.AttrGetter().Int("count")
-			case "forwards_count":
-				msg.ForwardsCount = subchild.AttrGetter().Int("count")
-			case "reactions":
-				msg.ReactionCounts = make(map[string]int)
-				for _, reaction := range subchild.GetChildren() {
-					rag := reaction.AttrGetter()
-					msg.ReactionCounts[rag.String("code")] = rag.Int("count")
 				}
 			}
 		}
