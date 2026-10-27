@@ -9,7 +9,7 @@ The upstream project remains the smaller choice for applications that only need 
 
 ## Why HyperMeow instead of upstream WhatsMeow?
 
-This comparison was last verified against upstream `main` at [`c386243`](https://github.com/tulir/whatsmeow/commit/c386243a72bacad080ba2938b37e1e4e0f1ca3b2) on 2026-10-10. Each upstream sync must update this section when the difference changes.
+This comparison was last checked against upstream `main` at [`4b4986f`](https://github.com/tulir/whatsmeow/commit/4b4986ff80bcd65d6e7d1b3a860fd254af44c519) on 2026-10-27. The performance results below retain their original frozen baselines. Each upstream sync must update this section when the difference changes.
 
 | Area | HyperMeow advantage over upstream `main` |
 | --- | --- |
@@ -43,7 +43,7 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 
 ## Install
 
-HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.1 as its preferred toolchain.
+HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.2 as its preferred toolchain.
 
 Install the newest reviewed commit from the authoritative `main` branch:
 
@@ -81,6 +81,20 @@ go mod edit -dropreplace=go.mau.fi/whatsmeow
 go get github.com/polymorfa/hypermeow@main
 go mod tidy
 ```
+
+## Upstream maintenance
+
+HyperMeow regularly integrates upstream whatsmeow changes, including protocol
+fixes, APIs, dependencies, refactors, protobufs and their matching client version.
+Sync branches retain upstream ancestry. Fork-specific module paths, Signal
+integration, lifecycle controls and resource bounds remain part of each sync;
+necessary compatibility adjustments are documented and tested.
+
+Production consumers pin the resulting reviewed HyperMeow `main` commit, then
+validate their runner and API integrations against that exact revision. A library
+sync does not establish deployment, account eligibility or support for every
+new protobuf field. Client-source audits track changes that have not reached
+upstream yet.
 
 ## Core compatibility
 
@@ -190,7 +204,7 @@ See [LICENSING.md](LICENSING.md) for the file-level boundary.
 ### Connection lifecycle observers
 
 `AddConnectionEventHandler(func(context.Context, any))` observes `Connected`,
-`Disconnected`, `QR`, `LoggedOut` and `StreamReplaced`. The context is the original
+`Disconnected`, `QR`, `LoggedOut`, `StreamReplaced` and `CATRefreshError`. The context is the original
 connection's `ConnectContext` argument, captured before asynchronous delivery.
 A delayed event can arrive after that context is cancelled. Compare it with the
 connection authority your application owns before updating state; do not label an

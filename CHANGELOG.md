@@ -11,6 +11,12 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of panicking or retrying unchanged credentials.
+- Protect the upstream unified-session interval check during concurrent sends.
+- Parse newsletter live updates inside `messages` wrappers and retain forward counts, while preserving the legacy unwrapped form.
+- Preserve the upstream `ErrRecipientNotOnWhatsApp` error through HyperMeow's LID resolver.
+- Apply participant-hash device-cache invalidation to the fork's LID, hosted and bot recipients in both send paths.
+
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
 - Report the destination in `SendFBMessage` responses and decrypt full bot edits using their target message ID.
@@ -21,8 +27,10 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Changed
 
-- Sync upstream protocol definitions and runtime changes through `c386243a72bacad080ba2938b37e1e4e0f1ca3b2`, while retaining HyperMeow's module path, Signal fork, bounded queues, and SQL batching.
-- Require Go 1.26 and select Go 1.27.1 as the preferred toolchain.
+- Integrate all upstream whatsmeow commits through `4b4986ff80bcd65d6e7d1b3a860fd254af44c519`, including the protocol version `2.3000.1050728964`, optional group-send permission checks, bot LID sending and dependency updates. Retain the Polymorfa Signal fork, bounded caches, lifecycle controls and inline-contact capability.
+- Select Go 1.27.2 as the preferred toolchain. Regenerate the eight affected protobuf packages using protoc 34.1 and protoc-gen-go 1.36.11.
+
+- Require Go 1.26 or newer.
 - Add `SendResponse.Chat`, `Client.PreKeysUploaded`, pairing-secret rotation events, rich-response types, and bot root-secret methods on `store.ChatSettingsStore`. SQL-backed stores upgrade to schema version 19.
 - Deprecate `SetGroupDescription` in favor of `SetGroupTopic`.
 

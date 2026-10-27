@@ -25,7 +25,8 @@ var (
 	ErrNotLoggedIn     = errors.New("the store doesn't contain a device JID")
 	ErrMessageTimedOut = errors.New("timed out waiting for message send response")
 
-	ErrAlreadyConnected = errors.New("websocket is already connected")
+	ErrAlreadyConnected      = errors.New("websocket is already connected")
+	ErrCATRefreshUnavailable = errors.New("CAT refresh callback is not configured")
 
 	ErrPhoneNumberTooShort           = errors.New("phone number too short")
 	ErrPhoneNumberIsNotInternational = errors.New("international phone number required (must not start with 0)")
@@ -113,6 +114,8 @@ var (
 	ErrRecipientADJID           = errors.New("message recipient must be a user JID with no device part")
 	ErrServerReturnedError      = errors.New("server returned error")
 	ErrInvalidInlineBotID       = errors.New("invalid inline bot ID")
+	ErrNoPermissionInGroup      = errors.New("no permission to send that message in the group")
+	ErrRecipientNotOnWhatsApp   = errors.New("recipient is not on WhatsApp")
 )
 
 type DownloadHTTPError struct {
