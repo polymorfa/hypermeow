@@ -7,13 +7,15 @@
 package waWeb
 
 import (
-	waCommon "github.com/polymorfa/hypermeow/proto/waCommon"
-	waE2E "github.com/polymorfa/hypermeow/proto/waE2E"
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+
+	waCommon "github.com/polymorfa/hypermeow/proto/waCommon"
+	waE2E "github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
 const (
