@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -167,6 +168,8 @@ type SendRequestExtra struct {
 	Meta *types.MsgMetaInfo
 	// use this only if you know what you are doing
 	AdditionalNodes *[]waBinary.Node
+
+	CheckPermissions bool
 }
 
 // SendMessage sends the given message.
@@ -267,7 +270,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				personaID = "1807055946647697$1"
 			}
 			message.MessageContextInfo.BotMetadata = &waAICommon.BotMetadata{
-				PersonaID: proto.String(personaID),
+				PersonaID: new(personaID),
 			}
 		}
 
@@ -314,10 +317,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	}
 
 	var groupParticipants []types.JID
+	var cachedData *groupMetaCache
 	if to.Server == types.GroupServer || to.Server == types.BroadcastServer {
 		start := time.Now()
 		if to.Server == types.GroupServer {
-			var cachedData *groupMetaCache
 			cachedData, err = cli.getCachedGroupData(ctx, to)
 			if err != nil {
 				err = fmt.Errorf("failed to get group members: %w", err)
@@ -347,6 +350,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		if err != nil {
 			cli.Log.Warnf("Failed to get peer recipient PN for %s: %v", to, err)
 		}
+	} else if to.Server == types.BotServer {
+		ownID = cli.getOwnLID()
 	} else if to.Server == types.DefaultUserServer && !req.Peer {
 		start := time.Now()
 		var toLID types.JID
@@ -407,6 +412,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		}
 	}
 
+	if req.CheckPermissions && !cachedData.CanSend(ownID, message) {
+		return resp, ErrNoPermissionInGroup
+	}
+
 	respChan := cli.waitResponse(req.ID)
 	var phash string
 	var data []byte
@@ -465,19 +474,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	expectedPHash := ag.OptionalString("phash")
 	if setParticipantHashMismatch(&resp, phash, expectedPHash) {
 		cli.Log.Warnf("Server returned different participant list hash (%s != %s) when sending to %s. Some devices may not have received the message.", phash, expectedPHash, to)
-		switch to.Server {
-		case types.GroupServer:
-			// TODO also invalidate device list caches
-			cli.groupCacheLock.Lock()
-			delete(cli.groupCache, to)
-			cli.groupCacheLock.Unlock()
-		case types.BroadcastServer:
-			// TODO do something
-		case types.DefaultUserServer, types.HiddenUserServer, types.BotServer, types.HostedServer, types.HostedLIDServer:
-			cli.userDevicesCacheLock.Lock()
-			delete(cli.userDevicesCache, to)
-			cli.userDevicesCacheLock.Unlock()
-		}
+		cli.invalidateParticipantHashCaches(to)
 	}
 	return
 }
@@ -504,14 +501,14 @@ func (cli *Client) RevokeMessage(ctx context.Context, chat types.JID, id types.M
 // for things such as replies, revocations and reactions.
 func (cli *Client) BuildMessageKey(chat, sender types.JID, id types.MessageID) *waCommon.MessageKey {
 	key := &waCommon.MessageKey{
-		FromMe:    proto.Bool(true),
-		ID:        proto.String(id),
-		RemoteJID: proto.String(chat.String()),
+		FromMe:    new(true),
+		ID:        new(id),
+		RemoteJID: new(chat.String()),
 	}
 	if !sender.IsEmpty() && sender.User != cli.getOwnID().User && sender.User != cli.getOwnLID().User {
-		key.FromMe = proto.Bool(false)
+		key.FromMe = new(false)
 		if chat.Server != types.DefaultUserServer && chat.Server != types.HiddenUserServer && chat.Server != types.MessengerServer {
-			key.Participant = proto.String(sender.ToNonAD().String())
+			key.Participant = new(sender.ToNonAD().String())
 		}
 	}
 	return key
@@ -546,8 +543,8 @@ func (cli *Client) BuildReaction(chat, sender types.JID, id types.MessageID, rea
 	return &waE2E.Message{
 		ReactionMessage: &waE2E.ReactionMessage{
 			Key:               cli.BuildMessageKey(chat, sender, id),
-			Text:              proto.String(reaction),
-			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
+			Text:              new(reaction),
+			SenderTimestampMS: new(time.Now().UnixMilli()),
 		},
 	}
 }
@@ -586,12 +583,12 @@ func (cli *Client) BuildHistorySyncRequest(lastKnownMessageInfo *types.MessageIn
 			PeerDataOperationRequestMessage: &waE2E.PeerDataOperationRequestMessage{
 				PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_HISTORY_SYNC_ON_DEMAND.Enum(),
 				HistorySyncOnDemandRequest: &waE2E.PeerDataOperationRequestMessage_HistorySyncOnDemandRequest{
-					ChatJID:          proto.String(lastKnownMessageInfo.Chat.String()),
-					OldestMsgID:      proto.String(lastKnownMessageInfo.ID),
-					OldestMsgFromMe:  proto.Bool(lastKnownMessageInfo.IsFromMe),
-					OnDemandMsgCount: proto.Int32(int32(count)),
+					ChatJID:          new(lastKnownMessageInfo.Chat.String()),
+					OldestMsgID:      new(lastKnownMessageInfo.ID),
+					OldestMsgFromMe:  new(lastKnownMessageInfo.IsFromMe),
+					OnDemandMsgCount: new(int32(count)),
 					// Despite the field name saying "MS", this is actually supposed to contain seconds
-					OldestMsgTimestampMS: proto.Int64(lastKnownMessageInfo.Timestamp.Unix()),
+					OldestMsgTimestampMS: new(lastKnownMessageInfo.Timestamp.Unix()),
 				},
 			},
 		},
@@ -613,13 +610,13 @@ func (cli *Client) BuildEdit(chat types.JID, id types.MessageID, newContent *waE
 			Message: &waE2E.Message{
 				ProtocolMessage: &waE2E.ProtocolMessage{
 					Key: &waCommon.MessageKey{
-						FromMe:    proto.Bool(true),
-						ID:        proto.String(id),
-						RemoteJID: proto.String(chat.String()),
+						FromMe:    new(true),
+						ID:        new(id),
+						RemoteJID: new(chat.String()),
 					},
 					Type:          waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
 					EditedMessage: newContent,
-					TimestampMS:   proto.Int64(time.Now().UnixMilli()),
+					TimestampMS:   new(time.Now().UnixMilli()),
 				},
 			},
 		},
@@ -666,8 +663,8 @@ func (cli *Client) SetDisappearingTimer(ctx context.Context, chat types.JID, tim
 		_, err = cli.SendMessage(ctx, chat, &waE2E.Message{
 			ProtocolMessage: &waE2E.ProtocolMessage{
 				Type:                      waE2E.ProtocolMessage_EPHEMERAL_SETTING.Enum(),
-				EphemeralExpiration:       proto.Uint32(uint32(timer.Seconds())),
-				EphemeralSettingTimestamp: proto.Int64(settingTS.Unix()),
+				EphemeralExpiration:       new(uint32(timer.Seconds())),
+				EphemeralSettingTimestamp: new(settingTS.Unix()),
 			},
 		})
 	case types.GroupServer:
@@ -792,7 +789,7 @@ func (cli *Client) sendGroup(
 	}
 	skdMessage := &waE2E.Message{
 		SenderKeyDistributionMessage: &waE2E.SenderKeyDistributionMessage{
-			GroupID:                             proto.String(to.String()),
+			GroupID:                             new(to.String()),
 			AxolotlSenderKeyDistributionMessage: signalSKDMessage.Serialize(),
 		},
 	}
@@ -1323,7 +1320,7 @@ func marshalMessage(to types.JID, message *waE2E.Message) (plaintext, dsmPlainte
 	if to.Server != types.GroupServer && to.Server != types.NewsletterServer {
 		dsmPlaintext, err = proto.Marshal(&waE2E.Message{
 			DeviceSentMessage: &waE2E.DeviceSentMessage{
-				DestinationJID: proto.String(to.String()),
+				DestinationJID: new(to.String()),
 				Message:        message,
 			},
 			MessageContextInfo: message.MessageContextInfo,
@@ -1458,12 +1455,6 @@ func (cli *Client) encryptMessageForDeviceAndWrap(
 	}, includeDeviceIdentity, nil
 }
 
-func copyAttrs(from, to waBinary.Attrs) {
-	for k, v := range from {
-		to[k] = v
-	}
-}
-
 func (cli *Client) encryptMessageForDevice(
 	ctx context.Context,
 	plaintext []byte,
@@ -1518,7 +1509,7 @@ func (cli *Client) encryptMessageForDevice(
 	if ciphertext.Type() == protocol.PREKEY_TYPE {
 		encAttrs["type"] = "pkmsg"
 	}
-	copyAttrs(extraAttrs, encAttrs)
+	maps.Copy(encAttrs, extraAttrs)
 
 	includeDeviceIdentity := encAttrs["type"] == "pkmsg" && cli.MessengerConfig == nil
 	return &waBinary.Node{

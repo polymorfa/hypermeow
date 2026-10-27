@@ -10,8 +10,9 @@ import (
 	"github.com/polymorfa/hypermeow/types/events"
 )
 
-// ConnectionEventHandler receives Connected, Disconnected, QR, LoggedOut and
-// StreamReplaced with the original connection's ConnectContext. The context may
+// ConnectionEventHandler receives Connected, Disconnected, QR, LoggedOut,
+// StreamReplaced and CATRefreshError with the original connection's ConnectContext.
+// The context may
 // already be cancelled when a delayed event arrives. Consumers must check their
 // own current connection authority; an event does not establish ownership.
 // Other events continue through the existing generic event API only.
@@ -52,7 +53,7 @@ func (cli *Client) RemoveConnectionEventHandler(id uint32) bool {
 // scheduling. Never replace it with client.BackgroundEventCtx or current state.
 func (cli *Client) dispatchConnectionEvent(ctx context.Context, evt any) (handlerFailed bool) {
 	switch evt.(type) {
-	case *events.Connected, *events.Disconnected, *events.QR, *events.LoggedOut, *events.StreamReplaced:
+	case *events.Connected, *events.Disconnected, *events.QR, *events.LoggedOut, *events.StreamReplaced, *events.CATRefreshError:
 		cli.connectionEventHandlersLock.Lock()
 		handlers := append([]wrappedConnectionEventHandler(nil), cli.connectionEventHandlers...)
 		cli.connectionEventHandlersLock.Unlock()
