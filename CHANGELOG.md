@@ -12,13 +12,14 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 ### Added
 
 - Persist hosted (coexistence) pairing as `store.Device.IsHosted` and report it on `events.PairSuccess.IsHosted`. SQL-backed stores upgrade to schema version 20, which adds `whatsmeow_device.is_hosted` (default `false`).
-- Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results.
+- Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results. `GetBusinessProfile` is the reliable source: `GetUserInfo` and `IsOnWhatsApp` do not request the business profile, so their field is set only when the server includes it.
 - Add `VerifiedName.Serial`, `Issuer`, `PrivacyMode`, `IsAPI` and `IsBusinessApp`, typed actual-actor and host-storage values, and `MessageInfo.BizPrivacyMode` from `<biz>` on business messages.
 - Add `UndecryptableMessage.IsHostedUnavailable` for `<unavailable hosted="true"/>`.
 
 ### Fixed
 
 - `GetUserInfo` returns the parsed verified business name in `UserInfo.VerifiedName`.
+- Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
 - Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of panicking or retrying unchanged credentials.
 - Protect the upstream unified-session interval check during concurrent sends.
 - Parse newsletter live updates inside `messages` wrappers and retain forward counts, while preserving the legacy unwrapped form.
