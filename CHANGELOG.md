@@ -14,12 +14,13 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
 - `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
 - Persist hosted (coexistence) pairing as `store.Device.IsHosted` and report it on `events.PairSuccess.IsHosted`. SQL-backed stores upgrade to schema version 20, which adds `whatsmeow_device.is_hosted` (default `false`).
-- Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results.
+- Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results. `GetBusinessProfile` is the reliable source: `GetUserInfo` and `IsOnWhatsApp` do not request the business profile, so their field is set only when the server includes it.
 - Add `VerifiedName.Serial`, `Issuer`, `PrivacyMode`, `IsAPI` and `IsBusinessApp`, typed actual-actor and host-storage values, and `MessageInfo.BizPrivacyMode` from `<biz>` on business messages.
 - Add `UndecryptableMessage.IsHostedUnavailable` for `<unavailable hosted="true"/>`.
 
 ### Fixed
 
+- Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
 - Redact shared-device and root secrets from app-state mutations in trace logs.
 - Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
 - Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations, including duplicate view definitions, instead of reporting fabricated zeros or truncated reaction lists.
