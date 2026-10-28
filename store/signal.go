@@ -26,7 +26,14 @@ var ErrUnsupportedSignalStoreOperation = errors.New("signal store operation is n
 
 var _ store.SignalProtocol = (*Device)(nil)
 
+// errRemoteKeys explains a local Signal operation reached on a device whose
+// private keys are remote. Reaching it is a programming error.
+const errRemoteKeys = "whatsmeow: local Signal operation on a device with remote keys"
+
 func (device *Device) GetIdentityKeyPair() *identity.KeyPair {
+	if device.RemoteKeys {
+		panic(errRemoteKeys + ": identity key")
+	}
 	return identity.NewKeyPair(
 		identity.NewKey(ecc.NewDjbECPublicKey(*device.IdentityKey.Pub)),
 		ecc.NewDjbECPrivateKey(*device.IdentityKey.Priv),
@@ -170,6 +177,9 @@ func (device *Device) LoadSignedPreKey(ctx context.Context, signedPreKeyID uint3
 		return nil, nil
 	}
 	if signedPreKeyID == device.SignedPreKey.KeyID {
+		if device.RemoteKeys {
+			panic(errRemoteKeys + ": signed prekey")
+		}
 		return record.NewSignedPreKey(signedPreKeyID, 0, ecc.NewECKeyPair(
 			ecc.NewDjbECPublicKey(*device.SignedPreKey.Pub),
 			ecc.NewDjbECPrivateKey(*device.SignedPreKey.Priv),

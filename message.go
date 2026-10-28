@@ -332,6 +332,10 @@ func (cli *Client) handlePlaintextMessage(ctx context.Context, info *types.Messa
 }
 
 func (cli *Client) migrateSessionStore(ctx context.Context, pn, lid types.JID) {
+	if cli.isRemoteSignal() {
+		cli.migrateRemoteSessions(ctx, pn, lid)
+		return
+	}
 	err := cli.Store.Sessions.MigratePNToLID(ctx, pn, lid)
 	if err != nil {
 		cli.Log.Errorf("Failed to migrate signal store from %s to %s: %v", pn, lid, err)
@@ -381,6 +385,10 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			senderEncryptionJID = lid
 			info.SenderAlt = lid
 		}
+	}
+	if cli.isRemoteSignal() {
+		cli.decryptMessagesRemote(ctx, info, node, senderEncryptionJID)
+		return
 	}
 	var recognizedStanza, protobufFailed bool
 	for _, child := range children {
