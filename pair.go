@@ -154,7 +154,7 @@ func (cli *Client) handlePairSuccess(ctx context.Context, node *waBinary.Node) {
 		} else {
 			cli.Log.Infof("Successfully paired %s", cli.Store.ID)
 			go cli.sendUnifiedSession(false)
-			cli.dispatchEvent(&events.PairSuccess{ID: jid, LID: lid, BusinessName: businessName, Platform: platform, Props: &props})
+			cli.dispatchEvent(&events.PairSuccess{ID: jid, LID: lid, BusinessName: businessName, Platform: platform, Props: &props, IsHosted: cli.Store.IsHosted})
 		}
 	}()
 }
@@ -170,7 +170,6 @@ func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, r
 	h := hmac.New(sha256.New, cli.Store.AdvSecretKey)
 	if deviceIdentityContainer.GetAccountType() == waAdv.ADVEncryptionType_HOSTED {
 		h.Write(AdvHostedAccountSignaturePrefix)
-		//cli.Store.IsHosted = true
 	}
 	h.Write(deviceIdentityContainer.Details)
 
@@ -232,6 +231,7 @@ func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, r
 	cli.Store.LID = lid
 	cli.Store.BusinessName = businessName
 	cli.Store.Platform = platform
+	cli.Store.IsHosted = deviceIdentityContainer.GetAccountType() == waAdv.ADVEncryptionType_HOSTED
 	err = cli.Store.Save(ctx)
 	if err != nil {
 		cli.sendPairError(ctx, reqID, 500, "internal-error")
