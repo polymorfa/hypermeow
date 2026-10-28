@@ -14,9 +14,24 @@ before the actual WebSocket write call; it is evidence of entry, not provider
 acceptance. It cannot prove whether bytes reached a provider.
 
 The hook returns before the provider ACK wait. Callers must not hold Campaign
-locks through that wait. Persist an invocation CAS marker and preallocated ID
-before writing; an existing marker with no durable outcome is unknown and must
-never be reinvoked. No goroutine-start or AMQP-publish callback counts as entry.
+locks through that wait. `Admit` holds the Noise write lock for its entire call:
+keep it short and bounded, and do not wait on unbounded database or network I/O.
+The final authority fence and durable CAS remain integration-owned. Persist the
+invocation CAS marker and preallocated ID before writing; an existing marker
+with no durable outcome is unknown and must never be reinvoked. No goroutine-start
+or AMQP-publish callback counts as entry.
+
+The per-send context controls admission before entry. The actual shared socket
+write uses the socket lifetime context, so cancelling one send after entry does
+not cancel the shared connection. A write failure remains an uncertain outcome.
+
+## Callback-closure integration hold
+
+The strict post-`Admit` closure above remains a required contract. The current
+callback interface has a concurrent return-to-closure gap and does not yet enforce
+that contract. Keep this seam unmounted until the interface and its producer
+fence lifetime resolve that gap; the ordinary retained-callback test only checks
+a callback invoked after the whole wrapper returns.
 A frame-write failure or post-entry authority loss is not proof of non-delivery.
 
 Guarded sends do not populate HyperMeow's retry content cache/store and do not

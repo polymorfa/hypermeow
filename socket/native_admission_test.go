@@ -89,6 +89,7 @@ func TestNativeAdmissionCancellationAndClosedSocketNeverEnter(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cancelled", true: "closed"}[closed], func(t *testing.T) {
 			ns := testAdmittedSocket(t)
+			header := bytes.Clone(ns.fs.Header)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			if closed {
@@ -99,6 +100,9 @@ func TestNativeAdmissionCancellationAndClosedSocketNeverEnter(t *testing.T) {
 			err := ns.SendFrameAdmitted(ctx, nil, func(_ context.Context, write func() error) error { return write() }, func() { t.Error("non-writable socket entered") })
 			if err == nil {
 				t.Fatal("missing refusal")
+			}
+			if ns.writeCounter != 0 || !bytes.Equal(ns.fs.Header, header) {
+				t.Fatalf("pre-entry refusal consumed write state: nonce=%d, header=%x", ns.writeCounter, ns.fs.Header)
 			}
 		})
 	}
@@ -115,6 +119,54 @@ func TestNativeAdmissionEntryIsInsideWriteAndBeforeReturn(t *testing.T) {
 	}, func() { order = append(order, "entered") })
 	if err != nil || len(order) != 3 || order[0] != "admit" || order[1] != "entered" || order[2] != "written" {
 		t.Fatalf("wrong entry order: %v, %v", order, err)
+	}
+}
+
+func TestNativeAdmissionOversizePreservesNextFrameNonceAndHeader(t *testing.T) {
+	ns := testAdmittedSocket(t)
+	header := bytes.Clone(ns.fs.Header)
+	entered := 0
+	admit := func(_ context.Context, write func() error) error { return write() }
+	oversized := make([]byte, FrameMaxSize-ns.writeKey.Overhead())
+	err := ns.SendFrameAdmitted(t.Context(), oversized, admit, func() { entered++ })
+	if !errors.Is(err, ErrFrameTooLarge) || entered != 0 || ns.writeCounter != 0 || !bytes.Equal(ns.fs.Header, header) {
+		t.Fatalf("oversize changed pre-entry state: err=%v entered=%d nonce=%d header=%x", err, entered, ns.writeCounter, ns.fs.Header)
+	}
+	if err = ns.SendFrameAdmitted(t.Context(), []byte("valid next frame"), admit, func() { entered++ }); err != nil {
+		t.Fatal(err)
+	}
+	if entered != 1 || ns.writeCounter != 1 || ns.fs.Header != nil {
+		t.Fatalf("next frame did not use the first nonce/header: entered=%d nonce=%d header=%x", entered, ns.writeCounter, ns.fs.Header)
+	}
+}
+
+func TestNativeAdmissionSendCancellationAfterEntryKeepsSharedSocket(t *testing.T) {
+	ns := testAdmittedSocket(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	admit := func(_ context.Context, write func() error) error { return write() }
+	if err := ns.SendFrameAdmitted(ctx, []byte("entered frame"), admit, cancel); err != nil {
+		t.Fatalf("send cancellation reached shared socket write: %v", err)
+	}
+	if err := ns.SendFrameAdmitted(t.Context(), []byte("next frame"), admit, func() {}); err != nil {
+		t.Fatalf("send cancellation damaged the next shared-socket write: %v", err)
+	}
+	if ns.writeCounter != 2 {
+		t.Fatalf("wrong write count: %d", ns.writeCounter)
+	}
+}
+
+func TestNativeAdmissionSocketLifetimeControlsEnteredWrite(t *testing.T) {
+	ns := testAdmittedSocket(t)
+	entered := 0
+	err := ns.SendFrameAdmitted(t.Context(), []byte("entered frame"), func(_ context.Context, write func() error) error {
+		return write()
+	}, func() {
+		entered++
+		ns.fs.cancel()
+	})
+	if !errors.Is(err, context.Canceled) || entered != 1 || ns.writeCounter != 1 {
+		t.Fatalf("socket cancellation did not control the entered write: err=%v entered=%d nonce=%d", err, entered, ns.writeCounter)
 	}
 }
 

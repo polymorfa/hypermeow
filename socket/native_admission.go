@@ -34,8 +34,10 @@ func (ns *NoiseSocket) SendFrameAdmitted(ctx context.Context, plaintext []byte, 
 			return err
 		}
 		invoked = true
-		ns.writeCounter++
-		writeErr = ns.fs.sendFrame(ciphertext, entered, ctx)
+		writeErr = ns.fs.sendFrame(ciphertext, func() {
+			ns.writeCounter++
+			entered()
+		}, nil)
 		return writeErr
 	})
 	mu.Lock()
