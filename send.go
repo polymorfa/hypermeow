@@ -1028,11 +1028,13 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return getButtonTypeFromMessage(msg.ViewOnceMessageV2Extension.Message)
 	case msg.EphemeralMessage != nil:
 		return getButtonTypeFromMessage(msg.EphemeralMessage.Message)
+	case msg.TemplateMessage != nil && msg.TemplateMessage.GetHydratedTemplate() != nil:
+		return "template"
 	case msg.ButtonsMessage != nil:
 		return "buttons"
 	case msg.ListMessage != nil:
 		return "list"
-	case msg.InteractiveMessage != nil && msg.InteractiveMessage.GetNativeFlowMessage() != nil:
+	case msg.InteractiveMessage != nil && (msg.InteractiveMessage.GetNativeFlowMessage() != nil || msg.InteractiveMessage.GetCarouselMessage() != nil):
 		return "native_flow"
 	case msg.InteractiveResponseMessage != nil:
 		return "interactive_response"
@@ -1225,7 +1227,10 @@ func (cli *Client) getMessageContent(
 	}
 
 	if buttonType := getButtonTypeFromMessage(message); buttonType != "" {
-		if buttonType == "native_flow" {
+		if buttonType == "template" {
+			// Format envelope only: no category, template ID, verified name or bot identity.
+			content = append(content, waBinary.Node{Tag: "biz"}, waBinary.Node{Tag: "hsm"})
+		} else if buttonType == "native_flow" {
 			content = append(content, buildNativeFlowBizNode(message, time.Now().Unix()))
 		} else {
 			content = append(content, waBinary.Node{
