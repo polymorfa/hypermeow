@@ -16,8 +16,8 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waAdv"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
-	waLog "github.com/polymorfa/hypermeow/util/log"
 	"github.com/polymorfa/hypermeow/util/keys"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type hostedPairContainer struct {

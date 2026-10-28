@@ -214,6 +214,7 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 		if err != nil {
 			cli.Log.Warnf("Failed to parse %s's verified name details: %v", jid, err)
 		}
+		info.AEAAccountType = parseUSyncAEAAccountType(child.GetChildByTag("business"))
 		contactNode := child.GetChildByTag("contact")
 		info.IsIn = contactNode.AttrGetter().String("type") == "in"
 		info.Username = parseUSyncUsername(child)
@@ -301,6 +302,8 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 		if err != nil {
 			cli.Log.Warnf("Failed to parse %s's verified name details: %v", jid, err)
 		}
+		info.VerifiedName = verifiedName
+		info.AEAAccountType = parseUSyncAEAAccountType(child.GetChildByTag("business"))
 		status, _ := child.GetChildByTag("status").Content.([]byte)
 		info.Status = string(status)
 		info.PictureID, _ = child.GetChildByTag("picture").Attrs["id"].(string)
@@ -540,6 +543,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	if !ok {
 		return nil, errors.New("missing jid in business profile")
 	}
+	aeaAccountType := parseAEAAccountType(profileNode)
 	address, _ := profileNode.GetChildByTag("address").Content.([]byte)
 	email, _ := profileNode.GetChildByTag("email").Content.([]byte)
 	description, _ := profileNode.GetChildByTag("description").Content.([]byte)
@@ -592,6 +596,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	}
 	return &types.BusinessProfile{
 		JID:                   jid,
+		AEAAccountType:        aeaAccountType,
 		Email:                 string(email),
 		Address:               string(address),
 		Description:           string(description),
@@ -919,6 +924,21 @@ func (cli *Client) updateBusinessName(ctx context.Context, user, userAlt types.J
 			NewBusinessName: name,
 		})
 	}
+}
+
+// parseAEAAccountType reads <aea_account_type value="..."/> from a business
+// <profile> node (WAWebQueryBusinessProfileJob:14-25, WAWebUsyncBusiness:10-20).
+func parseAEAAccountType(profileNode waBinary.Node) types.AEAAccountType {
+	value, _ := profileNode.GetChildByTag("aea_account_type").Attrs["value"].(string)
+	return types.AEAAccountType(value)
+}
+
+// parseUSyncAEAAccountType reads the AEA account type from a usync <business> result.
+func parseUSyncAEAAccountType(businessNode waBinary.Node) types.AEAAccountType {
+	if businessNode.Tag != "business" {
+		return types.AEAAccountTypeUnknown
+	}
+	return parseAEAAccountType(businessNode.GetChildByTag("profile"))
 }
 
 func parseVerifiedName(businessNode waBinary.Node) (*types.VerifiedName, error) {
