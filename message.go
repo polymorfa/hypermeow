@@ -367,9 +367,12 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	}()
 	unavailableNode, ok := node.GetOptionalChildByTag("unavailable")
 	if ok && len(node.GetChildrenByTag("enc")) == 0 {
-		uType := events.UnavailableType(unavailableNode.AttrGetter().String("type"))
-		cli.Log.Warnf("Unavailable message %s from %s (type: %q)", info.ID, info.SourceString(), uType)
-		handlerFailed := cli.dispatchEvent(&events.UndecryptableMessage{Info: *info, IsUnavailable: true, UnavailableType: uType})
+		uag := unavailableNode.AttrGetter()
+		uType := events.UnavailableType(uag.String("type"))
+		// WAWebHandleMsgParser:245-248 compares the raw attribute to "true".
+		isHosted := uag.OptionalString("hosted") == "true"
+		cli.Log.Warnf("Unavailable message %s from %s (type: %q, hosted: %t)", info.ID, info.SourceString(), uType, isHosted)
+		handlerFailed := cli.dispatchEvent(&events.UndecryptableMessage{Info: *info, IsUnavailable: true, UnavailableType: uType, IsHostedUnavailable: isHosted})
 		if handlerFailed {
 			cli.Log.Warnf("Handler for unavailable message %s failed", info.ID)
 			return
