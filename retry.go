@@ -355,25 +355,32 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 		frankingHash.Write(plaintext)
 		frankingTag = frankingHash.Sum(nil)
 	}
+	// A hosted device keeps its own Signal address; receipt.Sender is normalized to the regular server.
+	retryDevice, sessionJID := receipt.Sender, receipt.Sender
+	hostedSender, isHostedSender := rawHostedSender(node)
+	if isHostedSender {
+		retryDevice = hostedSender
+		sessionJID = cli.hostedSignalJID(ctx, hostedSender)
+	}
 	_, hasKeys := node.GetOptionalChildByTag("keys")
 	var bundle *prekey.Bundle
 	if hasKeys {
-		bundle, err = nodeToPreKeyBundle(uint32(receipt.Sender.Device), *node)
+		bundle, err = nodeToPreKeyBundle(uint32(retryDevice.Device), *node)
 		if err != nil {
 			return fmt.Errorf("failed to read prekey bundle in retry receipt: %w", err)
 		}
-	} else if reason, recreate := cli.shouldRecreateSession(ctx, retryCount, receipt.Sender); recreate {
-		cli.Log.Debugf("Fetching prekeys for %s for handling retry receipt with no prekey bundle because %s", receipt.Sender, reason)
+	} else if reason, recreate := cli.shouldRecreateSession(ctx, retryCount, sessionJID); recreate {
+		cli.Log.Debugf("Fetching prekeys for %s for handling retry receipt with no prekey bundle because %s", retryDevice, reason)
 		var keys map[types.JID]preKeyResp
-		keys, err = cli.fetchPreKeys(ctx, []types.JID{receipt.Sender})
+		keys, err = cli.fetchPreKeys(ctx, []types.JID{retryDevice})
 		if err != nil {
 			return err
 		}
-		bundle, err = keys[receipt.Sender].bundle, keys[receipt.Sender].err
+		bundle, err = keys[retryDevice].bundle, keys[retryDevice].err
 		if err != nil {
 			return fmt.Errorf("failed to fetch prekeys: %w", err)
 		} else if bundle == nil {
-			return fmt.Errorf("didn't get prekey bundle for %s (response size: %d)", receipt.Sender, len(keys))
+			return fmt.Errorf("didn't get prekey bundle for %s (response size: %d)", retryDevice, len(keys))
 		}
 	}
 	encAttrs := waBinary.Attrs{}
@@ -393,7 +400,9 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 	var includeDeviceIdentity bool
 	if msg.wa != nil {
 		encryptionIdentity := receipt.Sender
-		if receipt.Sender.Server == types.DefaultUserServer {
+		if isHostedSender {
+			encryptionIdentity = sessionJID
+		} else if receipt.Sender.Server == types.DefaultUserServer {
 			lidForPN, err := cli.Store.LIDs.GetLIDForPN(ctx, receipt.Sender)
 			if err != nil {
 				cli.Log.Warnf("Failed to get LID for %s: %v", receipt.Sender, err)

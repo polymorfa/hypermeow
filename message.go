@@ -384,7 +384,9 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	cli.Log.Debugf("Decrypting message from %s", info.SourceString())
 	containsDirectMsg := false
 	senderEncryptionJID := info.Sender
-	if info.Sender.Server == types.DefaultUserServer && !info.Sender.IsBot() {
+	if hostedSender, ok := rawHostedSender(node); ok {
+		senderEncryptionJID = cli.hostedSignalJID(ctx, hostedSender)
+	} else if info.Sender.Server == types.DefaultUserServer && !info.Sender.IsBot() {
 		if info.SenderAlt.Server == types.HiddenUserServer {
 			senderEncryptionJID = info.SenderAlt
 			cli.migrateSessionStore(ctx, info.Sender, info.SenderAlt)
