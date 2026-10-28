@@ -15,6 +15,26 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waVnameCert"
 )
 
+// AEAAccountType is the end-to-end encryption mode of a business account, as
+// reported in <aea_account_type value="..."/> by business profile and usync
+// business queries (WAWebAeaAccountState).
+type AEAAccountType string
+
+const (
+	AEAAccountTypeUnknown    AEAAccountType = ""            // Not reported by the server.
+	AEAAccountTypeNotSet     AEAAccountType = "not_set"     // The server reported no AEA mode.
+	AEAAccountTypeE2EE       AEAAccountType = "e2ee"        // Messages are end-to-end encrypted.
+	AEAAccountTypeHybridE2EE AEAAccountType = "hybrid_e2ee" // Hybrid: some messages are handled outside end-to-end encryption.
+	AEAAccountTypeNonE2EE    AEAAccountType = "non_e2ee"    // Messages are not end-to-end encrypted.
+)
+
+// IsAEA reports whether the business uses an account-level encryption mode
+// other than plain end-to-end encryption (hybrid_e2ee or non_e2ee), matching
+// WhatsApp Web's isAeaAccount check.
+func (t AEAAccountType) IsAEA() bool {
+	return t == AEAAccountTypeHybridE2EE || t == AEAAccountTypeNonE2EE
+}
+
 // VerifiedName contains verified WhatsApp business details.
 type VerifiedName struct {
 	Certificate *waVnameCert.VerifiedNameCertificate
@@ -30,11 +50,14 @@ type VerifiedName struct {
 // UserInfo contains info about a WhatsApp user.
 type UserInfo struct {
 	VerifiedName *VerifiedName
-	Status       string
-	PictureID    string
-	Devices      []JID
-	LID          JID
-	Username     string
+	// AEAAccountType is set when the usync <business> result includes
+	// <profile><aea_account_type value="..."/></profile>.
+	AEAAccountType AEAAccountType
+	Status         string
+	PictureID      string
+	Devices        []JID
+	LID            JID
+	Username       string
 }
 
 type BotListInfo struct {
@@ -103,6 +126,8 @@ type IsOnWhatsAppResponse struct {
 	Username    string
 
 	VerifiedName *VerifiedName // If the phone is a business, the verified business details.
+
+	AEAAccountType AEAAccountType // Set when the usync business result includes an AEA account type.
 }
 
 type UsernameResolution struct {
@@ -273,6 +298,7 @@ type Category struct {
 // BusinessProfile contains the profile information of a WhatsApp business.
 type BusinessProfile struct {
 	JID                   JID
+	AEAAccountType        AEAAccountType // The business's end-to-end encryption mode, if the server reported one.
 	Address               string
 	Email                 string
 	Description           string
