@@ -57,6 +57,10 @@ type PairSuccess struct {
 	BusinessName string
 	Platform     string
 	Props        *waCompanionReg.ClientPairingProps
+	// IsHosted is true when the account is hosted (Cloud API coexistence) and
+	// the ADV identity was signed with the hosted prefix. Also persisted as
+	// store.Device.IsHosted.
+	IsHosted bool
 }
 
 // PairError is emitted when a pair-success event is received from the server, but finishing the pairing locally fails.

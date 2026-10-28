@@ -1,4 +1,4 @@
--- v0 -> v19 (compatible with v8+): Latest schema
+-- v0 -> v20 (compatible with v8+): Latest schema
 CREATE TABLE whatsmeow_device (
 	jid TEXT PRIMARY KEY,
 	lid TEXT,
@@ -26,7 +26,9 @@ CREATE TABLE whatsmeow_device (
 
 	lid_migration_ts BIGINT NOT NULL DEFAULT 0,
 
-	companion_meta_nonce TEXT NOT NULL DEFAULT ''
+	companion_meta_nonce TEXT NOT NULL DEFAULT '',
+
+	is_hosted BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE TABLE whatsmeow_identity_keys (
