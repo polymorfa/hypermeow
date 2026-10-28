@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -969,16 +971,54 @@ func parseVerifiedNameContent(verifiedNameNode waBinary.Node) (*types.VerifiedNa
 		return nil, err
 	}
 	ag := verifiedNameNode.AttrGetter()
+	serial := ag.OptionalString("serial")
+	if serial == "" && certDetails.Serial != nil {
+		serial = strconv.FormatUint(certDetails.GetSerial(), 10)
+	}
 	return &types.VerifiedName{
 		Certificate: &cert,
 		Details:     &certDetails,
 
-		VerifiedLevel: ag.String("verified_level"),
-		Version:       ag.Int("v"),
-		HostStorage:   ag.Int("host_storage"),
-		ActualActors:  ag.Int("actual_actors"),
-		PrivacyModeTS: ag.UnixTime("privacy_mode_ts"),
+		VerifiedLevel: ag.OptionalString("verified_level"),
+		Version:       ag.OptionalInt("v"),
+		HostStorage:   ag.OptionalInt("host_storage"),
+		ActualActors:  ag.OptionalInt("actual_actors"),
+		PrivacyModeTS: ag.OptionalUnixTime("privacy_mode_ts"),
+
+		Serial:      serial,
+		Issuer:      types.VerifiedNameIssuer(certDetails.GetIssuer()),
+		PrivacyMode: parseBusinessPrivacyMode(verifiedNameNode),
 	}, nil
+}
+
+// parseBusinessPrivacyMode reads actual_actors, host_storage and privacy_mode_ts
+// from a <verified_name> or message <biz> node. Like WhatsApp Web
+// (WAWebCommonParsersVerifiedName, WAWebHandleMsgParser:316-327), it returns
+// nil unless all three are present and both enums have known values.
+func parseBusinessPrivacyMode(node waBinary.Node) *types.BusinessPrivacyMode {
+	ag := node.AttrGetter()
+	actors, hasActors := ag.GetInt64("actual_actors", false)
+	storage, hasStorage := ag.GetInt64("host_storage", false)
+	ts, hasTS := ag.GetInt64("privacy_mode_ts", false)
+	if !hasActors || !hasStorage || !hasTS {
+		return nil
+	}
+	mode := &types.BusinessPrivacyMode{
+		ActualActors: types.BusinessActualActors(actors),
+		HostStorage:  types.BusinessHostStorage(storage),
+		Timestamp:    time.Unix(ts, 0),
+	}
+	switch mode.ActualActors {
+	case types.BusinessActualActorsSelf, types.BusinessActualActorsBSP, types.BusinessActualActorsCAPI:
+	default:
+		return nil
+	}
+	switch mode.HostStorage {
+	case types.BusinessHostStorageOnPremise, types.BusinessHostStorageFacebook:
+	default:
+		return nil
+	}
+	return mode
 }
 
 func parseDeviceList(user types.JID, deviceNode waBinary.Node) []types.JID {

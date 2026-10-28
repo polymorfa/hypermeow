@@ -113,7 +113,11 @@ type MessageInfo struct {
 
 	IsNewsletterStatus bool
 
-	VerifiedName   *VerifiedName
+	VerifiedName *VerifiedName
+	// BizPrivacyMode is the privacy mode from <biz actual_actors host_storage
+	// privacy_mode_ts/> on a message from a business. It is nil when the node or
+	// any attribute is missing, an enum value is unknown, or the sender is a bot.
+	BizPrivacyMode *BusinessPrivacyMode
 	DeviceSentMeta *DeviceSentMeta // Metadata for direct messages sent from another one of the user's own devices.
 }
 

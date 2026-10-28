@@ -273,6 +273,11 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 			if err != nil {
 				cli.Log.Warnf("Failed to parse verified_name node in %s: %v", info.ID, err)
 			}
+		case "biz":
+			// WAWebHandleMsgParser:316-327 ignores privacy mode on bot messages.
+			if !info.Sender.IsBot() {
+				info.BizPrivacyMode = parseBusinessPrivacyMode(child)
+			}
 		case "bot":
 			info.MsgBotInfo, err = cli.parseMsgBotInfo(child)
 			if err != nil {
@@ -291,6 +296,17 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 			if mediaType, ok := child.AttrGetter().GetString("mediatype", false); ok {
 				info.MediaType = mediaType
 			}
+		}
+	}
+	if info.VerifiedName != nil {
+		// Web reads the level and serial from the message stanza itself
+		// (<message verified_level verified_name>); fill them in when the
+		// certificate node doesn't carry them.
+		if info.VerifiedName.VerifiedLevel == "" {
+			info.VerifiedName.VerifiedLevel = ag.OptionalString("verified_level")
+		}
+		if serial := ag.OptionalString("verified_name"); serial != "" {
+			info.VerifiedName.Serial = serial
 		}
 	}
 
