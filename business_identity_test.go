@@ -286,3 +286,74 @@ func TestUnavailableHostedMessageEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDeviceListHostedDevice(t *testing.T) {
+	// <devices><device-list><device id="0"/><device id="99" is_hosted="true"/></device-list></devices>
+	// (WAWebUsyncDevice:20, WAWebWid:20,173-174)
+	devices := waBinary.Node{
+		Tag: "devices",
+		Content: []waBinary.Node{{
+			Tag: "device-list",
+			Content: []waBinary.Node{
+				{Tag: "device", Attrs: waBinary.Attrs{"id": "0"}},
+				{Tag: "device", Attrs: waBinary.Attrs{"id": "99", "is_hosted": "true"}},
+			},
+		}},
+	}
+	pn := types.NewJID("15551234567", types.DefaultUserServer)
+	got := parseDeviceList(pn, devices)
+	want := []types.JID{
+		{User: pn.User, Server: types.DefaultUserServer},
+		{User: pn.User, Device: 99, Server: types.HostedServer},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("PN devices = %v, want %v", got, want)
+	}
+	lid := types.NewJID("123456789012345", types.HiddenUserServer)
+	got = parseDeviceList(lid, devices)
+	if len(got) != 2 || got[1] != (types.JID{User: lid.User, Device: 99, Server: types.HostedLIDServer}) {
+		t.Fatalf("LID devices = %v", got)
+	}
+}
+
+func TestHostedDeviceJIDRoundTripsThroughBinary(t *testing.T) {
+	for _, jid := range []types.JID{
+		{User: "15551234567", Device: 99, Server: types.HostedServer},
+		{User: "123456789012345", Device: 99, Server: types.HostedLIDServer},
+	} {
+		encoded, err := waBinary.Marshal(waBinary.Node{Tag: "to", Attrs: waBinary.Attrs{"jid": jid}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := waBinary.Unmarshal(encoded[1:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := decoded.AttrGetter().JID("jid"); got != jid {
+			t.Fatalf("round trip = %#v, want %#v", got, jid)
+		}
+		if got := jid.String(); got != jid.User+":99@"+jid.Server {
+			t.Fatalf("String() = %q", got)
+		}
+	}
+}
+
+func TestParseReceiptFromHostedDevice(t *testing.T) {
+	cli := newBusinessIdentityTestClient()
+	hosted := types.JID{User: "15551234567", Device: 99, Server: types.HostedServer}
+	receipt, _, err := cli.parseReceipt(&waBinary.Node{
+		Tag:   "receipt",
+		Attrs: waBinary.Attrs{"from": hosted, "id": "3EB0SENT", "t": "1700000000", "type": "read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Incoming hosted JIDs are normalized to the account's regular server and keep device 99.
+	want := types.JID{User: hosted.User, Device: 99, Server: types.DefaultUserServer}
+	if receipt.Sender != want || receipt.Chat != want.ToNonAD() {
+		t.Fatalf("receipt source = %v in %v, want %v in %v", receipt.Sender, receipt.Chat, want, want.ToNonAD())
+	}
+	if len(receipt.MessageIDs) != 1 || receipt.MessageIDs[0] != "3EB0SENT" || receipt.Type != types.ReceiptTypeRead {
+		t.Fatalf("unexpected receipt: %+v", receipt)
+	}
+}
