@@ -5,6 +5,9 @@
 package whatsmeow
 
 import (
+	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waVnameCert"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
+	"github.com/polymorfa/hypermeow/types/events"
 	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
@@ -240,5 +244,45 @@ func TestParseMessageInfoIgnoresBotBizPrivacyMode(t *testing.T) {
 	}
 	if info.BizPrivacyMode != nil {
 		t.Fatalf("bot message privacy mode = %+v, want nil", info.BizPrivacyMode)
+	}
+}
+
+func TestUnavailableHostedMessageEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		attrs waBinary.Attrs
+		want  bool
+	}{
+		// <unavailable hosted="true"/> (WAWebHandleMsgParser:245-248)
+		{"hosted", waBinary.Attrs{"hosted": "true"}, true},
+		{"view once", waBinary.Attrs{"type": "view_once"}, false},
+		{"plain", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli, _, sent := newTestRemote(t)
+			var got []*events.UndecryptableMessage
+			cli.AddEventHandler(func(evt any) {
+				if e, ok := evt.(*events.UndecryptableMessage); ok {
+					got = append(got, e)
+				}
+			})
+			sender := types.NewJID("15551234567", types.DefaultUserServer)
+			info := &types.MessageInfo{MessageSource: types.MessageSource{Chat: sender, Sender: sender}, ID: "3EB0HOSTED"}
+			node := &waBinary.Node{
+				Tag:     "message",
+				Attrs:   waBinary.Attrs{"id": "3EB0HOSTED", "from": sender, "t": "1700000000", "type": "text"},
+				Content: []waBinary.Node{{Tag: "unavailable", Attrs: tc.attrs}},
+			}
+			cli.decryptMessages(context.Background(), info, node)
+			if len(got) != 1 || !got[0].IsUnavailable {
+				t.Fatalf("UndecryptableMessage events = %+v, want one unavailable event", got)
+			}
+			if got[0].IsHostedUnavailable != tc.want {
+				t.Fatalf("IsHostedUnavailable = %v, want %v", got[0].IsHostedUnavailable, tc.want)
+			}
+			if tags := sent.tags(); !slices.ContainsFunc(tags, func(tag string) bool { return strings.HasPrefix(tag, "ack:") }) {
+				t.Fatalf("sent %v, want the stanza acknowledged", tags)
+			}
+		})
 	}
 }
