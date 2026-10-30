@@ -1376,7 +1376,9 @@ func (cli *Client) encryptMessageForDevices(
 			continue
 		}
 		encryptionIdentity := jid
-		if jid.Server == types.DefaultUserServer {
+		if isHostedJID(jid) {
+			encryptionIdentity = cli.hostedSignalJID(ctx, jid)
+		} else if jid.Server == types.DefaultUserServer {
 			// TODO query LID from server for missing entries
 			if lidForPN, ok := lidMappings[jid]; ok && !lidForPN.IsEmpty() {
 				cli.migrateSessionStore(ctx, jid, lidForPN)

@@ -57,6 +57,10 @@ type PairSuccess struct {
 	BusinessName string
 	Platform     string
 	Props        *waCompanionReg.ClientPairingProps
+	// IsHosted is true when the account is hosted (Cloud API coexistence) and
+	// the ADV identity was signed with the hosted prefix. Also persisted as
+	// store.Device.IsHosted.
+	IsHosted bool
 }
 
 // PairError is emitted when a pair-success event is received from the server, but finishing the pairing locally fails.
@@ -322,6 +326,11 @@ type UndecryptableMessage struct {
 	IsUnavailable bool
 	// Some message types are intentionally unavailable. Such types usually have a type specified here.
 	UnavailableType UnavailableType
+	// IsHostedUnavailable is true for <unavailable hosted="true"/>: the hosted
+	// (Cloud API) side of a coexistence business sent the message, and this
+	// companion cannot decrypt it. WhatsApp Web shows a "hosted unavailable"
+	// placeholder for these.
+	IsHostedUnavailable bool
 
 	DecryptFailMode DecryptFailMode
 }

@@ -383,31 +383,26 @@ const (
 		INSERT INTO whatsmeow_sessions (our_jid, their_id, session)
 		SELECT our_jid, replace(their_id, $2, $3), session
 		FROM whatsmeow_sessions
-		WHERE our_jid=$1 AND their_id LIKE $2 || ':%'
+		WHERE our_jid=$1 AND their_id >= $4 AND their_id < $5
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
 	`
-	deleteAllIdentityKeysQuery      = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2`
+	deleteAllIdentityKeysQuery      = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3`
 	migratePNToLIDIdentityKeysQuery = `
 		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity)
 		SELECT our_jid, replace(their_id, $2, $3), identity
 		FROM whatsmeow_identity_keys
-		WHERE our_jid=$1 AND their_id LIKE $2 || ':%'
+		WHERE our_jid=$1 AND their_id >= $4 AND their_id < $5
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity
 	`
-	deleteAllSenderKeysQuery      = `DELETE FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2`
+	deleteAllSenderKeysQuery      = `DELETE FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id >= $2 AND sender_id < $3`
 	migratePNToLIDSenderKeysQuery = `
 		INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key)
 		SELECT our_jid, chat_id, replace(sender_id, $2, $3), sender_key
 		FROM whatsmeow_sender_keys
-		WHERE our_jid=$1 AND sender_id LIKE $2 || ':%'
+		WHERE our_jid=$1 AND sender_id >= $4 AND sender_id < $5
 		ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key
 	`
 	hasPNRowsToMigrateQuery = `
-		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id LIKE $2)
-			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2)
-			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id LIKE $2)
-	`
-	hasPNRowsToMigrateSQLiteQuery = `
 		SELECT EXISTS(SELECT 1 FROM whatsmeow_sessions WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3)
 			OR EXISTS(SELECT 1 FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id >= $2 AND their_id < $3)
 			OR EXISTS(SELECT 1 FROM whatsmeow_sender_keys WHERE our_jid=$1 AND sender_id >= $2 AND sender_id < $3)
@@ -598,12 +593,12 @@ func signalAddressRange(user string) (string, string) {
 }
 
 func (s *SQLStore) deleteAllSenderKeys(ctx context.Context, phone string) error {
-	_, err := s.db.Exec(ctx, deleteAllSenderKeysQuery, s.JID, phone+":%")
+	_, err := s.db.Exec(ctx, deleteAllSenderKeysQuery, s.JID, phone+":", phone+";")
 	return err
 }
 
 func (s *SQLStore) deleteAllIdentityKeys(ctx context.Context, phone string) error {
-	_, err := s.db.Exec(ctx, deleteAllIdentityKeysQuery, s.JID, phone+":%")
+	_, err := s.db.Exec(ctx, deleteAllIdentityKeysQuery, s.JID, phone+":", phone+";")
 	return err
 }
 
@@ -634,11 +629,8 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	}
 	var hasPNRows bool
 	var err error
-	if s.db.Dialect == dbutil.SQLite {
-		err = s.db.QueryRow(ctx, hasPNRowsToMigrateSQLiteQuery, s.JID, pnSignal+":", pnSignal+";").Scan(&hasPNRows)
-	} else {
-		err = s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, pnSignal+":%").Scan(&hasPNRows)
-	}
+	lower, upper := signalAddressRange(pnSignal)
+	err = s.db.QueryRow(ctx, hasPNRowsToMigrateQuery, s.JID, lower, upper).Scan(&hasPNRows)
 	if err != nil {
 		s.log.Warnf("Failed to check for PN rows to migrate from %s: %v", pnSignal, err)
 	} else if !hasPNRows {
@@ -648,7 +640,7 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	var sessionsUpdated, identityKeysUpdated, senderKeysUpdated int64
 	lidSignal := lid.SignalAddressUser()
 	err = s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
-		res, err := s.db.Exec(ctx, migratePNToLIDSessionsQuery, s.JID, pnSignal, lidSignal)
+		res, err := s.db.Exec(ctx, migratePNToLIDSessionsQuery, s.JID, pnSignal, lidSignal, lower, upper)
 		if err != nil {
 			return fmt.Errorf("failed to migrate sessions: %w", err)
 		}
@@ -661,7 +653,7 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 			return fmt.Errorf("failed to delete extra sessions: %w", err)
 		}
 
-		res, err = s.db.Exec(ctx, migratePNToLIDIdentityKeysQuery, s.JID, pnSignal, lidSignal)
+		res, err = s.db.Exec(ctx, migratePNToLIDIdentityKeysQuery, s.JID, pnSignal, lidSignal, lower, upper)
 		if err != nil {
 			return fmt.Errorf("failed to migrate identity keys: %w", err)
 		}
@@ -674,7 +666,7 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 			return fmt.Errorf("failed to delete extra identity keys: %w", err)
 		}
 
-		res, err = s.db.Exec(ctx, migratePNToLIDSenderKeysQuery, s.JID, pnSignal, lidSignal)
+		res, err = s.db.Exec(ctx, migratePNToLIDSenderKeysQuery, s.JID, pnSignal, lidSignal, lower, upper)
 		if err != nil {
 			return fmt.Errorf("failed to migrate sender keys: %w", err)
 		}

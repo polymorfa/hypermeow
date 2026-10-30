@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -214,6 +216,7 @@ func (cli *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.I
 		if err != nil {
 			cli.Log.Warnf("Failed to parse %s's verified name details: %v", jid, err)
 		}
+		info.AEAAccountType = parseUSyncAEAAccountType(child.GetChildByTag("business"))
 		contactNode := child.GetChildByTag("contact")
 		info.IsIn = contactNode.AttrGetter().String("type") == "in"
 		info.Username = parseUSyncUsername(child)
@@ -301,6 +304,8 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 		if err != nil {
 			cli.Log.Warnf("Failed to parse %s's verified name details: %v", jid, err)
 		}
+		info.VerifiedName = verifiedName
+		info.AEAAccountType = parseUSyncAEAAccountType(child.GetChildByTag("business"))
 		status, _ := child.GetChildByTag("status").Content.([]byte)
 		info.Status = string(status)
 		info.PictureID, _ = child.GetChildByTag("picture").Attrs["id"].(string)
@@ -540,6 +545,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	if !ok {
 		return nil, errors.New("missing jid in business profile")
 	}
+	aeaAccountType := parseAEAAccountType(profileNode)
 	address, _ := profileNode.GetChildByTag("address").Content.([]byte)
 	email, _ := profileNode.GetChildByTag("email").Content.([]byte)
 	description, _ := profileNode.GetChildByTag("description").Content.([]byte)
@@ -592,6 +598,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	}
 	return &types.BusinessProfile{
 		JID:                   jid,
+		AEAAccountType:        aeaAccountType,
 		Email:                 string(email),
 		Address:               string(address),
 		Description:           string(description),
@@ -921,6 +928,21 @@ func (cli *Client) updateBusinessName(ctx context.Context, user, userAlt types.J
 	}
 }
 
+// parseAEAAccountType reads <aea_account_type value="..."/> from a business
+// <profile> node (WAWebQueryBusinessProfileJob:14-25, WAWebUsyncBusiness:10-20).
+func parseAEAAccountType(profileNode waBinary.Node) types.AEAAccountType {
+	value, _ := profileNode.GetChildByTag("aea_account_type").Attrs["value"].(string)
+	return types.AEAAccountType(value)
+}
+
+// parseUSyncAEAAccountType reads the AEA account type from a usync <business> result.
+func parseUSyncAEAAccountType(businessNode waBinary.Node) types.AEAAccountType {
+	if businessNode.Tag != "business" {
+		return types.AEAAccountTypeUnknown
+	}
+	return parseAEAAccountType(businessNode.GetChildByTag("profile"))
+}
+
 func parseVerifiedName(businessNode waBinary.Node) (*types.VerifiedName, error) {
 	if businessNode.Tag != "business" {
 		return nil, nil
@@ -949,16 +971,54 @@ func parseVerifiedNameContent(verifiedNameNode waBinary.Node) (*types.VerifiedNa
 		return nil, err
 	}
 	ag := verifiedNameNode.AttrGetter()
+	serial := ag.OptionalString("serial")
+	if serial == "" && certDetails.Serial != nil {
+		serial = strconv.FormatUint(certDetails.GetSerial(), 10)
+	}
 	return &types.VerifiedName{
 		Certificate: &cert,
 		Details:     &certDetails,
 
-		VerifiedLevel: ag.String("verified_level"),
-		Version:       ag.Int("v"),
-		HostStorage:   ag.Int("host_storage"),
-		ActualActors:  ag.Int("actual_actors"),
-		PrivacyModeTS: ag.UnixTime("privacy_mode_ts"),
+		VerifiedLevel: ag.OptionalString("verified_level"),
+		Version:       ag.OptionalInt("v"),
+		HostStorage:   ag.OptionalInt("host_storage"),
+		ActualActors:  ag.OptionalInt("actual_actors"),
+		PrivacyModeTS: ag.OptionalUnixTime("privacy_mode_ts"),
+
+		Serial:      serial,
+		Issuer:      types.VerifiedNameIssuer(certDetails.GetIssuer()),
+		PrivacyMode: parseBusinessPrivacyMode(verifiedNameNode),
 	}, nil
+}
+
+// parseBusinessPrivacyMode reads actual_actors, host_storage and privacy_mode_ts
+// from a <verified_name> or message <biz> node. Like WhatsApp Web
+// (WAWebCommonParsersVerifiedName, WAWebHandleMsgParser:316-327), it returns
+// nil unless all three are present and both enums have known values.
+func parseBusinessPrivacyMode(node waBinary.Node) *types.BusinessPrivacyMode {
+	ag := node.AttrGetter()
+	actors, hasActors := ag.GetInt64("actual_actors", false)
+	storage, hasStorage := ag.GetInt64("host_storage", false)
+	ts, hasTS := ag.GetInt64("privacy_mode_ts", false)
+	if !hasActors || !hasStorage || !hasTS {
+		return nil
+	}
+	mode := &types.BusinessPrivacyMode{
+		ActualActors: types.BusinessActualActors(actors),
+		HostStorage:  types.BusinessHostStorage(storage),
+		Timestamp:    time.Unix(ts, 0),
+	}
+	switch mode.ActualActors {
+	case types.BusinessActualActorsSelf, types.BusinessActualActorsBSP, types.BusinessActualActorsCAPI:
+	default:
+		return nil
+	}
+	switch mode.HostStorage {
+	case types.BusinessHostStorageOnPremise, types.BusinessHostStorageFacebook:
+	default:
+		return nil
+	}
+	return mode
 }
 
 func parseDeviceList(user types.JID, deviceNode waBinary.Node) []types.JID {
