@@ -20,6 +20,7 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Migrate an established hosted PN session when the peer starts sending from its hosted LID. SQL-backed migration uses literal address-prefix ranges so hosted underscores cannot select or delete another account's keys.
 - Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
 - Redact shared-device and root secrets from app-state mutations in trace logs.
 - Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
