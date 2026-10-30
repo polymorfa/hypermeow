@@ -41,3 +41,5 @@ not implement an automatic retry around this API. Durable retry/receipt policy
 and the regional invocation/result outbox belong to the owning application.
 No Campaign consumer, positive authority adapter, database schema or runtime
 mount is supplied here. This seam alone does not establish native acceptance.
+
+The native frame path checks socket-lifetime cancellation again after the entry notification and before invoking the WebSocket writer. A lifetime cancellation completed in that notification refuses the physical write; the entered nonce/header remain consumed and this is not proof of durable non-invocation. Caller cancellation after entry still does not cancel a healthy shared-socket write. The retained-callback closure integration hold remains open.

@@ -170,6 +170,13 @@ func (fs *FrameSocket) sendFrame(data []byte, entered func(), writeCtx context.C
 	if writeCtx == nil {
 		writeCtx = fs.cancelCtx
 	}
+	if entered != nil {
+		// A ready websocket writer can otherwise win against an already-cancelled
+		// socket lifetime. Caller cancellation still does not own this write.
+		if err := writeCtx.Err(); err != nil {
+			return err
+		}
+	}
 	return conn.Write(writeCtx, websocket.MessageBinary, wholeFrame)
 }
 
