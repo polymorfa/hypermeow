@@ -7,6 +7,7 @@ package whatsmeow
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,6 +45,26 @@ func newMemSignalStore() *memSignalStore {
 		preKeys:    make(map[uint32]*keys.PreKey),
 		nextPreKey: 1,
 	}
+}
+
+func (m *memSignalStore) MigratePNToLID(_ context.Context, pn, lid types.JID) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	prefix := pn.SignalAddressUser() + ":"
+	replacement := lid.SignalAddressUser() + ":"
+	for address, record := range m.sessions {
+		if strings.HasPrefix(address, prefix) {
+			m.sessions[replacement+strings.TrimPrefix(address, prefix)] = record
+			delete(m.sessions, address)
+		}
+	}
+	for address, identity := range m.identities {
+		if strings.HasPrefix(address, prefix) {
+			m.identities[replacement+strings.TrimPrefix(address, prefix)] = identity
+			delete(m.identities, address)
+		}
+	}
+	return nil
 }
 
 func (m *memSignalStore) PutIdentity(_ context.Context, address string, key [32]byte) error {
@@ -145,6 +166,13 @@ type lidStub struct {
 func (l *lidStub) GetLIDForPN(_ context.Context, pn types.JID) (types.JID, error) {
 	if pn.User == l.pn.User {
 		return types.JID{User: l.lid.User, Device: pn.Device, Server: types.HiddenUserServer}, nil
+	}
+	return types.EmptyJID, nil
+}
+
+func (l *lidStub) GetPNForLID(_ context.Context, lid types.JID) (types.JID, error) {
+	if lid.User == l.lid.User {
+		return types.JID{User: l.pn.User, Device: lid.Device, Server: types.DefaultUserServer}, nil
 	}
 	return types.EmptyJID, nil
 }
@@ -429,5 +457,65 @@ func TestRawHostedSender(t *testing.T) {
 		if got != tc.want || ok != tc.ok {
 			t.Fatalf("rawHostedSender(%v) = %s, %v; want %s, %v", tc.attrs, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+func TestHostedLIDTransitionMigratesEstablishedPNSession(t *testing.T) {
+	ctx := context.Background()
+	own := types.JID{User: "15550000000", Device: 7, Server: types.DefaultUserServer}
+	pn := types.JID{User: "15551234567", Device: HostedDeviceID, Server: types.HostedServer}
+	lid := types.JID{User: "123456789012345", Device: HostedDeviceID, Server: types.HostedLIDServer}
+	aliases := &lidStub{}
+	companion, mem := newSignalTestDevice(own, aliases)
+	cli := NewClient(companion, waLog.Noop)
+	cli.SynchronousAck = true
+	cli.testSendHook = (&sentNodes{}).hook
+	var received []string
+	cli.AddEventHandler(func(evt any) {
+		if event, ok := evt.(*events.Message); ok {
+			received = append(received, event.Message.GetConversation())
+		}
+	})
+	remote := newSignalTestPeer(t, companion, pn)
+	kind, ciphertext := remote.encrypt(t, "before alias")
+	deliverSignalTestMessage(t, cli, pn, "3EB0PN", kind, ciphertext)
+	// A reply acknowledges the initial prekey session so the next inbound
+	// ciphertext needs that established session, rather than a new prekey.
+	reply, err := proto.Marshal(&waE2E.Message{Conversation: proto.String("ack")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, _, err := cli.encryptMessageForDevices(ctx, []types.JID{pn}, "3EB0ACK", reply, nil, waBinary.Attrs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := nodes[0].GetChildByTag("enc")
+	signal, err := protocol.NewSignalMessageFromBytes(enc.Content.([]byte), pbSerializer.SignalMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = remote.cipher.Decrypt(ctx, signal); err != nil {
+		t.Fatal(err)
+	}
+	regular := types.JID{User: pn.User, Device: HostedDeviceID, Server: types.DefaultUserServer}.SignalAddress().String()
+	mem.sessions[regular] = []byte("regular session stays separate")
+	aliases.pn = types.NewJID(pn.User, types.DefaultUserServer)
+	aliases.lid = types.NewJID(lid.User, types.HiddenUserServer)
+	kind, ciphertext = remote.encrypt(t, "after alias")
+	if kind != "msg" {
+		t.Fatalf("transition ciphertext type = %s, want msg", kind)
+	}
+	deliverSignalTestMessage(t, cli, lid, "3EB0LID", kind, ciphertext)
+	if !slices.Equal(received, []string{"before alias", "after alias"}) {
+		t.Fatalf("decrypted = %q", received)
+	}
+	if found, _ := mem.HasSession(ctx, pn.SignalAddress().String()); found {
+		t.Fatal("old hosted PN session remains")
+	}
+	if found, _ := mem.HasSession(ctx, lid.SignalAddress().String()); !found {
+		t.Fatal("hosted LID session is missing")
+	}
+	if string(mem.sessions[regular]) != "regular session stays separate" {
+		t.Fatal("regular device99 session changed")
 	}
 }

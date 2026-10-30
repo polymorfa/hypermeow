@@ -44,6 +44,16 @@ func (cli *Client) hostedSignalJID(ctx context.Context, jid types.JID) types.JID
 	if jid.Device != HostedDeviceID {
 		cli.Log.Warnf("Hosted JID %s does not use device %d", jid, HostedDeviceID)
 	}
+	if jid.Server == types.HostedLIDServer {
+		pn, err := cli.Store.LIDs.GetPNForLID(ctx, types.JID{User: jid.User, Server: types.HiddenUserServer})
+		if err != nil {
+			cli.Log.Warnf("Failed to get PN for hosted device %s: %v", jid, err)
+		} else if !pn.IsEmpty() {
+			hostedPN := types.JID{User: pn.User, Device: jid.Device, Server: types.HostedServer}
+			cli.migrateSessionStore(ctx, hostedPN, jid)
+		}
+		return jid
+	}
 	if jid.Server != types.HostedServer {
 		return jid
 	}

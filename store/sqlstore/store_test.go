@@ -409,7 +409,7 @@ func TestMigratePNToLIDCachesEmptyPreflightTemporarily(t *testing.T) {
 			t.Fatalf("existence query did not cover %s", table)
 		}
 	}
-	wantArgs := []string{store.JID, "15551234567:%"}
+	wantArgs := []string{store.JID, "15551234567:", "15551234567;"}
 	if len(state.args) != len(wantArgs) {
 		t.Fatalf("unexpected existence query argument count %d", len(state.args))
 	}
@@ -438,6 +438,21 @@ func TestMigratePNToLIDUsesSQLitePrefixRange(t *testing.T) {
 	for index, want := range wantArgs {
 		if got := fmt.Sprint(state.args[index].Value); got != want {
 			t.Fatalf("SQLite preflight argument %d = %q, want %q", index, got, want)
+		}
+	}
+}
+
+func TestHostedMigrationQueriesUseLiteralPrefixRanges(t *testing.T) {
+	for name, query := range map[string]string{
+		"sessions":         migratePNToLIDSessionsQuery,
+		"identities":       migratePNToLIDIdentityKeysQuery,
+		"sender keys":      migratePNToLIDSenderKeysQuery,
+		"identity cleanup": deleteAllIdentityKeysQuery,
+		"sender cleanup":   deleteAllSenderKeysQuery,
+		"preflight":        hasPNRowsToMigrateQuery,
+	} {
+		if strings.Contains(query, "LIKE") {
+			t.Fatalf("%s treats hosted underscore as a wildcard: %s", name, query)
 		}
 	}
 }
