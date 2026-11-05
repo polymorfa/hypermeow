@@ -2,6 +2,7 @@ package whatsmeow
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
@@ -50,6 +51,37 @@ func TestHydratedMixedButtonsRoundTrip(t *testing.T) {
 			t.Fatal("invalid hydrated button message accepted")
 		}
 	}
+}
+
+func TestHydratedButtonLimitsIndependently(t *testing.T) {
+	reply := func(i int) BusinessNativeFlowButton {
+		return BusinessNativeFlowButton{Name: "quick_reply", ParamsJSON: fmt.Sprintf(`{"display_text":"Reply","id":"reply-%d"}`, i)}
+	}
+	url := BusinessNativeFlowButton{Name: "cta_url", ParamsJSON: `{"display_text":"Open","url":"https://example.com"}`}
+	var eleven []BusinessNativeFlowButton
+	for i := 0; i < 11; i++ {
+		eleven = append(eleven, reply(i))
+	}
+	t.Run("ten controls including three CTAs", func(t *testing.T) {
+		buttons := append(append([]BusinessNativeFlowButton{}, eleven[:7]...), url, url, url)
+		message, err := BuildBusinessHydratedButtonsMessage(BusinessHydratedButtonsMessageParams{Body: "Body", Buttons: buttons})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(message.GetTemplateMessage().GetHydratedTemplate().GetHydratedButtons()) != 10 {
+			t.Fatal("valid boundary did not retain all ten controls")
+		}
+	})
+	t.Run("eleven unique reply IDs", func(t *testing.T) {
+		if _, err := BuildBusinessHydratedButtonsMessage(BusinessHydratedButtonsMessageParams{Body: "Body", Buttons: eleven}); err == nil {
+			t.Fatal("eleven controls accepted")
+		}
+	})
+	t.Run("four valid CTAs", func(t *testing.T) {
+		if _, err := BuildBusinessHydratedButtonsMessage(BusinessHydratedButtonsMessageParams{Body: "Body", Buttons: []BusinessNativeFlowButton{url, url, url, url}}); err == nil {
+			t.Fatal("four CTAs accepted")
+		}
+	})
 }
 
 func TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims(t *testing.T) {
