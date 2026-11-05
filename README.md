@@ -196,7 +196,8 @@ If you'd like to financially support this project, you can do so
 Upstream-derived files retain their original Tulir Asokan and contributor
 copyright notices and remain licensed under [MPL-2.0](LICENSE).
 
-Polymorfa-added files: Copyright (c) 2026 Rajeh Taher, licensed under the
+Polymorfa-added files: Copyright (c) 2026 Rajeh Taher and
+Copyright (c) 2026 Polymorfa (Softium LLC), licensed under the
 [MIT License](LICENSE-MIT).
 
 See [LICENSING.md](LICENSING.md) for the file-level boundary.
