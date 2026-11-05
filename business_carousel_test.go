@@ -3,6 +3,7 @@ package whatsmeow
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -91,6 +92,27 @@ func TestBusinessCarouselRejectsInvalidCards(t *testing.T) {
 			tc.mutate(&p)
 			if _, err := BuildBusinessCarouselMessage(p); err == nil {
 				t.Fatal("expected invalid carousel error")
+			}
+		})
+	}
+}
+
+func TestBusinessCarouselValidatesExactTransmittedReplyID(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first, second string
+	}{
+		{"case aliases cannot hide duplicate lowercase IDs", `{"display_text":"Choose","id":"shared","ID":"card-a"}`, `{"display_text":"Choose","id":"shared","ID":"card-b"}`},
+		{"case alias cannot replace a missing lowercase ID", `{"display_text":"Choose","ID":"card-a"}`, `{"display_text":"Choose","id":"card-b"}`},
+		{"case alias cannot replace an empty lowercase ID", `{"display_text":"Choose","id":"","ID":"card-a"}`, `{"display_text":"Choose","id":"card-b"}`},
+		{"case alias cannot mask an oversized lowercase ID", fmt.Sprintf(`{"display_text":"Choose","id":%q,"ID":"card-a"}`, strings.Repeat("a", 257)), `{"display_text":"Choose","id":"card-b"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cards := []BusinessCarouselCard{carouselCard(0, false), carouselCard(1, true)}
+			cards[0].Buttons[0].ParamsJSON = tc.first
+			cards[1].Buttons[0].ParamsJSON = tc.second
+			if _, err := BuildBusinessCarouselMessage(BusinessCarouselMessageParams{Body: "Offers", Cards: cards}); err == nil {
+				t.Fatal("invalid transmitted reply ID accepted")
 			}
 		})
 	}

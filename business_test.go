@@ -806,10 +806,14 @@ func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 	}
 	buttons, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{
 		Title: "Order help", Body: "Choose an action", Footer: "Synthetic support",
-		Buttons: []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: `{"display_text":"Track order","url":"https://synthetic.invalid/order/o-100"}`}},
+		ContextInfo: &waE2E.ContextInfo{StanzaID: proto.String("quoted-message")},
+		Buttons:     []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: `{"display_text":"Track order","url":"https://synthetic.invalid/order/o-100"}`}},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if buttons.GetInteractiveMessage().GetContextInfo().GetStanzaID() != "quoted-message" {
+		t.Fatal("native-flow quote context was not preserved")
 	}
 	button := buttons.GetInteractiveMessage().GetNativeFlowMessage().GetButtons()[0]
 	if buttons.GetButtonsMessage() != nil || buttons.GetInteractiveMessage().GetNativeFlowMessage().GetMessageVersion() != 1 || button.GetName() != "cta_url" {

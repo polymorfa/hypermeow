@@ -1939,16 +1939,15 @@ func BuildBusinessCarouselMessage(params BusinessCarouselMessageParams) (*waE2E.
 		}
 		for _, button := range card.Buttons {
 			if button.Name == "quick_reply" {
-				var fields struct {
-					ID string `json:"id"`
-				}
-				if err := json.Unmarshal([]byte(button.ParamsJSON), &fields); err != nil || strings.TrimSpace(fields.ID) == "" || !bounded(fields.ID, 256) {
+				var fields map[string]json.RawMessage
+				var id string
+				if err := json.Unmarshal([]byte(button.ParamsJSON), &fields); err != nil || json.Unmarshal(fields["id"], &id) != nil || strings.TrimSpace(id) == "" || !bounded(id, 256) {
 					return nil, fmt.Errorf("carousel card %d has an invalid reply ID", i)
 				}
-				if _, exists := replyIDs[fields.ID]; exists {
+				if _, exists := replyIDs[id]; exists {
 					return nil, errors.New("carousel reply IDs must be unique")
 				}
-				replyIDs[fields.ID] = struct{}{}
+				replyIDs[id] = struct{}{}
 			}
 		}
 		interactive := msg.InteractiveMessage
