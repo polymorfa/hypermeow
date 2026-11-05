@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Rajeh Taher
+// Copyright (c) 2026 Polymorfa (Softium LLC)
 // Licensed under the MIT License. See LICENSE-MIT for details.
 
 package whatsmeow
@@ -108,6 +109,33 @@ func TestNewsletterMilestoneNativeMexProducer(t *testing.T) {
 		})
 		if got == nil || got.MessageServerID != 123 || got.Mex.OpName != "NotificationNewsletterMilestone" || got.Mex.Timestamp.Unix() != 1700000000 {
 			t.Fatalf("native milestone delivery lost identity or source context: %+v", got)
+		}
+	}
+}
+
+func TestNewsletterObservationsRejectDuplicateViewDefinitions(t *testing.T) {
+	for _, definition := range []string{"", "views"} {
+		for _, secondCount := range []string{"0", "7"} {
+			t.Run(fmt.Sprintf("type=%q/second=%s", definition, secondCount), func(t *testing.T) {
+				cli, _, _ := newTestRemote(t)
+				counters := []waBinary.Node{
+					{Tag: "views_count", Attrs: waBinary.Attrs{"count": "0", "type": definition}},
+					{Tag: "views_count", Attrs: waBinary.Attrs{"count": secondCount, "type": definition}},
+					{Tag: "forwards_count", Attrs: waBinary.Attrs{"count": "0"}},
+					{Tag: "reactions"},
+				}
+				messages := cli.parseNewsletterMessages(&waBinary.Node{Content: []waBinary.Node{{Tag: "message", Attrs: waBinary.Attrs{"server_id": "123"}, Content: counters}}})
+				if len(messages) != 1 {
+					t.Fatalf("ambiguous views discarded the message: %+v", messages)
+				}
+				message := messages[0]
+				if message.ViewsCountPresent || message.ViewCounts != nil {
+					t.Fatalf("duplicate view definition became a valid observation: %+v", message)
+				}
+				if !message.ForwardsCountPresent || message.ForwardsCount != 0 || message.ReactionCounts == nil || len(message.ReactionCounts) != 0 {
+					t.Fatalf("ambiguous views changed independent reported observations: %+v", message)
+				}
+			})
 		}
 	}
 }

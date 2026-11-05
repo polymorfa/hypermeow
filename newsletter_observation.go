@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Rajeh Taher
+// Copyright (c) 2026 Polymorfa (Softium LLC)
 // Licensed under the MIT License. See LICENSE-MIT for details.
 
 package whatsmeow
@@ -17,6 +18,7 @@ func newsletterCounter(attrs *waBinary.AttrUtility) (int, bool) {
 // Invalid or ambiguous counters are omitted, never turned into reported zeros.
 func parseNewsletterObservations(msg *types.NewsletterMessage, children []waBinary.Node) bool {
 	var badViews, badForwards, badReactions, sawForwards, sawReactions bool
+	seenViews := make(map[string]struct{}, 2)
 	for _, child := range children {
 		switch child.Tag {
 		case "views_count":
@@ -24,10 +26,12 @@ func parseNewsletterObservations(msg *types.NewsletterMessage, children []waBina
 			definition := attrs.OptionalString("type")
 			count, valid := newsletterCounter(attrs)
 			msg.ViewsCount = count
-			if !valid || len(msg.ViewCounts) == 2 {
+			_, duplicate := seenViews[definition]
+			if !valid || len(msg.ViewCounts) == 2 || duplicate {
 				badViews = true
 			}
 			if !badViews {
+				seenViews[definition] = struct{}{}
 				msg.ViewCounts = append(msg.ViewCounts, types.NewsletterViewCount{Type: definition, Count: count})
 				msg.ViewsCountPresent = true
 			}
