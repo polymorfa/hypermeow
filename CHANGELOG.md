@@ -1,5 +1,6 @@
 <!--
 Copyright (c) 2026 Rajeh Taher
+Copyright (c) 2026 Polymorfa (Softium LLC)
 Licensed under the MIT License. See LICENSE-MIT for details.
 -->
 
@@ -21,6 +22,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - `GetUserInfo` returns the parsed verified business name in `UserInfo.VerifiedName`.
 - Migrate an established hosted PN session when the peer starts sending from its hosted LID. SQL-backed migration uses literal address-prefix ranges so hosted underscores cannot select or delete another account's keys.
 - Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
+- Copy group-cache metadata under its lock before send-permission checks, including participant and admin slices, so notifications cannot race those reads.
+
 - Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of panicking or retrying unchanged credentials.
 - Protect the upstream unified-session interval check during concurrent sends.
 - Parse newsletter live updates inside `messages` wrappers and retain forward counts, while preserving the legacy unwrapped form.
@@ -36,6 +39,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Sending a message wrapped in `AssociatedChildMessage` (for example the HD half of an image or video dual upload) now derives the stanza `type` and enc `mediatype` from the child, as WhatsApp Web does, so an HD image child is sent as `type="media"` with `mediatype="image"` instead of `type="text"`. Retry receipts use the same attributes.
 
 ### Changed
+
+- Include Softium LLC alongside Polymorfa in fork-owned notices and generated MEX attribution, preserving upstream attribution and license terms.
 
 - Integrate all upstream whatsmeow commits through `4b4986ff80bcd65d6e7d1b3a860fd254af44c519`, including the protocol version `2.3000.1050728964`, optional group-send permission checks, bot LID sending and dependency updates. Retain the Polymorfa Signal fork, bounded caches, lifecycle controls and inline-contact capability.
 - Select Go 1.27.2 as the preferred toolchain. Regenerate the eight affected protobuf packages using protoc 34.1 and protoc-gen-go 1.36.11.
