@@ -806,7 +806,7 @@ func TestBuildBusinessListAndNativeFlowButtonsMatchWebGenerators(t *testing.T) {
 	}
 	buttons, err := BuildBusinessNativeFlowButtonsMessage(BusinessNativeFlowButtonsMessageParams{
 		Title: "Order help", Body: "Choose an action", Footer: "Synthetic support",
-		ContextInfo: &waE2E.ContextInfo{StanzaID: proto.String("quoted-message")},
+		ContextInfo: &waE2E.ContextInfo{StanzaID: testPtr("quoted-message")},
 		Buttons:     []BusinessNativeFlowButton{{Name: "cta_url", ParamsJSON: `{"display_text":"Track order","url":"https://synthetic.invalid/order/o-100"}`}},
 	})
 	if err != nil {
