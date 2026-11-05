@@ -156,7 +156,8 @@ decode error.
 
 Custom `store.ChatSettingsStore` implementations must add `PutWASARootSecretID`
 and `GetWASARootSecretID` for bot root-secret state. `sqlstore` adds this field
-through schema version 19; its existing migrations remain unchanged.
+through schema version 19; its existing migrations remain unchanged. Schema
+version 20 adds the device `is_hosted` flag for hosted (coexistence) pairing.
 
 ## Discord
 
