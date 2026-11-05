@@ -16,6 +16,7 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 - Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
 - Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations instead of reporting fabricated zeros or truncated reaction lists.
+- Copy group-cache metadata under its lock before send-permission checks, including participant and admin slices, so notifications cannot race those reads.
 
 - Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of panicking or retrying unchanged credentials.
 - Protect the upstream unified-session interval check during concurrent sends.
@@ -32,6 +33,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Sending a message wrapped in `AssociatedChildMessage` (for example the HD half of an image or video dual upload) now derives the stanza `type` and enc `mediatype` from the child, as WhatsApp Web does, so an HD image child is sent as `type="media"` with `mediatype="image"` instead of `type="text"`. Retry receipts use the same attributes.
 
 ### Changed
+
+- Include Softium LLC alongside Polymorfa in fork-owned notices and generated MEX attribution, preserving upstream attribution and license terms.
 
 - Integrate all upstream whatsmeow commits through `4b4986ff80bcd65d6e7d1b3a860fd254af44c519`, including the protocol version `2.3000.1050728964`, optional group-send permission checks, bot LID sending and dependency updates. Retain the Polymorfa Signal fork, bounded caches, lifecycle controls and inline-contact capability.
 - Select Go 1.27.2 as the preferred toolchain. Regenerate the eight affected protobuf packages using protoc 34.1 and protoc-gen-go 1.36.11.
