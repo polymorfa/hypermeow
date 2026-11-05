@@ -11,6 +11,8 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
+// carouselCard supplies synthetic uploaded-media descriptors and a reply ID
+// derived from the card index; it performs no upload or network send.
 func carouselCard(index int, video bool) BusinessCarouselCard {
 	card := BusinessCarouselCard{Body: fmt.Sprintf("Card %d", index), Buttons: []BusinessNativeFlowButton{{Name: "quick_reply", ParamsJSON: fmt.Sprintf(`{"display_text":"Choose","id":"card-%d"}`, index)}}}
 	if video {
@@ -21,6 +23,8 @@ func carouselCard(index int, video bool) BusinessCarouselCard {
 	return card
 }
 
+// TestBusinessCarouselRoundTripAndRelayMetadata exercises both card-count bounds
+// while retaining image/video descriptors, quote context and native relay metadata.
 func TestBusinessCarouselRoundTripAndRelayMetadata(t *testing.T) {
 	for _, count := range []int{2, 10} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
@@ -68,6 +72,8 @@ func TestBusinessCarouselRoundTripAndRelayMetadata(t *testing.T) {
 	}
 }
 
+// TestBusinessCarouselRejectsInvalidCards covers card counts, exclusive media,
+// control categories and reply IDs shared by different cards.
 func TestBusinessCarouselRejectsInvalidCards(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -97,6 +103,8 @@ func TestBusinessCarouselRejectsInvalidCards(t *testing.T) {
 	}
 }
 
+// TestBusinessCarouselValidatesExactTransmittedReplyID prevents case aliases from
+// concealing a duplicate, missing, empty or oversized lowercase wire ID.
 func TestBusinessCarouselValidatesExactTransmittedReplyID(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

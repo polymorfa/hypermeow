@@ -1018,6 +1018,8 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 	}
 }
 
+// getButtonTypeFromMessage selects relay business metadata after following
+// ephemeral/view-once wrappers, or returns an empty string for other message forms.
 func getButtonTypeFromMessage(msg *waE2E.Message) string {
 	switch {
 	case msg.ViewOnceMessage != nil:
@@ -1192,6 +1194,8 @@ func (cli *Client) preparePeerMessageNode(
 	}, nil
 }
 
+// getMessageContent retains the supplied encrypted node and appends optional
+// device, poll, caller-supplied and business-format metadata for the relay.
 func (cli *Client) getMessageContent(
 	baseNode waBinary.Node,
 	message *waE2E.Message,

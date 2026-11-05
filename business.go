@@ -1829,6 +1829,9 @@ func BuildBusinessOrderMessage(params BusinessOrderMessageParams) (*waE2E.Messag
 	}}, nil
 }
 
+// BuildBusinessListMessage builds a single-select list with up to thirty rows
+// across one to ten sections. Row IDs are unique across sections; section titles
+// are optional, while the body, button label and row titles must be nonblank.
 func BuildBusinessListMessage(params BusinessListMessageParams) (*waE2E.Message, error) {
 	if !bounded(params.Title, 256) || strings.TrimSpace(params.Description) == "" || !bounded(params.Description, 4096) || strings.TrimSpace(params.ButtonText) == "" || !bounded(params.ButtonText, 64) || !bounded(params.Footer, 256) {
 		return nil, errors.New("invalid business list text")

@@ -12,6 +12,8 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
+// TestHydratedMixedButtonsRoundTrip checks stable reply IDs, one-based button
+// indexes and quote context after encoding, plus invalid builder inputs.
 func TestHydratedMixedButtonsRoundTrip(t *testing.T) {
 	params := BusinessHydratedButtonsMessageParams{Body: "Mixed fixture", Footer: "Footer", ContextInfo: &waE2E.ContextInfo{StanzaID: proto.String("quoted-fixture")}, Buttons: []BusinessNativeFlowButton{
 		{Name: "quick_reply", ParamsJSON: `{"display_text":"Reply","id":"stable-reply"}`},
@@ -53,6 +55,8 @@ func TestHydratedMixedButtonsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestHydratedButtonLimitsIndependently uses distinct reply IDs to isolate the
+// ten-control and three-CTA ceilings from duplicate-ID validation failures.
 func TestHydratedButtonLimitsIndependently(t *testing.T) {
 	reply := func(i int) BusinessNativeFlowButton {
 		return BusinessNativeFlowButton{Name: "quick_reply", ParamsJSON: fmt.Sprintf(`{"display_text":"Reply","id":"reply-%d"}`, i)}
@@ -84,6 +88,8 @@ func TestHydratedButtonLimitsIndependently(t *testing.T) {
 	})
 }
 
+// TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims requires empty
+// biz/hsm format nodes beside unchanged encrypted bytes, without approval attributes.
 func TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims(t *testing.T) {
 	message, err := BuildBusinessHydratedButtonsMessage(BusinessHydratedButtonsMessageParams{Body: "Offer", Buttons: []BusinessNativeFlowButton{{Name: "quick_reply", ParamsJSON: `{"display_text":"Reply","id":"stable"}`}, {Name: "cta_url", ParamsJSON: `{"display_text":"Open","url":"https://example.com"}`}}})
 	if err != nil {
