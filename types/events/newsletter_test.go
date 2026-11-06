@@ -26,7 +26,7 @@ func TestNewsletterMilestoneAcceptsQuotedAndNumericPositions(t *testing.T) {
 }
 
 func TestNewsletterMilestoneRejectsInvalidPositions(t *testing.T) {
-	for _, position := range []string{`null`, `true`, `{}`, `[]`, `""`, `0`, `"0"`, `-1`, `"-1"`, `1.5`, `"1.5"`, `"+123"`, `" 123"`, `9223372036854775808`} {
+	for _, position := range []string{`true`, `{}`, `[]`, `""`, `-1`, `"-1"`, `1.5`, `"1.5"`, `"+123"`, `" 123"`, `9223372036854775808`} {
 		t.Run(position, func(t *testing.T) {
 			var event NewsletterMilestone
 			if err := json.Unmarshal([]byte(`{"message_server_id":`+position+`}`), &event); err == nil {
@@ -57,5 +57,22 @@ func TestNewsletterMilestoneKeepsIntegerPrecisionAndUnknownType(t *testing.T) {
 	}
 	if string(wire["message_server_id"]) != `"9007199254740993"` {
 		t.Fatal("canonical quoted ID serialization changed")
+	}
+}
+
+func TestNewsletterMilestoneWithoutMessageHasNoPosition(t *testing.T) {
+	for _, body := range []string{
+		`{"newsletter_id":"123@newsletter","type":"FOLLOWS","value":1000}`,
+		`{"newsletter_id":"123@newsletter","message_server_id":null,"type":"FOLLOWS","value":1000}`,
+		`{"newsletter_id":"123@newsletter","message_server_id":0,"type":"FOLLOWS","value":1000}`,
+		`{"newsletter_id":"123@newsletter","message_server_id":"0","type":"FOLLOWS","value":1000}`,
+	} {
+		var event NewsletterMilestone
+		if err := json.Unmarshal([]byte(body), &event); err != nil {
+			t.Fatalf("%s: channel-level milestone was rejected: %v", body, err)
+		}
+		if event.MessageServerID != 0 || event.Type != "FOLLOWS" || event.Value != 1000 {
+			t.Fatalf("%s: decoded %+v", body, event)
+		}
 	}
 }
