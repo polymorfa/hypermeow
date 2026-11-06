@@ -433,8 +433,8 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 				cli.sendRetryReceipt(ctx, node, info, isUnavailable)
 				cli.sendAck(ctx, node, 0)
 			} else {
-				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable)
-				go cli.sendAck(ctx, node, 0)
+				cli.startRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable)
+				cli.startAck(ctx, node, 0)
 			}
 			cli.dispatchEvent(&events.UndecryptableMessage{
 				Info:            *info,

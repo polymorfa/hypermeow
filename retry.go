@@ -465,7 +465,7 @@ func (cli *Client) cancelDelayedRequestFromPhone(msgID types.MessageID) {
 	cli.pendingPhoneRerequestsLock.RLock()
 	cancelPendingRequest, ok := cli.pendingPhoneRerequests[msgID]
 	if ok {
-		cancelPendingRequest()
+		cancelPendingRequest.cancel()
 	}
 	cli.pendingPhoneRerequestsLock.RUnlock()
 }
@@ -474,7 +474,7 @@ func (cli *Client) cancelDelayedRequestFromPhone(msgID types.MessageID) {
 // This is only used if Client.AutomaticMessageRerequestFromPhone is true.
 var RequestFromPhoneDelay = 5 * time.Second
 
-func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
+func (cli *Client) delayedRequestMessageFromPhoneContext(parent context.Context, info *types.MessageInfo) {
 	if !cli.AutomaticMessageRerequestFromPhone || cli.MessengerConfig != nil {
 		return
 	}
@@ -484,14 +484,18 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 		cli.pendingPhoneRerequestsLock.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(cli.BackgroundEventCtx)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	ensureMap(&cli.pendingPhoneRerequests)[info.ID] = cancel
+	owner := &pendingPhoneRerequest{cancel: cancel}
+	msgID := info.ID
+	ensureMap(&cli.pendingPhoneRerequests)[msgID] = owner
 	cli.pendingPhoneRerequestsLock.Unlock()
 
 	defer func() {
 		cli.pendingPhoneRerequestsLock.Lock()
-		delete(cli.pendingPhoneRerequests, info.ID)
+		if cli.pendingPhoneRerequests[msgID] == owner {
+			delete(cli.pendingPhoneRerequests, msgID)
+		}
 		cli.pendingPhoneRerequestsLock.Unlock()
 	}()
 	select {
@@ -515,8 +519,8 @@ func (cli *Client) immediateRequestMessageFromPhone(ctx context.Context, info *t
 func (cli *Client) clearDelayedMessageRequests() {
 	cli.pendingPhoneRerequestsLock.Lock()
 	defer cli.pendingPhoneRerequestsLock.Unlock()
-	for _, cancel := range cli.pendingPhoneRerequests {
-		cancel()
+	for _, owner := range cli.pendingPhoneRerequests {
+		owner.cancel()
 	}
 }
 
@@ -556,7 +560,7 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 		if cli.SynchronousAck {
 			cli.immediateRequestMessageFromPhone(ctx, info)
 		} else {
-			go cli.delayedRequestMessageFromPhone(info)
+			cli.startDelayedRequestMessageFromPhone(info)
 		}
 	}
 

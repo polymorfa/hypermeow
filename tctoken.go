@@ -146,21 +146,33 @@ func (cli *Client) deleteExpiredPrivacyTokens() {
 		cli.tcTokenDBPruneLock.Unlock()
 		return
 	}
-	cli.lastTCTokenDBPrune = time.Now()
-	go func() {
+	pruneAt := time.Now()
+	if !cli.startConnectionTask(cli.BackgroundEventCtx, func(ctx context.Context) {
 		defer cli.tcTokenDBPruneLock.Unlock()
-		deleted, err := cli.Store.PrivacyTokens.DeleteExpiredPrivacyTokens(cli.BackgroundEventCtx, currentTCTokenCutoffTimestamp())
+		cli.lastTCTokenDBPrune = pruneAt
+		deleted, err := cli.Store.PrivacyTokens.DeleteExpiredPrivacyTokens(ctx, currentTCTokenCutoffTimestamp())
 		if err != nil {
 			cli.Log.Warnf("Failed to remove expired tctokens from DB: %v", err)
 		} else if deleted > 0 {
 			cli.Log.Debugf("Removed %d expired tctokens from DB", deleted)
 		}
-	}()
+	}) {
+		cli.tcTokenDBPruneLock.Unlock()
+	}
 }
 
 // Only called when a bucket boundary has been crossed since the last issuance.
+func (cli *Client) startPrivacyTokenIssue(jid types.JID, senderTimestamp time.Time) bool {
+	return cli.startConnectionTask(cli.BackgroundEventCtx, func(ctx context.Context) {
+		cli.issuePrivacyTokenAndSaveContext(ctx, jid, senderTimestamp)
+	})
+}
+
 func (cli *Client) issuePrivacyTokenAndSave(jid types.JID, senderTimestamp time.Time) {
-	ctx := cli.BackgroundEventCtx
+	cli.issuePrivacyTokenAndSaveContext(cli.BackgroundEventCtx, jid, senderTimestamp)
+}
+
+func (cli *Client) issuePrivacyTokenAndSaveContext(ctx context.Context, jid types.JID, senderTimestamp time.Time) {
 	storageJID := jid.ToNonAD()
 	_, err := cli.issuePrivacyToken(ctx, storageJID, senderTimestamp)
 	if err != nil {
