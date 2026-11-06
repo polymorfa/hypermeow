@@ -110,8 +110,10 @@ client's local database reconciliation. Original message IDs and timestamps may
 be absent in a live observation; its server position is a separate reference.
 
 `NewsletterMilestone` accepts quoted and numeric decimal integer positions
-without converting through floating point. It rejects absent, nonpositive,
-fractional and overflowing positions. Its JSON output keeps quoted positions.
+without converting through floating point. An absent, `null` or zero position
+means the milestone has no message (for example a follower-count milestone) and
+decodes as position 0. It rejects negative, empty, fractional and overflowing
+positions. Its JSON output keeps quoted positions.
 
 ## Core compatibility
 

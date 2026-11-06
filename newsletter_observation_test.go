@@ -73,10 +73,11 @@ func TestNewsletterObservationsDoNotFabricateMalformedCounts(t *testing.T) {
 		{{Tag: "forwards_count", Attrs: waBinary.Attrs{"count": "1"}}, {Tag: "forwards_count", Attrs: waBinary.Attrs{"count": "2"}}},
 		{{Tag: "views_count", Attrs: waBinary.Attrs{"count": "9223372036854775808"}}},
 		{{Tag: "reactions", Content: []waBinary.Node{{Tag: "reaction", Attrs: waBinary.Attrs{"code": "x", "count": "bad"}}}}},
+		{{Tag: "reactions", Content: []waBinary.Node{{Tag: "reaction", Attrs: waBinary.Attrs{"code": "x", "count": "1"}}, {Tag: "reaction", Attrs: waBinary.Attrs{"code": "x", "count": "2"}}}}},
 	} {
 		cli, _, _ := newTestRemote(t)
 		messages := cli.parseNewsletterMessages(&waBinary.Node{Content: []waBinary.Node{{Tag: "message", Attrs: waBinary.Attrs{"server_id": "123"}, Content: counters}}})
-		if len(messages) != 1 || messages[0].ViewsCountPresent || messages[0].ForwardsCountPresent || messages[0].ViewCounts != nil || messages[0].ReactionCounts != nil {
+		if len(messages) != 1 || messages[0].ViewsCountPresent || messages[0].ForwardsCountPresent || messages[0].ViewCounts != nil || messages[0].ReactionCounts != nil || messages[0].ViewsCount != 0 || messages[0].ForwardsCount != 0 {
 			t.Fatalf("malformed count became an observation: %+v", messages)
 		}
 	}

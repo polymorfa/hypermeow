@@ -25,22 +25,24 @@ func parseNewsletterObservations(msg *types.NewsletterMessage, children []waBina
 			attrs := child.AttrGetter()
 			definition := attrs.OptionalString("type")
 			count, valid := newsletterCounter(attrs)
-			msg.ViewsCount = count
 			_, duplicate := seenViews[definition]
 			if !valid || len(msg.ViewCounts) == 2 || duplicate {
 				badViews = true
 			}
 			if !badViews {
+				msg.ViewsCount = count
 				seenViews[definition] = struct{}{}
 				msg.ViewCounts = append(msg.ViewCounts, types.NewsletterViewCount{Type: definition, Count: count})
 				msg.ViewsCountPresent = true
 			}
 		case "forwards_count":
 			count, valid := newsletterCounter(child.AttrGetter())
-			msg.ForwardsCount = count
 			badForwards = badForwards || !valid || sawForwards
 			sawForwards = true
 			msg.ForwardsCountPresent = !badForwards
+			if !badForwards {
+				msg.ForwardsCount = count
+			}
 		case "reactions":
 			badReactions = badReactions || sawReactions
 			sawReactions = true
@@ -62,6 +64,10 @@ func parseNewsletterObservations(msg *types.NewsletterMessage, children []waBina
 					badReactions = true
 					continue
 				}
+				if _, duplicate := counts[code]; duplicate {
+					badReactions = true
+					continue
+				}
 				counts[code] = count
 			}
 			msg.ReactionCounts = counts
@@ -70,6 +76,10 @@ func parseNewsletterObservations(msg *types.NewsletterMessage, children []waBina
 	if badViews {
 		msg.ViewCounts = nil
 		msg.ViewsCountPresent = false
+		msg.ViewsCount = 0
+	}
+	if badForwards {
+		msg.ForwardsCount = 0
 	}
 	if badReactions {
 		msg.ReactionCounts = nil
