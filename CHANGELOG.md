@@ -12,6 +12,10 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Omit duplicate newsletter view definitions as ambiguous, including repeated untyped or typed counts, while preserving independent observations.
+
+- Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
+- Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations instead of reporting fabricated zeros or truncated reaction lists.
 - Copy group-cache metadata under its lock before send-permission checks, including participant and admin slices, so notifications cannot race those reads.
 
 - Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of panicking or retrying unchanged credentials.
