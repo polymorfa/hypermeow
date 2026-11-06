@@ -975,7 +975,7 @@ func (cli *Client) parseGroupChangeWithUsernames(node *waBinary.Node) (*events.G
 		case "unlocked":
 			evt.Locked = &types.GroupLocked{IsLocked: false}
 		case "delete":
-			evt.Delete = &types.GroupDelete{Deleted: true, DeleteReason: cag.String("reason")}
+			evt.Delete = &types.GroupDelete{Deleted: true, DeleteReason: cag.OptionalString("reason")}
 		case "subject":
 			evt.Name = &types.GroupName{
 				Name:        cag.String("subject"),
@@ -1166,18 +1166,7 @@ func (cli *Client) SetGroupMemberAddMode(ctx context.Context, jid types.JID, mod
 	return err
 }
 
-// SetGroupDescription updates the group description.
+// Deprecated: duplicate of SetGroupTopic
 func (cli *Client) SetGroupDescription(ctx context.Context, jid types.JID, description string) error {
-	content := waBinary.Node{
-		Tag: "description",
-		Content: []waBinary.Node{
-			{
-				Tag:     "body",
-				Content: []byte(description),
-			},
-		},
-	}
-
-	_, err := cli.sendGroupIQ(ctx, iqSet, jid, content)
-	return err
+	return cli.SetGroupTopic(ctx, jid, "", "", description)
 }

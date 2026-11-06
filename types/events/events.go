@@ -43,6 +43,11 @@ type QR struct {
 	Codes []string
 }
 
+type RotateADVSecret struct {
+	OldSecret string
+	NewSecret string
+}
+
 // PairSuccess is emitted after the QR code has been scanned with the phone and the handshake has
 // been completed. Note that this is generally followed by a websocket reconnection, so you should
 // wait for the Connected before trying to send anything.
@@ -289,6 +294,19 @@ const (
 	UnavailableTypeUnknown  UnavailableType = ""
 	UnavailableTypeViewOnce UnavailableType = "view_once"
 )
+
+// RemoteMessage is emitted by a client whose Signal keys are remote (see
+// whatsmeow.NewRemoteSignalClient) when a message payload was handed to the
+// remote store. The remote store delivers the content to the application; this
+// event carries only delivery metadata.
+type RemoteMessage struct {
+	Info types.MessageInfo
+	// Redelivered means the remote store served the payload from its buffer.
+	Redelivered bool
+	// SenderKeyRejected means a sender-key distribution in the message could
+	// not be stored.
+	SenderKeyRejected bool
+}
 
 // UndecryptableMessage is emitted when receiving a new message that failed to decrypt.
 //

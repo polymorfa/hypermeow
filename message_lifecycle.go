@@ -4,11 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
-	"github.com/rs/zerolog"
 )
 
 // Typed parameters retain the original go-call argument evaluation before launch.
@@ -27,7 +28,14 @@ func (cli *Client) startAck(ctx context.Context, node *waBinary.Node, code int) 
 func (cli *Client) startRetryReceipt(ctx context.Context, node *waBinary.Node, info *types.MessageInfo, force bool) bool {
 	return cli.startConnectionTask(ctx, func(ctx context.Context) { cli.sendRetryReceipt(ctx, node, info, force) })
 }
+
+// startRetryHandler honors SynchronousAck: the retry receipt is handled, and
+// acknowledged, before the caller returns. Otherwise it is an owned task.
 func (cli *Client) startRetryHandler(ctx context.Context, receipt *events.Receipt, node *waBinary.Node) bool {
+	if cli.SynchronousAck {
+		cli.tryHandleRetryReceipt(ctx, receipt, node)
+		return true
+	}
 	return cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandleRetryReceipt(ctx, receipt, node) })
 }
 func (cli *Client) startAppStateKeyShare(ctx context.Context, keys *waE2E.AppStateSyncKeyShare) bool {

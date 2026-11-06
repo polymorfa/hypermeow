@@ -1,144 +1,74 @@
+// Copyright (c) 2026 Rajeh Taher
+// Licensed under the MIT License. See LICENSE-MIT for details.
+
 package whatsmeow
 
 import (
 	"context"
-	"errors"
-	"net/http"
-	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
-	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types/events"
-	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
-type finalConnectionBarrierLog struct {
-	waLog.Logger
-	prefix           string
-	entered, release chan struct{}
-	once             sync.Once
-}
-
-func (l *finalConnectionBarrierLog) Sub(string) waLog.Logger { return l }
-func (l *finalConnectionBarrierLog) Infof(msg string, args ...any) {
-	if strings.HasPrefix(msg, l.prefix) {
-		l.once.Do(func() { close(l.entered); <-l.release })
-	}
-}
-
-func TestFinalConnectionEventLaunchLosesToSeal(t *testing.T) {
-	log := &finalConnectionBarrierLog{Logger: waLog.Noop, prefix: "Got replaced stream error", entered: make(chan struct{}), release: make(chan struct{})}
-	c := NewClient(&store.Device{}, log)
-	called := false
-	c.AddEventHandler(func(any) { called = true })
-	c.startNative(func() {
-		c.handleStreamError(context.Background(), &waBinary.Node{Tag: "stream:error", Attrs: waBinary.Attrs{"code": "409"}, Content: []waBinary.Node{{Tag: "conflict", Attrs: waBinary.Attrs{"type": "replaced"}}}})
-	})
-	finalTestWait(t, log.entered)
-	finalTestBlocked(t, c)
-	close(log.release)
-	if err := c.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
-		t.Fatalf("close: %v", err)
-	}
-	if called {
-		t.Fatal("late connection-event callback admitted")
-	}
-}
-
-type finalConnectionPrekeys struct {
-	store.NoopStore
-	entered chan context.Context
-	release chan struct{}
-}
-
-func (s *finalConnectionPrekeys) UploadedPreKeyCount(ctx context.Context) (int, error) {
-	s.entered <- ctx
-	<-s.release
-	return 0, errors.New("synthetic prekey inventory refusal")
-}
-
-type finalConnectionContextKey struct{}
-
-func TestFinalConnectionSuccessJoinsBlockedOwnedTask(t *testing.T) {
-	blocking := &finalConnectionPrekeys{entered: make(chan context.Context, 1), release: make(chan struct{})}
-	c := NewClient(&store.Device{PreKeys: blocking}, nil)
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(blocking.release) }) }
-	// Register before any assertion so failure cannot strand the native task
-	// or its teardown. The explicit release below and cleanup share one close.
-	t.Cleanup(func() {
-		release()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := c.FinalClose(ctx); !errors.Is(err, ErrClientShutdownIncomplete) {
-			t.Errorf("post-connect cleanup: %v", err)
+func TestConnectionLifecycleRetainsOriginalContextAfterDelayedDispatch(t *testing.T) {
+	cli, _, _ := newTestRemote(t)
+	type sourceKey struct{}
+	original, cancel := context.WithCancel(context.WithValue(context.Background(), sourceKey{}, "old"))
+	defer cancel()
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	generic := atomic.Int32{}
+	cli.AddEventHandler(func(evt any) {
+		if _, ok := evt.(*events.StreamReplaced); ok {
+			generic.Add(1)
+			close(done)
 		}
 	})
-	c.paired.Store(true)
-	c.lastTCTokenDBPrune = time.Now() // Do not launch the separately unbound prune.
-	parent := context.WithValue(context.Background(), finalConnectionContextKey{}, "preserved-value")
-	c.handleConnectSuccess(parent, &waBinary.Node{Tag: "success", Attrs: waBinary.Attrs{"t": "1"}})
-	var inherited context.Context
-	select {
-	case inherited = <-blocking.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("post-connect task was not launched")
-	}
-	if inherited.Value(finalConnectionContextKey{}) != "preserved-value" {
-		t.Fatal("event context value lost")
-	}
-	finalTestBlocked(t, c)
-	// Root cancellation does not order the asynchronous forwarding callback.
-	finalTestWait(t, inherited.Done())
-	if !errors.Is(inherited.Err(), context.Canceled) {
-		t.Fatal("post-connect task did not receive final cancellation")
-	}
-	release()
-	if err := c.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
-		t.Fatalf("post-connect join: %v", err)
-	}
-	if finalContextWatcherCount(c) != 0 {
-		t.Fatal("post-connect forwarding ownership leaked")
-	}
-}
-
-func TestFinalConnectionAsyncEventPreservesOrdinaryDispatch(t *testing.T) {
-	c := NewClient(&store.Device{}, nil)
-	received := make(chan any, 1)
-	c.AddEventHandler(func(evt any) { received <- evt })
-	c.Disconnect()
-	c.handleIB(context.Background(), &waBinary.Node{Tag: "ib", Content: []waBinary.Node{{Tag: "downgrade_webclient"}}})
-	select {
-	case evt := <-received:
-		if _, ok := evt.(*events.QRScannedWithoutMultidevice); !ok {
-			t.Fatalf("event type changed: %T", evt)
+	var got context.Context
+	id := cli.AddConnectionEventHandler(func(ctx context.Context, evt any) {
+		if _, ok := evt.(*events.StreamReplaced); !ok {
+			t.Error("wrong event")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("ordinary async event was sealed")
+		got = ctx
+		close(entered)
+		<-release
+	})
+	cli.handleStreamError(original, &waBinary.Node{Tag: "stream:error", Content: []waBinary.Node{{Tag: "conflict", Attrs: waBinary.Attrs{"type": "replaced"}}}})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("actual lifecycle producer did not dispatch")
 	}
-	if err := c.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
-		t.Fatalf("close: %v", err)
+	cancel()
+	cli.BackgroundEventCtx = context.WithValue(context.Background(), sourceKey{}, "new")
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generic callback lost")
+	}
+	if got != original || got.Value(sourceKey{}) != "old" || got.Err() != context.Canceled {
+		t.Fatal("late lifecycle event relabelled with current context")
+	}
+	if generic.Load() != 1 {
+		t.Fatal("generic consumers changed")
+	}
+	if !cli.RemoveConnectionEventHandler(id) || cli.RemoveConnectionEventHandler(id) {
+		t.Fatal("scoped callback removal failed")
 	}
 }
 
-func TestFinalConnectionCleanupReconnectLaunchLosesToSeal(t *testing.T) {
-	log := &finalConnectionBarrierLog{Logger: waLog.Noop, prefix: "Got 515 code, reconnecting", entered: make(chan struct{}), release: make(chan struct{})}
-	c := NewClient(&store.Device{}, log)
-	rt := &finalRefusingTransport{}
-	c.SetPreLoginHTTPClient(&http.Client{Transport: rt})
-	c.startNative(func() {
-		c.handleStreamError(context.Background(), &waBinary.Node{Tag: "stream:error", Attrs: waBinary.Attrs{"code": "515"}})
-	})
-	finalTestWait(t, log.entered)
-	finalTestBlocked(t, c)
-	close(log.release)
-	if err := c.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
-		t.Fatalf("close: %v", err)
-	}
-	if rt.calls.Load() != 0 {
-		t.Fatal("sealed 515 cleanup admitted reconnect")
+func TestConnectionCallbacksCanReenterRegistryAndGenericDeliveryRemains(t *testing.T) {
+	cli, _, _ := newTestRemote(t)
+	var scoped, generic int
+	var id uint32
+	id = cli.AddConnectionEventHandler(func(context.Context, any) { scoped++; cli.RemoveConnectionEventHandler(id) })
+	cli.AddEventHandler(func(any) { generic++ })
+	cli.dispatchConnectionEvent(context.Background(), &events.Connected{})
+	cli.dispatchConnectionEvent(context.Background(), &events.Connected{})
+	if scoped != 1 || generic != 2 {
+		t.Fatal("scoped handler reentry or generic delivery failed")
 	}
 }

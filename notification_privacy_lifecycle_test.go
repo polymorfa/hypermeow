@@ -3,11 +3,12 @@ package whatsmeow
 import (
 	"context"
 	"errors"
-	waBinary "github.com/polymorfa/hypermeow/binary"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	waBinary "github.com/polymorfa/hypermeow/binary"
 
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"

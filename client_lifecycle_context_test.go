@@ -3,15 +3,16 @@ package whatsmeow
 import (
 	"context"
 	"errors"
-	"github.com/polymorfa/hypermeow/store"
-	"github.com/polymorfa/hypermeow/types"
-	waLog "github.com/polymorfa/hypermeow/util/log"
 	"net/http"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/polymorfa/hypermeow/store"
+	"github.com/polymorfa/hypermeow/types"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 type finalContextRefusal struct{}

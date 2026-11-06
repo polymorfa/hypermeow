@@ -9,5 +9,6 @@ package main
 import whatsmeow "github.com/polymorfa/hypermeow"
 
 func enablePhoneConsentReceiveBarrier(client *whatsmeow.Client) {
+	//lint:ignore SA1019 The benchmark requires a synchronous receive barrier to measure phone-consent persistence.
 	client.DangerousInternals().SetSynchronousMessageNameUpdates(true)
 }

@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,19 +58,21 @@ var (
 
 type qrChannel struct {
 	sync.Mutex
-	cli          *Client
-	log          waLog.Logger
-	ctx          context.Context
-	handlerID    uint32
-	closed       atomic.Bool
-	output       chan<- QRChannelItem
-	stopQRs      chan struct{}
-	sendsDone    chan struct{}
-	outputClosed chan struct{}
-	senders      int
-	terminal     *QRChannelItem
-	disconnect   bool
-	boundSocket  *socket.NoiseSocket
+	cli             *Client
+	log             waLog.Logger
+	ctx             context.Context
+	handlerID       uint32
+	closed          atomic.Bool
+	output          chan<- QRChannelItem
+	stopQRs         chan struct{}
+	sendsDone       chan struct{}
+	outputClosed    chan struct{}
+	senders         int
+	terminal        *QRChannelItem
+	disconnect      bool
+	boundSocket     *socket.NoiseSocket
+	rotateAdv       chan struct{}
+	pendingRotation *events.RotateADVSecret
 }
 
 // requestClose seals sends once. Only the reserved cleanup worker closes output
@@ -159,6 +162,7 @@ func (qrc *qrChannel) run() {
 func (qrc *qrChannel) emitQRs(codes []string, expected *socket.NoiseSocket) {
 	for {
 		if len(codes) == 0 {
+			qrc.log.Debugf("Ran out of QR codes, closing channel with status %s and disconnecting client", QRChannelTimeout.Event)
 			qrc.requestClose(&QRChannelTimeout, true, expected)
 			return
 		} else if qrc.closed.Load() {
@@ -168,8 +172,27 @@ func (qrc *qrChannel) emitQRs(codes []string, expected *socket.NoiseSocket) {
 		if len(codes) == 6 {
 			timeout = 60 * time.Second
 		}
+		// Apply a pending ADV secret rotation before choosing the next code. A
+		// rotation that lands after this unlock re-signals rotateAdv, so the
+		// wait below re-emits the active code with the newest secret.
+		qrc.Lock()
+		if rot := qrc.pendingRotation; rot != nil {
+			for i, code := range codes {
+				parts := strings.SplitN(code, ",", 5)
+				if len(parts) == 5 {
+					parts[3] = rot.NewSecret
+					codes[i] = strings.Join(parts, ",")
+				}
+			}
+			qrc.pendingRotation = nil
+		}
+		select {
+		case <-qrc.rotateAdv:
+		default:
+		}
 		nextCode := codes[0]
 		codes = codes[1:]
+		qrc.Unlock()
 		qrc.log.Debugf("Emitting QR code %s", nextCode)
 		if !qrc.send(QRChannelItem{Code: nextCode, Timeout: timeout, Event: QRChannelEventCode}, true) {
 			qrc.log.Debugf("Output channel didn't accept code, exiting QR emitter")
@@ -185,6 +208,11 @@ func (qrc *qrChannel) emitQRs(codes []string, expected *socket.NoiseSocket) {
 		case <-qrc.cli.expectedDisconnect.GetChan():
 			timer.Stop()
 			return
+		case <-qrc.rotateAdv:
+			timer.Stop()
+			// Re-emit the active code with the newest secret. The pending
+			// rotation is applied under the lock before the next output.
+			codes = append([]string{nextCode}, codes...)
 		case <-qrc.ctx.Done():
 			timer.Stop()
 			qrc.requestClose(nil, true, expected)
@@ -212,6 +240,19 @@ func (qrc *qrChannel) handleEvent(rawEvt any) {
 			// QR-local closure and emitter admission share this lock. The
 			// helper only reserves/schedules; it never waits for worker exit.
 			qrc.cli.startNativeContext(qrc.ctx, func() { qrc.emitQRs(codes, expected) })
+		}
+		qrc.Unlock()
+		return
+	case *events.RotateADVSecret:
+		qrc.Lock()
+		if qrc.pendingRotation == nil {
+			qrc.pendingRotation = &events.RotateADVSecret{OldSecret: evt.OldSecret, NewSecret: evt.NewSecret}
+		} else {
+			qrc.pendingRotation.NewSecret = evt.NewSecret
+		}
+		select {
+		case qrc.rotateAdv <- struct{}{}:
+		default:
 		}
 		qrc.Unlock()
 		return
@@ -328,7 +369,8 @@ func (cli *Client) GetQRChannel(ctx context.Context) (<-chan QRChannelItem, erro
 	ch := make(chan QRChannelItem, 8)
 	qrc := &qrChannel{
 		output: ch, stopQRs: make(chan struct{}), sendsDone: make(chan struct{}), outputClosed: make(chan struct{}),
-		cli: cli, log: cli.Log.Sub("QRChannel"), ctx: ctx,
+		rotateAdv: make(chan struct{}, 1),
+		cli:       cli, log: cli.Log.Sub("QRChannel"), ctx: ctx,
 	}
 	qrc.handlerID = cli.AddEventHandler(qrc.handleEvent)
 	// This owner was recorded before handler registration, not re-admitted after

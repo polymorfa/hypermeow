@@ -100,9 +100,10 @@ type Client struct {
 	recvLog waLog.Logger
 	sendLog waLog.Logger
 
-	socket     *socket.NoiseSocket
-	socketLock sync.RWMutex
-	socketWait chan struct{}
+	socket           *socket.NoiseSocket
+	socketLock       sync.RWMutex
+	socketWait       chan struct{}
+	handlerQueueWait chan struct{}
 
 	isLoggedIn            atomic.Bool
 	paired                atomic.Bool
@@ -155,6 +156,7 @@ type Client struct {
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time
+	PreKeysUploaded   *exsync.Event
 
 	mediaConnCache *MediaConn
 	mediaConnLock  sync.RWMutex
@@ -163,15 +165,16 @@ type Client struct {
 	responseWaitersLock sync.Mutex
 	businessCatalogAuth atomic.Pointer[businessCatalogAuthState]
 
-	handlerQueue chan *waBinary.Node
 	// nodeHandlers maps a top-level stanza tag to its handler. Upstream
 	// whatsmeow exposes the same unexported map; keeping it (instead of a
 	// closed switch) lets a headless shadow Client dispatch injected nodes
 	// synchronously and lets embedders that reach for it via reflection keep
 	// working.
-	nodeHandlers      map[string]nodeHandler
-	eventHandlers     []wrappedEventHandler
-	eventHandlersLock sync.RWMutex
+	nodeHandlers                map[string]nodeHandler
+	eventHandlers               []wrappedEventHandler
+	eventHandlersLock           sync.RWMutex
+	connectionEventHandlers     []wrappedConnectionEventHandler
+	connectionEventHandlersLock sync.Mutex
 
 	messageRetries      map[string]int
 	messageRetriesLock  sync.Mutex
@@ -214,6 +217,8 @@ type Client struct {
 	GetMessageForRetry func(requester, to types.JID, id types.MessageID) *waE2E.Message
 	// PreRetryCallback is called before a retry receipt is accepted.
 	// If it returns false, the accepting will be cancelled and the retry receipt will be ignored.
+	// On a client from NewRemoteSignalClient, msg is always nil: the remote
+	// Signal store keeps sent messages and this client never has their content.
 	PreRetryCallback func(receipt *events.Receipt, id types.MessageID, retryCount int, msg *waE2E.Message) bool
 	// Should whatsmeow store recently sent messages in the database so that retry receipts can be accepted
 	// even if the process is restarted? If false, only the in-memory cache and GetMessageForRetry will be used.
@@ -250,6 +255,15 @@ type Client struct {
 	// client (see [NewShadowClient]): it has no socket, Connect is guarded,
 	// and outbound nodes plus Signal/keying oracle ops are delegated here.
 	shadowRelay ShadowRelay
+	// remoteSignal holds this device's Signal keys when they live outside
+	// the client; see NewRemoteSignalClient.
+	remoteSignal RemoteSignal
+	// remoteMigratedPN records phone-number users whose Signal state the
+	// remote store has already moved to their LID.
+	remoteMigratedPN sync.Map
+	// testSendHook captures marshaled outbound nodes when there is no
+	// socket. Only tests set it.
+	testSendHook func(payload []byte) error
 
 	// DisabledFeatures controls which built-in processing paths are
 	// skipped. See [DisabledFeatures].
@@ -352,10 +366,10 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		recvLog:            log.Sub("Recv"),
 		sendLog:            log.Sub("Send"),
 		uniqueID:           fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
-		handlerQueue:       make(chan *waBinary.Node, handlerQueueSize),
 		appStateProc:       appstate.NewProcessor(deviceStore, log.Sub("AppState")),
 		socketWait:         make(chan struct{}),
 		expectedDisconnect: exsync.NewEvent(),
+		PreKeysUploaded:    exsync.NewEvent(),
 
 		historySyncNotifications: make(chan historySyncNotification, 32),
 
@@ -606,7 +620,7 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 	}
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
-		cli.startNative(func() { cli.dispatchEvent(&events.Disconnected{}) })
+		cli.dispatchConnectionEventAsync(ctx, &events.Disconnected{})
 		if !cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) }) {
 			return ErrClientClosed
 		}
@@ -642,6 +656,9 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 	if cli.Store.Deleted {
 		return store.ErrDeviceDeleted
 	}
+	if cli.socket == nil && cli.handlerQueueWait != nil {
+		cli.unlockedDisconnect()
+	}
 	if cli.socket != nil {
 		if !cli.socket.IsConnected() {
 			cli.unlockedDisconnect()
@@ -665,6 +682,7 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.URL = cli.MessengerConfig.WebsocketURL
 		fs.HTTPHeaders.Set("Origin", cli.MessengerConfig.BaseURL)
 	}
+	var queue chan *waBinary.Node
 	maps.Copy(fs.HTTPHeaders, cli.WebSocketHeaders)
 	if cli.SocketConfig != nil {
 		if cli.SocketConfig.URL != "" {
@@ -677,15 +695,21 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 	if err := fs.Connect(ctx); err != nil {
 		fs.Close(0)
 		return err
-	} else if err = cli.doHandshake(ctx, fs, *keys.NewKeyPair()); err != nil {
+	} else if queue, err = cli.doHandshake(fs, *keys.NewKeyPair()); err != nil {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}
 	if !cli.pinNativeContext(ctx) {
 		return ErrClientClosed
 	}
+	closeWait := make(chan struct{})
+	cli.handlerQueueWait = closeWait
 	cli.startNative(func() { cli.keepAliveLoop(ctx, fs.Context()) })
-	cli.startNative(func() { cli.handlerQueueLoop(ctx, fs.Context()) })
+	if !cli.startNative(func() { cli.handlerQueueLoop(ctx, fs.Context(), queue, closeWait) }) {
+		// Final close won admission; release any finishDisconnect waiter.
+		close(closeWait)
+		return ErrClientClosed
+	}
 	return nil
 }
 
@@ -701,17 +725,36 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 	if cli.socket == ns {
 		cli.socket = nil
 		cli.clearResponseWaiters(xmlStreamEndNode)
-		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
-			cli.Log.Debugf("Emitting Disconnected event")
-			cli.startNative(func() { cli.dispatchEvent(&events.Disconnected{}) })
-			cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) })
-		} else if remote {
-			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
-		} else {
-			cli.Log.Debugf("OnDisconnect() called after manual disconnection")
-		}
+		queueWait := cli.handlerQueueWait
+		cli.startNativeContext(ctx, func() { cli.finishDisconnect(ctx, remote, queueWait) })
 	} else {
 		cli.Log.Debugf("Ignoring OnDisconnect on different socket")
+	}
+}
+
+// finishDisconnect evaluates reconnect eligibility after the retired queue has
+// processed stream errors, without holding the socket lock while handlers run.
+func (cli *Client) finishDisconnect(ctx context.Context, remote bool, queueWait chan struct{}) {
+	if queueWait != nil {
+		select {
+		case <-queueWait:
+		case <-ctx.Done():
+			return
+		}
+	}
+	cli.socketLock.Lock()
+	defer cli.socketLock.Unlock()
+	if cli.socket != nil || cli.handlerQueueWait != queueWait {
+		return
+	}
+	if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
+		cli.Log.Debugf("Emitting Disconnected event")
+		cli.dispatchConnectionEventAsync(ctx, &events.Disconnected{})
+		cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) })
+	} else if remote {
+		cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
+	} else {
+		cli.Log.Debugf("OnDisconnect() called after manual disconnection")
 	}
 }
 
@@ -825,6 +868,14 @@ func (cli *Client) unlockedDisconnect() {
 		cli.socket.Stop(true, false)
 		cli.socket = nil
 		cli.clearResponseWaiters(xmlStreamEndNode)
+	}
+	if cli.handlerQueueWait != nil {
+		select {
+		case <-cli.handlerQueueWait:
+			cli.handlerQueueWait = nil
+		case <-time.After(5 * time.Second):
+			cli.Log.Warnf("Handler queue wait channel not closed after 5 seconds")
+		}
 	}
 }
 
@@ -953,7 +1004,13 @@ func (cli *Client) RemoveEventHandlers() {
 	cli.eventHandlersLock.Unlock()
 }
 
-func (cli *Client) handleFrame(ctx context.Context, data []byte) {
+func (cli *Client) makeFrameHandler(queue chan *waBinary.Node) func(ctx context.Context, data []byte) {
+	return func(ctx context.Context, data []byte) {
+		cli.handleFrame(ctx, data, queue)
+	}
+}
+
+func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waBinary.Node) {
 	done, ok := cli.enterNative()
 	if !ok {
 		return
@@ -1016,7 +1073,7 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
 	} else if cli.receiveResponse(ctx, node) {
 		// handled
 	} else if cli.hasNodeHandler(node.Tag) {
-		cli.enqueueNode(ctx, node)
+		cli.enqueueNode(ctx, queue, node)
 	} else if node.Tag != "ack" {
 		cli.Log.Debugf("Didn't handle WhatsApp node %s", node.Tag)
 	}
@@ -1029,9 +1086,9 @@ func (cli *Client) handleOutOfBandNode(node *waBinary.Node) {
 	}
 }
 
-func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
+func (cli *Client) enqueueNode(ctx context.Context, queue chan *waBinary.Node, node *waBinary.Node) {
 	select {
-	case cli.handlerQueue <- node:
+	case queue <- node:
 	case <-ctx.Done():
 	default:
 		if cli.forceAutoReconnect.CompareAndSwap(false, true) {
@@ -1041,16 +1098,40 @@ func (cli *Client) enqueueNode(ctx context.Context, node *waBinary.Node) {
 	}
 }
 
-func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context) {
+func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context, queue chan *waBinary.Node, closeWait chan struct{}) {
 	finalDone := cli.nativeDone()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	ticker.Stop()
 	cli.Log.Debugf("Starting handler queue loop")
+	defer func() {
+	Loop:
+		for {
+			select {
+			case node := <-queue:
+				// Make sure stream errors are handled even after disconnection so the appropriate auto-reconnect is done.
+				// Everything else
+				if node.Tag == "stream:error" {
+					cli.Log.Debugf("Handling stream:error node in handler queue loop after context cancellation")
+					cli.handleStreamError(evtCtx, node)
+				}
+			default:
+				break Loop
+			}
+		}
+		close(closeWait)
+	}()
 Loop:
 	for {
 		select {
-		case node := <-cli.handlerQueue:
+		case node := <-queue:
+			if connCtx.Err() != nil {
+				if node.Tag == "stream:error" {
+					cli.handleStreamError(evtCtx, node)
+				}
+				cli.Log.Debugf("Closing handler queue loop before node handling")
+				return
+			}
 			doneChan := make(chan struct{})
 			start := time.Now()
 			if !cli.startNative(func() {
@@ -1064,12 +1145,21 @@ Loop:
 				return
 			}
 			ticker.Reset(30 * time.Second)
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				select {
 				case <-doneChan:
 					ticker.Stop()
 					continue Loop
 				case <-finalDone:
+					return
+				case <-connCtx.Done():
+					ticker.Stop()
+					cli.Log.Warnf("Closing handler queue loop in the middle of handling %s", node)
+					// Ordinary disconnect drains the in-flight node; final close does not wait.
+					select {
+					case <-doneChan:
+					case <-finalDone:
+					}
 					return
 				case <-ticker.C:
 					cli.Log.Warnf("Node handling is taking long for %s (started %s ago)", node, time.Since(start))
@@ -1137,6 +1227,13 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 			}
 			cli.sendLog.Debugf("%s", &node)
 			return payload, cli.shadowRelay.SendNode(ctx, payload)
+		}
+		if cli.testSendHook != nil {
+			payload, err := waBinary.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal node: %w", err)
+			}
+			return payload, cli.testSendHook(payload)
 		}
 		return nil, ErrNotConnected
 	}
@@ -1213,7 +1310,11 @@ func (cli *Client) ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageIn
 		if webMsg.GetOriginalSelfAuthorUserJIDString() != "" {
 			info.Sender, err = types.ParseJID(webMsg.GetOriginalSelfAuthorUserJIDString())
 		} else {
-			info.Sender = cli.getOwnID().ToNonAD()
+			if info.Chat.Server == types.HiddenUserServer {
+				info.Sender = cli.getOwnLID().ToNonAD()
+			} else {
+				info.Sender = cli.getOwnID().ToNonAD()
+			}
 			if info.Sender.IsEmpty() {
 				return nil, ErrNotLoggedIn
 			}

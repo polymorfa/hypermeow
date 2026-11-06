@@ -140,6 +140,8 @@ type ChatSettingsStore interface {
 	PutMutedUntil(ctx context.Context, chat types.JID, mutedUntil time.Time) error
 	PutPinned(ctx context.Context, chat types.JID, pinned bool) error
 	PutArchived(ctx context.Context, chat types.JID, archived bool) error
+	PutWASARootSecretID(ctx context.Context, chat types.JID, id types.MessageID) error
+	GetWASARootSecretID(ctx context.Context, chat types.JID) (types.MessageID, error)
 	GetChatSettings(ctx context.Context, chat types.JID) (types.LocalChatSettings, error)
 }
 
@@ -265,8 +267,12 @@ type Device struct {
 
 	FacebookUUID uuid.UUID
 
-	Initialized   bool
-	Deleted       bool
+	Initialized bool
+	Deleted     bool
+	// RemoteKeys marks a device whose Signal private keys live outside this
+	// process. Its private key fields are zero and must never be used; the
+	// local Signal store panics instead of computing with them.
+	RemoteKeys    bool
 	Identities    IdentityStore
 	Sessions      SessionStore
 	PreKeys       PreKeyStore

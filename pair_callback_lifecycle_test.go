@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waCompanionReg"
 	"github.com/polymorfa/hypermeow/proto/waWa6"
@@ -15,7 +17,6 @@ import (
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
 	waLog "github.com/polymorfa/hypermeow/util/log"
-	"google.golang.org/protobuf/proto"
 )
 
 type finalPairLog struct {

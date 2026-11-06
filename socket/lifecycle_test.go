@@ -66,7 +66,7 @@ func TestFinalSocketDisconnectUnblocksPendingFrameDelivery(t *testing.T) {
 func TestFinalSocketReceiveAdmissionIsSealed(t *testing.T) {
 	fs := NewFrameSocket(waLog.Noop, nil)
 	fs.SetWorkerLauncher(func(func()) bool { return false })
-	ns, err := newNoiseSocket(context.Background(), fs, finalTestCipher{}, finalTestCipher{}, func(context.Context, []byte) { t.Error("late receive callback") }, func(context.Context, *NoiseSocket, bool) { t.Error("late disconnect callback") })
+	ns, err := newNoiseSocket(fs, finalTestCipher{}, finalTestCipher{}, func(context.Context, []byte) { t.Error("late receive callback") }, func(context.Context, *NoiseSocket, bool) { t.Error("late disconnect callback") })
 	if ns != nil || !errors.Is(err, ErrSocketClosed) {
 		t.Fatalf("late receive worker admitted: %v", err)
 	}
@@ -87,9 +87,11 @@ func TestFinalSocketStopDoesNotJoinBlockedReceiveCallback(t *testing.T) {
 			close(release)
 		}
 	}()
+	// Frame delivery uses fs.Context(), which Connect sets on a live socket.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ns, err := newNoiseSocket(ctx, fs, finalTestCipher{}, finalTestCipher{}, func(context.Context, []byte) { close(entered); <-release }, func(context.Context, *NoiseSocket, bool) {})
+	fs.cancelCtx = ctx
+	ns, err := newNoiseSocket(fs, finalTestCipher{}, finalTestCipher{}, func(context.Context, []byte) { close(entered); <-release }, func(context.Context, *NoiseSocket, bool) {})
 	if err != nil {
 		t.Fatal(err)
 	}

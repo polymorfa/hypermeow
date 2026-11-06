@@ -32,7 +32,6 @@ type DisconnectHandler func(ctx context.Context, socket *NoiseSocket, remote boo
 type FrameHandler func(context.Context, []byte)
 
 func newNoiseSocket(
-	ctx context.Context,
 	fs *FrameSocket,
 	writeKey, readKey cipher.AEAD,
 	frameHandler FrameHandler,
@@ -45,10 +44,10 @@ func newNoiseSocket(
 		onFrame:      frameHandler,
 		stopConsumer: make(chan struct{}),
 	}
-	fs.OnDisconnect = func(ctx context.Context, remote bool) {
+	fs.SetOnDisconnect(func(ctx context.Context, remote bool) {
 		disconnectHandler(ctx, ns, remote)
-	}
-	if !fs.startWorker(func() { ns.consumeFrames(ctx, fs.Frames) }) {
+	})
+	if !fs.startWorker(func() { ns.consumeFrames(fs.Context(), fs.Frames) }) {
 		return nil, ErrSocketClosed
 	}
 	return ns, nil
@@ -82,7 +81,7 @@ func (ns *NoiseSocket) Stop(disconnect, allowOnDisconnect bool) {
 	if ns.destroyed.CompareAndSwap(false, true) {
 		close(ns.stopConsumer)
 		if !allowOnDisconnect {
-			ns.fs.OnDisconnect = nil
+			ns.fs.SetOnDisconnect(nil)
 		}
 		if disconnect {
 			ns.fs.Close(websocket.StatusNormalClosure)

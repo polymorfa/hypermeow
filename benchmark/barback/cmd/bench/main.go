@@ -845,7 +845,7 @@ func (r *runner) validatePhoneNumberConsent(ctx context.Context, client *whatsme
 		}
 		select {
 		case <-smokeCtx.Done():
-			return fmt.Errorf("Barback did not capture request and share phone number messages: %w", smokeCtx.Err())
+			return fmt.Errorf("barback did not capture request and share phone number messages: %w", smokeCtx.Err())
 		case <-ticker.C:
 		}
 	}

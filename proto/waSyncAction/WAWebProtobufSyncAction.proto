@@ -103,9 +103,27 @@ enum MutationProps {
 	LABEL_SUBLIST_ACTION = 91;
 	DEVICE_CAPABILITIES_V2 = 92;
 	CTWA_MESSAGE_RECEIVED_ACTION = 93;
+	SHARED_DEVICE_ALLOWLIST_ACTION = 94;
+	CONTACT_MANAGER_METADATA_ACTION = 95;
+	BUSINESS_FOLDER_ACTIVATION_ACTION = 96;
+	GROUP_HISTORY_TOGGLE_ACTION = 97;
+	BB_PRO_PENDING_CUSTOMER_BASE_ACTION = 98;
 	SHARE_OWN_PN = 10001;
 	BUSINESS_BROADCAST_ACTION = 10002;
 	AI_THREAD_DELETE_ACTION = 10003;
+}
+
+enum BusinessBroadcastCampaignBBProStatus {
+	BB_PRO_ACTIVE = 1;
+	BB_PRO_COMPLETED = 2;
+	BB_PRO_IN_DRAFT = 3;
+	BB_PRO_IN_REVIEW = 4;
+	BB_PRO_NOT_SENDING = 5;
+	BB_PRO_OFF = 6;
+	BB_PRO_REJECTED = 7;
+	BB_PRO_SCHEDULED = 8;
+	BB_PRO_SENDING_LIMITED = 9;
+	BB_PRO_PROCESSING = 10;
 }
 
 enum BusinessBroadcastCampaignStatus {
@@ -147,6 +165,11 @@ message CallLogRecord {
 	message ParticipantInfo {
 		optional string userJID = 1;
 		optional CallResult callResult = 2;
+		optional GuestInfo guestInfo = 3;
+	}
+
+	message GuestInfo {
+		optional string pushName = 1;
 	}
 
 	optional CallResult callResult = 1;
@@ -164,6 +187,16 @@ message CallLogRecord {
 	optional string groupJID = 13;
 	repeated ParticipantInfo participants = 14;
 	optional CallType callType = 15;
+}
+
+message GroupHistoryToggleAction {
+	enum GroupHistoryToggleMode {
+		GROUP_HISTORY_TOGGLE_MODE_UNKNOWN = 0;
+		GROUP_HISTORY_TOGGLE_MODE_ON = 1;
+		GROUP_HISTORY_TOGGLE_MODE_OFF = 2;
+	}
+
+	optional GroupHistoryToggleMode groupHistoryToggleMode = 1;
 }
 
 message WASARootSecretAction {
@@ -464,6 +497,8 @@ message LabelEditAction {
 		THIRD_PARTY = 15;
 		LEAD = 16;
 		MENTIONS_AND_REPLIES = 17;
+		REQUESTS = 18;
+		BUSINESS = 19;
 	}
 
 	optional string name = 1;
@@ -595,6 +630,11 @@ enum MutationName {
 	LABEL_SUBLIST_ACTION = label_sublist;
 	DEVICE_CAPABILITIES_V2 = device_capabilities_v2;
 	CTWA_MESSAGE_RECEIVED_ACTION = ctwa_message_received;
+	SHARED_DEVICE_ALLOWLIST_ACTION = shared_device_allowlist;
+	CONTACT_MANAGER_METADATA_ACTION = contact_manager_metadata;
+	BUSINESS_FOLDER_ACTIVATION_ACTION = business_folder_activation;
+	GROUP_HISTORY_TOGGLE_ACTION = group_history_toggle;
+	BB_PRO_PENDING_CUSTOMER_BASE_ACTION = bb_pro_pending_customer_base_action;
 	SHARE_OWN_PN = shareOwnPn;
 	BUSINESS_BROADCAST_ACTION = broadcast;
 	AI_THREAD_DELETE_ACTION = ai_thread_delete;
@@ -706,6 +746,19 @@ message SyncActionValue {
 	optional LabelSublistAction labelSublistAction = 91;
 	optional WAWebProtobufsDeviceCapabilities.DeviceCapabilities deviceCapabilitiesV2 = 92;
 	optional CtwaMessageReceivedAction ctwaMessageReceivedAction = 93;
+	optional SharedDeviceAllowlistAction sharedDeviceAllowlistAction = 94;
+	optional ContactManagerMetadataAction contactManagerMetadataAction = 95;
+	optional BusinessFolderActivationAction businessFolderActivationAction = 96;
+	optional GroupHistoryToggleAction groupHistoryToggleAction = 97;
+	optional BBProPendingCustomerBaseAction bbProPendingCustomerBaseAction = 98;
+}
+
+message BBProPendingCustomerBaseAction {
+	optional bool pending = 1;
+}
+
+message BusinessFolderActivationAction {
+	optional bool activated = 1;
 }
 
 message CtwaMessageReceivedAction {
@@ -737,6 +790,10 @@ message SubscriptionsSyncV2Action {
 
 	repeated SubscriptionInfo subscriptions = 1;
 	repeated PaidFeature paidFeature = 2;
+}
+
+message ContactManagerMetadataAction {
+	optional bool isHidden = 1;
 }
 
 message CustomerDataAction {
@@ -796,6 +853,8 @@ message BusinessBroadcastCampaignAction {
 	optional int64 scheduledTimestamp = 7;
 	optional int64 createTimestamp = 8;
 	optional BusinessBroadcastCampaignStatus status = 9;
+	optional BusinessBroadcastCampaignBBProStatus bbProStatus = 10;
+	optional string customAudienceFbid = 11;
 }
 
 message BusinessBroadcastListAction {
@@ -824,6 +883,7 @@ message LidContactAction {
 	optional string fullName = 1;
 	optional string firstName = 2;
 	optional string username = 3;
+	optional string birthday = 4;
 }
 
 message FavoritesAction {
@@ -1072,6 +1132,10 @@ message MuteAction {
 	optional int64 muteEveryoneMentionEndTimestamp = 4;
 }
 
+message SharedDeviceAllowlistAction {
+	optional bool allowed = 1;
+}
+
 message ContactAction {
 	optional string fullName = 1;
 	optional string firstName = 2;
@@ -1079,6 +1143,7 @@ message ContactAction {
 	optional bool saveOnPrimaryAddressbook = 4;
 	optional string pnJID = 5;
 	optional string username = 6;
+	optional string birthday = 7;
 }
 
 message StarAction {

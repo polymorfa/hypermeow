@@ -64,6 +64,10 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 }
 
 func (cli *Client) deleteIdentityChangeState(ctx context.Context, from types.JID) {
+	if cli.isRemoteSignal() {
+		cli.forgetRemoteIdentity(ctx, from)
+		return
+	}
 	users := identityChangeSignalUsers(from)
 	if cli.Store.LIDs != nil {
 		var alternate types.JID
@@ -564,6 +568,14 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 		cli.handleQueuedBusinessCatalogNotification(node)
 	case "crsc_continuation":
 		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandlePasskeyContinuationNotification(ctx, node) })
+	case "companion_reg_refresh":
+		_, refresh := node.GetOptionalChildByTag("companion_reg_refresh")
+		_, rotateQR := node.GetOptionalChildByTag("pair-device-rotate-qr")
+		if refresh || rotateQR {
+			cli.rotateADVSecret(ctx)
+		} else {
+			cli.Log.Debugf("Unrecognized companion reg refresh notification: %s", node)
+		}
 	// Other types: disappearing_mode, server, status, pay, psa
 	default:
 		cli.Log.Debugf("Unhandled notification with type %s", notifType)

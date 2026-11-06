@@ -9,7 +9,7 @@ The upstream project remains the smaller choice for applications that only need 
 
 ## Why HyperMeow instead of upstream WhatsMeow?
 
-This comparison was last verified against upstream `main` at [`a23afe3`](https://github.com/tulir/whatsmeow/commit/a23afe3171803f34d6761979988b9d2275e961c7) on 2026-08-11. Each upstream sync must update this section when the difference changes.
+This comparison was last verified against upstream `main` at [`c386243`](https://github.com/tulir/whatsmeow/commit/c386243a72bacad080ba2938b37e1e4e0f1ca3b2) on 2026-10-10. Each upstream sync must update this section when the difference changes.
 
 | Area | HyperMeow advantage over upstream `main` |
 | --- | --- |
@@ -42,6 +42,8 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 - [Benchmark instructions](benchmark/barback/README.md)
 
 ## Install
+
+HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.1 as its preferred toolchain.
 
 Install the newest reviewed commit from the authoritative `main` branch:
 
@@ -92,6 +94,56 @@ HyperMeow retains upstream's core support for:
 
 New exported functionality is additive unless called out in the [changelog](CHANGELOG.md).
 
+### Remote Signal stores
+
+`NewRemoteSignalClient` uses a customer-held Signal store through `RemoteSignal`.
+The store supplies public prekeys and builds encrypted message stanzas; private
+keys and message plaintext stay outside HyperMeow. Applications implementing the
+interface must implement both durable upload operations:
+
+- `PreparePreKeyUpload(ctx, count)` returns a `RemotePreKeyUploadBatch` with an
+  opaque 32-character lowercase hexadecimal `BatchID` and 1–812 public `PreKeys`.
+  `count` selects a fresh batch size. An outstanding batch returns all surviving
+  keys in its original order, even when its size differs from `count`. Persist
+  that batch across service restarts; do not truncate it or generate a top-up.
+- `AcknowledgePreKeyUpload(ctx, batchID, ids)` commits the complete upload after
+  the WhatsApp upload IQ succeeds. IDs can cross the 24-bit wrap boundary. The
+  acknowledgement covers every surviving key; consumed original members can
+  remain in the list and must not be recreated. Replaying the last exact ACK
+  after a lost response succeeds without changing a newer batch.
+
+The adapter captures independent public-key and ID snapshots. It checks the
+literal last uploaded ID and acknowledges the entire captured list. A failed IQ
+does not acknowledge the batch. After an attempted ACK fails, the adapter retains
+it and resolves that exact ACK before preparing another batch. Unsupported remote
+operations fail; there is no fresh-generation fallback. Upload serialization and
+the adapter mutex keep upload state separate from retry-receipt generation.
+
+`GeneratePreKeys` and `MarkPreKeysUploaded` remain separate operations for fresh
+retry-receipt keys. `GenOnePreKey` generates one fresh key and marks it published;
+it never borrows from a prepared upload batch. Remote implementations must reject
+legacy marking of prepared-batch members. Returned one-time prekeys must have
+unique nonzero 24-bit IDs, a nonzero 32-byte public key, and no private key or
+signed-prekey signature.
+
+This interface change requires matching remote-store implementations. It does
+not establish that a service is deployed or a feature is available to customers.
+Production consumers continue to pin reviewed `main` pseudo-versions.
+
+`SendMessage` and `SendFBMessage` return the destination used for sending in
+`SendResponse.Chat`. `GetQRChannel` refreshes its active QR code when pairing
+secrets rotate. Full-sync fetch errors emit `events.AppStateSyncError` after
+releasing the sync lock, so a handler can retry the fetch.
+
+The `types/richresponse` package decodes rich bot responses. Known primitives
+retain their type names during JSON round trips; unknown primitives, view models,
+and text-entity metadata retain their raw JSON. Malformed known values return a
+decode error.
+
+Custom `store.ChatSettingsStore` implementations must add `PutWASARootSecretID`
+and `GetWASARootSecretID` for bot root-secret state. `sqlstore` adds this field
+through schema version 19; its existing migrations remain unchanged.
+
 ## Discord
 
 Join the [WhatsApp Web ecosystem Discord](https://whiskey.so/discord) and visit
@@ -134,3 +186,22 @@ Polymorfa-added files: Copyright (c) 2026 Rajeh Taher, licensed under the
 [MIT License](LICENSE-MIT).
 
 See [LICENSING.md](LICENSING.md) for the file-level boundary.
+
+### Connection lifecycle observers
+
+`AddConnectionEventHandler(func(context.Context, any))` observes `Connected`,
+`Disconnected`, `QR`, `LoggedOut` and `StreamReplaced`. The context is the original
+connection's `ConnectContext` argument, captured before asynchronous delivery.
+A delayed event can arrive after that context is cancelled. Compare it with the
+connection authority your application owns before updating state; do not label an
+old event using the newest connection. `RemoveConnectionEventHandler(id)` removes
+a registration; an already captured callback can still arrive. Callbacks run
+without the observer registry lock and can remove themselves.
+
+Generic `AddEventHandler` consumers still receive these events. Other event types
+retain their existing API. Connection observers do not authorize a send, undo
+bytes already sent or prove that a cancelled socket has finished closing.
+Disconnect and wait for owned work to settle before accepting replacement
+connection authority. `FrameSocket.SetOnDisconnect` replaces the callback under the socket lock; assign
+the legacy field only before connecting.
+These additions are unreleased until their reviewed main commit is adopted.

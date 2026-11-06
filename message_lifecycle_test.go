@@ -5,14 +5,16 @@ import (
 	"compress/zlib"
 	"context"
 	"errors"
-	"github.com/polymorfa/hypermeow/proto/waE2E"
-	"github.com/polymorfa/hypermeow/proto/waHistorySync"
-	waLog "github.com/polymorfa/hypermeow/util/log"
-	"google.golang.org/protobuf/proto"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/proto/waHistorySync"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/store"

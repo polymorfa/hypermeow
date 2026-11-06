@@ -323,6 +323,23 @@ its registered delayed-phone cancellation exception unchanged. Contextless
 callbacks retain their original cancellation behavior and signatures. Client
 callback fields gain no new concurrent-setter contract or copied/global owner.
 
+## Integration with main 7852ff1
+
+Main added per-connection handler queues, scoped connection lifecycle handlers,
+remote Signal decryption and QR secret rotation. The merge keeps their behavior
+and routes their new launches through the tracked subset:
+
+- `finishDisconnect` runs as an owned task. It still waits for the retired queue
+  to drain stream errors before deciding on Disconnected and reconnect.
+- The handler-queue loop still waits for an in-flight node on ordinary
+  disconnect. Final close does not wait for it; the node task stays tracked.
+- Connected, Disconnected, LoggedOut and StreamReplaced async dispatches use
+  `dispatchConnectionEventAsync`. Lifecycle handlers keep the producer's
+  original context. Each callback is admitted, so a seal stops later callbacks.
+- Remote Signal retry receipts and their ACK use the owned retry/ACK starters.
+- Retry receipts run synchronously when `SynchronousAck` is set, as on main.
+- QR secret rotation runs inside the existing emitter and cleanup worker.
+
 ## Still unbound
 
 The bounded source groups described above do not establish an exhaustive

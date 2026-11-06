@@ -59,6 +59,10 @@ func (int *DangerousInternalClient) CollectEventsToDispatch(ctx context.Context,
 	return int.c.collectEventsToDispatch(ctx, name, mutations, fullSync, eventsToDispatch)
 }
 
+func (int *DangerousInternalClient) ShouldEmitFullSyncMutation(index []string) bool {
+	return int.c.shouldEmitFullSyncMutation(index)
+}
+
 func (int *DangerousInternalClient) FilterContacts(mutations []appstate.Mutation) ([]appstate.Mutation, []store.ContactEntry) {
 	return int.c.filterContacts(mutations)
 }
@@ -123,6 +127,10 @@ func (int *DangerousInternalClient) GetOwnLID() types.JID {
 	return int.c.getOwnLID()
 }
 
+func (int *DangerousInternalClient) GetUserAgent() string {
+	return int.c.getUserAgent()
+}
+
 func (int *DangerousInternalClient) Connect(ctx context.Context) error {
 	return int.c.connect(ctx)
 }
@@ -133,6 +141,10 @@ func (int *DangerousInternalClient) UnlockedConnect(ctx context.Context) error {
 
 func (int *DangerousInternalClient) OnDisconnect(ctx context.Context, ns *socket.NoiseSocket, remote bool) {
 	int.c.onDisconnect(ctx, ns, remote)
+}
+
+func (int *DangerousInternalClient) FinishDisconnect(ctx context.Context, remote bool, queueWait chan struct{}) {
+	int.c.finishDisconnect(ctx, remote, queueWait)
 }
 
 func (int *DangerousInternalClient) ExpectDisconnect() {
@@ -155,12 +167,36 @@ func (int *DangerousInternalClient) UnlockedDisconnect() {
 	int.c.unlockedDisconnect()
 }
 
-func (int *DangerousInternalClient) HandleFrame(ctx context.Context, data []byte) {
-	int.c.handleFrame(ctx, data)
+func (int *DangerousInternalClient) MakeFrameHandler(queue chan *waBinary.Node) func(context.Context, []byte) {
+	return int.c.makeFrameHandler(queue)
 }
 
-func (int *DangerousInternalClient) HandlerQueueLoop(evtCtx, connCtx context.Context) {
-	int.c.handlerQueueLoop(evtCtx, connCtx)
+func (int *DangerousInternalClient) HandleFrame(ctx context.Context, data []byte, queue chan *waBinary.Node) {
+	int.c.handleFrame(ctx, data, queue)
+}
+
+func (int *DangerousInternalClient) HandleOutOfBandNode(node *waBinary.Node) {
+	int.c.handleOutOfBandNode(node)
+}
+
+func (int *DangerousInternalClient) EnqueueNode(ctx context.Context, queue chan *waBinary.Node, node *waBinary.Node) {
+	int.c.enqueueNode(ctx, queue, node)
+}
+
+func (int *DangerousInternalClient) HandlerQueueLoop(evtCtx, connCtx context.Context, queue chan *waBinary.Node, closeWait chan struct{}) {
+	int.c.handlerQueueLoop(evtCtx, connCtx, queue, closeWait)
+}
+
+func (int *DangerousInternalClient) HasNodeHandler(tag string) bool {
+	return int.c.hasNodeHandler(tag)
+}
+
+func (int *DangerousInternalClient) DefaultNodeHandlers() map[string]nodeHandler {
+	return int.c.defaultNodeHandlers()
+}
+
+func (int *DangerousInternalClient) HandleNode(ctx context.Context, node *waBinary.Node) {
+	int.c.handleNode(ctx, node)
 }
 
 func (int *DangerousInternalClient) SendNodeAndGetData(ctx context.Context, node waBinary.Node) ([]byte, error) {
@@ -255,6 +291,10 @@ func (int *DangerousInternalClient) CacheGroupInfo(groupInfo *types.GroupInfo, l
 	return int.c.cacheGroupInfo(groupInfo, lock)
 }
 
+func (int *DangerousInternalClient) ParseGroupNodeAndStoreUsernames(ctx context.Context, groupNode *waBinary.Node) (*types.GroupInfo, error) {
+	return int.c.parseGroupNodeAndStoreUsernames(ctx, groupNode)
+}
+
 func (int *DangerousInternalClient) GetGroupInfo(ctx context.Context, jid types.JID, lockParticipantCache bool) (*types.GroupInfo, error) {
 	return int.c.getGroupInfo(ctx, jid, lockParticipantCache)
 }
@@ -271,6 +311,10 @@ func (int *DangerousInternalClient) ParseGroupCreate(parentNode, node *waBinary.
 	return int.c.parseGroupCreate(parentNode, node)
 }
 
+func (int *DangerousInternalClient) ParseGroupChangeWithUsernames(node *waBinary.Node) (*events.GroupInfo, []store.LIDMapping, []store.ContactUsernameEntry, error) {
+	return int.c.parseGroupChangeWithUsernames(node)
+}
+
 func (int *DangerousInternalClient) ParseGroupChange(node *waBinary.Node) (*events.GroupInfo, []store.LIDMapping, error) {
 	return int.c.parseGroupChange(node)
 }
@@ -279,12 +323,16 @@ func (int *DangerousInternalClient) UpdateGroupParticipantCache(evt *events.Grou
 	int.c.updateGroupParticipantCache(evt)
 }
 
+func (int *DangerousInternalClient) ParseGroupNotificationWithUsernames(node *waBinary.Node) (any, []store.LIDMapping, []store.RedactedPhoneEntry, []store.ContactUsernameEntry, error) {
+	return int.c.parseGroupNotificationWithUsernames(node)
+}
+
 func (int *DangerousInternalClient) ParseGroupNotification(node *waBinary.Node) (any, []store.LIDMapping, []store.RedactedPhoneEntry, error) {
 	return int.c.parseGroupNotification(node)
 }
 
-func (int *DangerousInternalClient) DoHandshake(ctx context.Context, fs *socket.FrameSocket, ephemeralKP keys.KeyPair) error {
-	return int.c.doHandshake(ctx, fs, ephemeralKP)
+func (int *DangerousInternalClient) DoHandshake(fs *socket.FrameSocket, ephemeralKP keys.KeyPair) (chan *waBinary.Node, error) {
+	return int.c.doHandshake(fs, ephemeralKP)
 }
 
 func (int *DangerousInternalClient) KeepAliveLoop(ctx, connCtx context.Context) {
@@ -313,6 +361,10 @@ func (int *DangerousInternalClient) HandleEncryptedMessage(ctx context.Context, 
 
 func (int *DangerousInternalClient) SetSynchronousMessageNameUpdates(enabled bool) {
 	int.c.setSynchronousMessageNameUpdates(enabled)
+}
+
+func (int *DangerousInternalClient) UpdateMessageContactNames(ctx context.Context, info *types.MessageInfo) {
+	int.c.updateMessageContactNames(ctx, info)
 }
 
 func (int *DangerousInternalClient) HandleUnencryptedMessage(ctx context.Context, node *waBinary.Node) {
@@ -371,6 +423,10 @@ func (int *DangerousInternalClient) HandleHistorySyncNotificationLoop() {
 	int.c.handleHistorySyncNotificationLoop()
 }
 
+func (int *DangerousInternalClient) StoreHistoricalInlineContacts(ctx context.Context, contacts []*waHistorySync.InlineContact) {
+	int.c.storeHistoricalInlineContacts(ctx, contacts)
+}
+
 func (int *DangerousInternalClient) HandleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.AppStateSyncKeyShare) {
 	int.c.handleAppStateSyncKeyShare(ctx, keys)
 }
@@ -381,6 +437,22 @@ func (int *DangerousInternalClient) HandlePlaceholderResendResponse(msg *waE2E.P
 
 func (int *DangerousInternalClient) HandleProtocolMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
 	return int.c.handleProtocolMessage(ctx, info, msg)
+}
+
+func (int *DangerousInternalClient) ShouldSendHistorySyncReceipt() bool {
+	return int.c.shouldSendHistorySyncReceipt()
+}
+
+func (int *DangerousInternalClient) ShouldStoreHistorySync() bool {
+	return int.c.shouldStoreHistorySync()
+}
+
+func (int *DangerousInternalClient) ShouldDeleteHistorySyncMedia() bool {
+	return int.c.shouldDeleteHistorySyncMedia()
+}
+
+func (int *DangerousInternalClient) ShouldStoreHistorySyncNonce() bool {
+	return int.c.shouldStoreHistorySyncNonce()
 }
 
 func (int *DangerousInternalClient) ProcessProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
@@ -403,12 +475,28 @@ func (int *DangerousInternalClient) StoreGlobalSettings(ctx context.Context, set
 	int.c.storeGlobalSettings(ctx, settings)
 }
 
+func (int *DangerousInternalClient) UpdateCompanionMetaNonce(nonce string) bool {
+	return int.c.updateCompanionMetaNonce(nonce)
+}
+
+func (int *DangerousInternalClient) PersistCompanionMetaNonce(ctx context.Context) {
+	int.c.persistCompanionMetaNonce(ctx)
+}
+
+func (int *DangerousInternalClient) CurrentCompanionMetaNonce() string {
+	return int.c.currentCompanionMetaNonce()
+}
+
 func (int *DangerousInternalClient) StoreHistoricalPNLIDMappings(ctx context.Context, mappings []*waHistorySync.PhoneNumberToLIDMapping) {
 	int.c.storeHistoricalPNLIDMappings(ctx, mappings)
 }
 
 func (int *DangerousInternalClient) HandleDecryptedMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message, retryCount int) (handlerFailed bool) {
 	return int.c.handleDecryptedMessage(ctx, info, msg, retryCount)
+}
+
+func (int *DangerousInternalClient) EncryptWASAMessage(ctx context.Context, bot types.JID, id types.MessageID, msg *waE2E.Message) ([]byte, error) {
+	return int.c.encryptWASAMessage(ctx, bot, id, msg)
 }
 
 func (int *DangerousInternalClient) DecryptMsgSecret(ctx context.Context, msg *events.Message, useCase MsgSecretType, encrypted messageEncryptedSecret, origMsgKey *waCommon.MessageKey) ([]byte, error) {
@@ -433,6 +521,10 @@ func (int *DangerousInternalClient) GetNewsletterInfo(ctx context.Context, input
 
 func (int *DangerousInternalClient) HandleEncryptNotification(ctx context.Context, node *waBinary.Node) {
 	int.c.handleEncryptNotification(ctx, node)
+}
+
+func (int *DangerousInternalClient) DeleteIdentityChangeState(ctx context.Context, from types.JID) {
+	int.c.deleteIdentityChangeState(ctx, from)
 }
 
 func (int *DangerousInternalClient) HandleAppStateNotification(ctx context.Context, node *waBinary.Node) {
@@ -487,6 +579,10 @@ func (int *DangerousInternalClient) HandleNotification(ctx context.Context, node
 	int.c.handleNotification(ctx, node)
 }
 
+func (int *DangerousInternalClient) DeferServerABProps(ctx context.Context, node *waBinary.Node, ack func()) bool {
+	return int.c.deferServerABProps(ctx, node, ack)
+}
+
 func (int *DangerousInternalClient) TryHandleCodePairNotification(ctx context.Context, parentNode *waBinary.Node) {
 	int.c.tryHandleCodePairNotification(ctx, parentNode)
 }
@@ -501,6 +597,10 @@ func (int *DangerousInternalClient) HandleIQ(ctx context.Context, node *waBinary
 
 func (int *DangerousInternalClient) HandlePairDevice(ctx context.Context, node *waBinary.Node) {
 	int.c.handlePairDevice(ctx, node)
+}
+
+func (int *DangerousInternalClient) RotateADVSecret(ctx context.Context) {
+	int.c.rotateADVSecret(ctx)
 }
 
 func (int *DangerousInternalClient) GetQRClientType() PairClientType {
@@ -799,6 +899,10 @@ func (int *DangerousInternalClient) RawUpload(ctx context.Context, dataToUpload 
 	return int.c.rawUpload(ctx, dataToUpload, uploadSize, fileHash, appInfo, newsletter, resp)
 }
 
+func (int *DangerousInternalClient) StoreContactUsernamesBestEffort(ctx context.Context, entries []store.ContactUsernameEntry) {
+	int.c.storeContactUsernamesBestEffort(ctx, entries)
+}
+
 func (int *DangerousInternalClient) ParseBusinessProfile(node *waBinary.Node) (*types.BusinessProfile, error) {
 	return int.c.parseBusinessProfile(node)
 }
@@ -827,6 +931,6 @@ func (int *DangerousInternalClient) Usync(ctx context.Context, jids []types.JID,
 	return int.c.usync(ctx, jids, mode, context, query, extra...)
 }
 
-func (int *DangerousInternalClient) ParseBlocklist(node *waBinary.Node) *types.Blocklist {
+func (int *DangerousInternalClient) ParseBlocklist(node *waBinary.Node) (*types.Blocklist, []store.LIDMapping) {
 	return int.c.parseBlocklist(node)
 }

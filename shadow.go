@@ -211,7 +211,7 @@ func (cli *Client) InjectNode(ctx context.Context, node *waBinary.Node) error {
 	}
 	if handler, ok := cli.nodeHandlers[node.Tag]; ok {
 		// Dispatch synchronously (see doc comment): the shadow has no
-		// handler queue loop draining cli.handlerQueue.
+		// connection handler queue to drain injected nodes.
 		handler(ctx, node)
 		return nil
 	}

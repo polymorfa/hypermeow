@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/polymorfa/libsignal-protocol-go/ecc"
+	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
@@ -77,7 +78,16 @@ func (cli *Client) handlePairDevice(ctx context.Context, node *waBinary.Node) {
 		evt.Codes = append(evt.Codes, cli.makeQRData(content, cli.getQRClientType()))
 	}
 
-	cli.dispatchEvent(evt)
+	cli.dispatchConnectionEvent(ctx, evt)
+}
+
+func (cli *Client) rotateADVSecret(ctx context.Context) {
+	oldSecret := cli.Store.AdvSecretKey
+	cli.Store.AdvSecretKey = random.Bytes(32)
+	cli.dispatchEvent(&events.RotateADVSecret{
+		OldSecret: base64.StdEncoding.EncodeToString(oldSecret),
+		NewSecret: base64.StdEncoding.EncodeToString(cli.Store.AdvSecretKey),
+	})
 }
 
 func (cli *Client) getQRClientType() PairClientType {
@@ -189,7 +199,16 @@ func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, r
 		return ErrPairInvalidDeviceSignature
 	}
 
-	deviceIdentity.DeviceSignature = generateDeviceSignature(&deviceIdentity, cli.Store.IdentityKey)[:]
+	if cli.isRemoteSignal() {
+		signature, err := cli.remoteDeviceSignature(ctx, deviceIdentityBytes, &deviceIdentity)
+		if err != nil {
+			cli.sendPairError(ctx, reqID, 500, "internal-error")
+			return err
+		}
+		deviceIdentity.DeviceSignature = signature
+	} else {
+		deviceIdentity.DeviceSignature = generateDeviceSignature(&deviceIdentity, cli.Store.IdentityKey)[:]
+	}
 
 	allowed, err := cli.prePairCallbackDecision(jid, platform, businessName)
 	if err != nil {
@@ -223,6 +242,13 @@ func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, r
 		return &PairDatabaseError{"failed to save device store", err}
 	}
 	cli.StoreLIDPNMapping(ctx, lid, jid)
+	if cli.isRemoteSignal() {
+		if err = cli.remoteSignal.SetOwnJIDs(ctx, jid, lid); err != nil {
+			_ = cli.Store.Delete(ctx)
+			cli.sendPairError(ctx, reqID, 500, "internal-error")
+			return fmt.Errorf("failed to give the remote Signal store its own JIDs: %w", err)
+		}
+	}
 	err = cli.Store.Identities.PutIdentity(ctx, mainDeviceLID.SignalAddress().String(), mainDeviceIdentity)
 	if err != nil {
 		_ = cli.Store.Delete(ctx)

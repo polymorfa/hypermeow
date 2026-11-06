@@ -3,13 +3,14 @@ package whatsmeow
 import (
 	"context"
 	"errors"
-	"github.com/polymorfa/hypermeow/socket"
-	"github.com/polymorfa/hypermeow/types/events"
-	waLog "github.com/polymorfa/hypermeow/util/log"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/polymorfa/hypermeow/socket"
+	"github.com/polymorfa/hypermeow/types/events"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 
 	"github.com/polymorfa/hypermeow/store"
 )

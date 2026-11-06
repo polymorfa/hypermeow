@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	waBinary "github.com/polymorfa/hypermeow/binary"
-	"github.com/polymorfa/hypermeow/types"
 	"testing"
 	"time"
+
+	waBinary "github.com/polymorfa/hypermeow/binary"
+	"github.com/polymorfa/hypermeow/types"
 
 	"github.com/polymorfa/hypermeow/store"
 )
@@ -108,8 +109,12 @@ func TestFinalCloseWaitsHandlerAfterLoopCancellation(t *testing.T) {
 	cli.nodeHandlers["lifetime_test"] = func(context.Context, *waBinary.Node) { close(entered); <-release }
 	connCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cli.startNative(func() { defer close(loopDone); cli.handlerQueueLoop(context.Background(), connCtx) })
-	cli.handlerQueue <- &waBinary.Node{Tag: "lifetime_test"}
+	queue := make(chan *waBinary.Node, 1)
+	cli.startNative(func() {
+		defer close(loopDone)
+		cli.handlerQueueLoop(context.Background(), connCtx, queue, make(chan struct{}))
+	})
+	queue <- &waBinary.Node{Tag: "lifetime_test"}
 	finalTestWait(t, entered)
 	cancel()
 	finalTestBlocked(t, cli)
@@ -285,7 +290,7 @@ func TestFinalCloseWaitsRawReceiveCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { cli.handleFrame(context.Background(), data); close(returned) }()
+	go func() { cli.handleFrame(context.Background(), data, nil); close(returned) }()
 	finalTestWait(t, entered)
 	cli.Disconnect()
 	finalTestBlocked(t, cli)
@@ -295,7 +300,7 @@ func TestFinalCloseWaitsRawReceiveCallback(t *testing.T) {
 		t.Fatalf("receive join: %v", err)
 	}
 	// Must not call RawNodeHandler again (it would close entered twice).
-	cli.handleFrame(context.Background(), data)
+	cli.handleFrame(context.Background(), data, nil)
 }
 
 type finalStubbornTransport struct{ entered, release chan struct{} }
