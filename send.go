@@ -1018,6 +1018,8 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 	}
 }
 
+// getButtonTypeFromMessage selects relay business metadata after following
+// ephemeral/view-once wrappers, or returns an empty string for other message forms.
 func getButtonTypeFromMessage(msg *waE2E.Message) string {
 	switch {
 	case msg.ViewOnceMessage != nil:
@@ -1028,11 +1030,13 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return getButtonTypeFromMessage(msg.ViewOnceMessageV2Extension.Message)
 	case msg.EphemeralMessage != nil:
 		return getButtonTypeFromMessage(msg.EphemeralMessage.Message)
+	case msg.TemplateMessage != nil && msg.TemplateMessage.GetHydratedTemplate() != nil:
+		return "template"
 	case msg.ButtonsMessage != nil:
 		return "buttons"
 	case msg.ListMessage != nil:
 		return "list"
-	case msg.InteractiveMessage != nil && msg.InteractiveMessage.GetNativeFlowMessage() != nil:
+	case msg.InteractiveMessage != nil && (msg.InteractiveMessage.GetNativeFlowMessage() != nil || msg.InteractiveMessage.GetCarouselMessage() != nil):
 		return "native_flow"
 	case msg.InteractiveResponseMessage != nil:
 		return "interactive_response"
@@ -1190,6 +1194,8 @@ func (cli *Client) preparePeerMessageNode(
 	}, nil
 }
 
+// getMessageContent retains the supplied encrypted node and appends optional
+// device, poll, caller-supplied and business-format metadata for the relay.
 func (cli *Client) getMessageContent(
 	baseNode waBinary.Node,
 	message *waE2E.Message,
@@ -1225,7 +1231,10 @@ func (cli *Client) getMessageContent(
 	}
 
 	if buttonType := getButtonTypeFromMessage(message); buttonType != "" {
-		if buttonType == "native_flow" {
+		if buttonType == "template" {
+			// Format envelope only: no category, template ID, verified name or bot identity.
+			content = append(content, waBinary.Node{Tag: "biz"}, waBinary.Node{Tag: "hsm"})
+		} else if buttonType == "native_flow" {
 			content = append(content, buildNativeFlowBizNode(message, time.Now().Unix()))
 		} else {
 			content = append(content, waBinary.Node{
