@@ -22,6 +22,10 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - `GetUserInfo` returns the parsed verified business name in `UserInfo.VerifiedName`.
 - Migrate an established hosted PN session when the peer starts sending from its hosted LID. SQL-backed migration uses literal address-prefix ranges so hosted underscores cannot select or delete another account's keys.
 - Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
+- Omit duplicate newsletter view definitions as ambiguous, including repeated untyped or typed counts, while preserving independent observations.
+
+- Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
+- Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations instead of reporting fabricated zeros or truncated reaction lists.
 - Copy group-cache metadata under its lock before send-permission checks, including participant and admin slices, so notifications cannot race those reads.
 
 - Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of panicking or retrying unchanged credentials.
