@@ -16,6 +16,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results. `GetBusinessProfile` is the reliable source: `GetUserInfo` and `IsOnWhatsApp` do not request the business profile, so their field is set only when the server includes it.
 - Add `VerifiedName.Serial`, `Issuer`, `PrivacyMode`, `IsAPI` and `IsBusinessApp`, typed actual-actor and host-storage values, and `MessageInfo.BizPrivacyMode` from `<biz>` on business messages.
 - Add `UndecryptableMessage.IsHostedUnavailable` for `<unavailable hosted="true"/>`.
+- Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
+- `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
 
 ### Fixed
 
