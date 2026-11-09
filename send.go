@@ -1233,7 +1233,9 @@ func (cli *Client) getMessageContent(
 	if buttonType := getButtonTypeFromMessage(message); buttonType != "" {
 		if buttonType == "template" {
 			// Format envelope only: no category, template ID, verified name or bot identity.
-			content = append(content, waBinary.Node{Tag: "biz"}, waBinary.Node{Tag: "hsm"})
+			// Never add an hsm node: it belongs to the business template publish schema,
+			// and WhatsApp Web never sends one from a Linked Device.
+			content = append(content, waBinary.Node{Tag: "biz"})
 		} else if buttonType == "native_flow" {
 			content = append(content, buildNativeFlowBizNode(message, time.Now().Unix()))
 		} else {
