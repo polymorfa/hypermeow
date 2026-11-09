@@ -295,6 +295,11 @@ type Client struct {
 	// The user agent to use (for non-Messenger connections).
 	UserAgent        string
 	WebSocketHeaders http.Header
+	// DisablePostConnectPassiveIQ stops the library sending the
+	// `passive`/`active` IQ after a successful connect. Set it when the
+	// client payload already carries `passive: false`, which is what
+	// WhatsApp Web sends; the real client has no such IQ.
+	DisablePostConnectPassiveIQ bool
 }
 
 type groupMetaCache struct {
@@ -314,6 +319,15 @@ type SocketConfig struct {
 	URL                       string
 	Origin                    string
 	NoiseCertificateAuthority *[32]byte
+	// RaceURLs, when it has more than one entry, makes Connect open every
+	// URL concurrently and keep the one that connects first, closing the
+	// others with code 1000 and the reason "loser socket".
+	//
+	// Use socket.RaceURLs for the endpoints WhatsApp Web races
+	// (WAWebOpenSocket.js:10, 44-52). Loser cleanup runs asynchronously.
+	//
+	// Zero or one entry keeps the single-socket behavior and uses URL above.
+	RaceURLs []string
 }
 
 const handlerQueueSize = 256
@@ -576,10 +590,8 @@ func (cli *Client) Connect() error {
 }
 
 func isRetryableConnectError(err error) bool {
-	if exhttp.IsNetworkError(err) {
-		return true
-	}
-
+	// HTTP upgrade rejections take precedence over network failures from
+	// other racers. Joined errors preserve the configured endpoint order.
 	var statusErr socket.ErrWithStatusCode
 	if errors.As(err, &statusErr) {
 		switch statusErr.StatusCode {
@@ -590,6 +602,9 @@ func isRetryableConnectError(err error) bool {
 		}
 	}
 
+	if exhttp.IsNetworkError(err) {
+		return true
+	}
 	return errors.Is(err, socket.ErrDialFailed)
 }
 
@@ -654,6 +669,7 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 	}
 	var queue chan *waBinary.Node
 	maps.Copy(fs.HTTPHeaders, cli.WebSocketHeaders)
+	var raceURLs []string
 	if cli.SocketConfig != nil {
 		if cli.SocketConfig.URL != "" {
 			fs.URL = cli.SocketConfig.URL
@@ -661,11 +677,20 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		if cli.SocketConfig.Origin != "" {
 			fs.HTTPHeaders.Set("Origin", cli.SocketConfig.Origin)
 		}
+		raceURLs = cli.SocketConfig.RaceURLs
 	}
-	if err := fs.Connect(ctx); err != nil {
+	if len(raceURLs) > 1 {
+		raced, err := socket.ConnectRace(ctx, cli.Log.Sub("Socket"), client, raceURLs, fs.HTTPHeaders)
+		if err != nil {
+			return err
+		}
+		fs = raced
+	} else if err := fs.Connect(ctx); err != nil {
 		fs.Close(0)
 		return err
-	} else if queue, err = cli.doHandshake(fs, *keys.NewKeyPair()); err != nil {
+	}
+	var err error
+	if queue, err = cli.doHandshake(fs, *keys.NewKeyPair()); err != nil {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}

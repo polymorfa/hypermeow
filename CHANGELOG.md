@@ -9,6 +9,11 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
+- `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
+
 ### Fixed
 
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
