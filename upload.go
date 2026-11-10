@@ -68,19 +68,31 @@ type UploadResponse struct {
 //
 // The same applies to the other message types like DocumentMessage, just replace the struct type and Message field name.
 func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaType) (UploadResponse, error) {
-	return cli.upload(ctx, plaintext, appInfo, "")
+	return cli.upload(ctx, plaintext, appInfo, "", nil)
 }
 
 // UploadSticker uploads a sticker using image encryption keys and the sticker MMS path.
 // Evidence: WAWebCryptoMediaTypeInfo.js:11 and WAWebMmsMediaTypes.js:17,
 // whatsapp-1053201649. The caller validates/converts the sticker before uploading.
 func (cli *Client) UploadSticker(ctx context.Context, plaintext []byte) (UploadResponse, error) {
-	return cli.upload(ctx, plaintext, MediaImage, "sticker")
+	return cli.upload(ctx, plaintext, MediaImage, "sticker", nil)
 }
 
-func (cli *Client) upload(ctx context.Context, plaintext []byte, appInfo MediaType, mmsType string) (resp UploadResponse, err error) {
+// UploadStickerPackThumbnail uses the parent pack's master media key with the
+// distinct thumbnail key domain. StickerPackMessage has no second media key.
+func (cli *Client) UploadStickerPackThumbnail(ctx context.Context, plaintext, packMediaKey []byte) (UploadResponse, error) {
+	if len(packMediaKey) != 32 {
+		return UploadResponse{}, fmt.Errorf("pack media key must contain 32 bytes")
+	}
+	return cli.upload(ctx, plaintext, MediaStickerPackThumbnail, "", packMediaKey)
+}
+
+func (cli *Client) upload(ctx context.Context, plaintext []byte, appInfo MediaType, mmsType string, mediaKey []byte) (resp UploadResponse, err error) {
 	resp.FileLength = uint64(len(plaintext))
-	resp.MediaKey = random.Bytes(32)
+	resp.MediaKey = bytes.Clone(mediaKey)
+	if len(resp.MediaKey) == 0 {
+		resp.MediaKey = random.Bytes(32)
+	}
 
 	plaintextSHA256 := sha256.Sum256(plaintext)
 	resp.FileSHA256 = plaintextSHA256[:]
