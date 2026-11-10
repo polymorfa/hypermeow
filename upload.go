@@ -67,7 +67,18 @@ type UploadResponse struct {
 //	// handle error again
 //
 // The same applies to the other message types like DocumentMessage, just replace the struct type and Message field name.
-func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaType) (resp UploadResponse, err error) {
+func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaType) (UploadResponse, error) {
+	return cli.upload(ctx, plaintext, appInfo, "")
+}
+
+// UploadSticker uploads a sticker using image encryption keys and the sticker MMS path.
+// Evidence: WAWebCryptoMediaTypeInfo.js:11 and WAWebMmsMediaTypes.js:17,
+// whatsapp-1053201649. The caller validates/converts the sticker before uploading.
+func (cli *Client) UploadSticker(ctx context.Context, plaintext []byte) (UploadResponse, error) {
+	return cli.upload(ctx, plaintext, MediaImage, "sticker")
+}
+
+func (cli *Client) upload(ctx context.Context, plaintext []byte, appInfo MediaType, mmsType string) (resp UploadResponse, err error) {
 	resp.FileLength = uint64(len(plaintext))
 	resp.MediaKey = random.Bytes(32)
 
@@ -91,7 +102,7 @@ func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaTy
 	dataHash := sha256.Sum256(dataToUpload)
 	resp.FileEncSHA256 = dataHash[:]
 
-	err = cli.rawUpload(ctx, bytes.NewReader(dataToUpload), uint64(len(dataToUpload)), resp.FileEncSHA256, appInfo, false, &resp)
+	err = cli.rawUpload(ctx, bytes.NewReader(dataToUpload), uint64(len(dataToUpload)), resp.FileEncSHA256, appInfo, false, &resp, mmsType)
 	return
 }
 
@@ -200,7 +211,7 @@ func (cli *Client) UploadNewsletterReader(ctx context.Context, data io.ReadSeeke
 	return
 }
 
-func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse) error {
+func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse, mmsTypeOverride ...string) error {
 	mediaConn, err := cli.refreshMediaConn(ctx, false)
 	if err != nil {
 		return fmt.Errorf("failed to refresh media connections: %w", err)
@@ -215,6 +226,9 @@ func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, upload
 		"token": []string{token},
 	}
 	mmsType := mediaTypeToMMSType[appInfo]
+	if len(mmsTypeOverride) > 0 && mmsTypeOverride[0] != "" {
+		mmsType = mmsTypeOverride[0]
+	}
 	uploadPrefix := "mms"
 	if cli.MessengerConfig != nil {
 		uploadPrefix = "wa-msgr/mms"
