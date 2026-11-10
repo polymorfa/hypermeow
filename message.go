@@ -1044,9 +1044,10 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		cli.storeLIDSyncMessage(ctx, protoMsg.GetLidMigrationMappingSyncMessage().GetEncodedMappingPayload())
 	}
 
-	if info.Sender.Device == 0 {
-		peerResp := protoMsg.GetPeerDataOperationRequestResponseMessage()
+	if peerResp := protoMsg.GetPeerDataOperationRequestResponseMessage(); info.Sender.Device == 0 && peerResp != nil {
 		switch peerResp.GetPeerDataOperationRequestType() {
+		case waE2E.PeerDataOperationRequestType_UPLOAD_STICKER:
+			ok = !cli.dispatchEvent(&events.StickerReupload{RequestID: peerResp.GetStanzaID(), Results: peerResp.GetPeerDataOperationResult()}) && ok
 		case waE2E.PeerDataOperationRequestType_PLACEHOLDER_MESSAGE_RESEND:
 			ok = cli.handlePlaceholderResendResponse(peerResp) && ok
 		case waE2E.PeerDataOperationRequestType_COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY:
