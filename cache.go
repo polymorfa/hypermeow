@@ -1,10 +1,28 @@
 // Copyright (c) 2026 Rajeh Taher
+// Copyright (c) 2026 Polymorfa (Softium LLC)
 //
 // Licensed under the MIT License. See LICENSE-MIT for details.
 
 package whatsmeow
 
-import "time"
+import (
+	"time"
+
+	"github.com/polymorfa/hypermeow/types"
+)
+
+func (cli *Client) invalidateParticipantHashCaches(to types.JID) {
+	switch to.Server {
+	case types.GroupServer:
+		cli.groupCacheLock.Lock()
+		delete(cli.groupCache, to)
+		cli.groupCacheLock.Unlock()
+	case types.DefaultUserServer, types.HiddenUserServer, types.BotServer, types.HostedServer, types.HostedLIDServer, types.MessengerServer:
+		cli.userDevicesCacheLock.Lock()
+		delete(cli.userDevicesCache, to)
+		cli.userDevicesCacheLock.Unlock()
+	}
+}
 
 const (
 	maxGroupCacheEntries           = 8

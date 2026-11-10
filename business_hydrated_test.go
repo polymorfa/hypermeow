@@ -88,8 +88,10 @@ func TestHydratedButtonLimitsIndependently(t *testing.T) {
 	})
 }
 
-// TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims requires empty
-// biz/hsm format nodes beside unchanged encrypted bytes, without approval attributes.
+// TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims requires one empty
+// biz node beside unchanged encrypted bytes, without approval attributes. It must not add
+// an hsm node: WhatsApp Web never sends one from a Linked Device, since hsm belongs to the
+// business template publish schema.
 func TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims(t *testing.T) {
 	message, err := BuildBusinessHydratedButtonsMessage(BusinessHydratedButtonsMessageParams{Body: "Offer", Buttons: []BusinessNativeFlowButton{{Name: "quick_reply", ParamsJSON: `{"display_text":"Reply","id":"stable"}`}, {Name: "cta_url", ParamsJSON: `{"display_text":"Open","url":"https://example.com"}`}}})
 	if err != nil {
@@ -97,8 +99,13 @@ func TestHydratedRelayEnvelopePreservesCiphertextWithoutApprovalClaims(t *testin
 	}
 	ciphertext := []byte("opaque encrypted payload")
 	content := (&Client{}).getMessageContent(waBinary.Node{Tag: "enc", Content: ciphertext}, message, nil, false, nodeExtraParams{})
-	if len(content) != 3 || content[0].Tag != "enc" || content[1].Tag != "biz" || content[2].Tag != "hsm" {
-		t.Fatal("missing root format envelope")
+	if len(content) != 2 || content[0].Tag != "enc" || content[1].Tag != "biz" {
+		t.Fatalf("want enc and biz only, got %d nodes", len(content))
+	}
+	for _, node := range content {
+		if node.Tag == "hsm" {
+			t.Fatal("hydrated template must not send an hsm node")
+		}
 	}
 	if !bytes.Equal(content[0].Content.([]byte), ciphertext) {
 		t.Fatal("ciphertext changed")
