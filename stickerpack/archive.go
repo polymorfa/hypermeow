@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
@@ -18,7 +19,8 @@ import (
 )
 
 // Limits bound untrusted archives. These are library safety limits, not claimed
-// WhatsApp service limits. Zero values use DefaultLimits.
+// WhatsApp service limits. Zero values use DefaultLimits. The serialized ZIP
+// also has a MaxTotalBytes + MaxEntries*1024 byte limit for headers and names.
 type Limits struct {
 	MaxEntries                  int
 	MaxFileBytes, MaxTotalBytes int64
@@ -52,6 +54,25 @@ func validName(name string) bool {
 	return fs.ValidPath(name) && name != "." && !strings.ContainsAny(name, "\\:\x00")
 }
 
+func archiveSizeLimit(l Limits) int64 {
+	if int64(l.MaxEntries) > (math.MaxInt64-l.MaxTotalBytes)/1024 {
+		return math.MaxInt64
+	}
+	return l.MaxTotalBytes + int64(l.MaxEntries)*1024
+}
+
+type archiveBuffer struct {
+	data  bytes.Buffer
+	limit int64
+}
+
+func (b *archiveBuffer) Write(data []byte) (int, error) {
+	if int64(b.data.Len()) > b.limit-int64(len(data)) {
+		return 0, fmt.Errorf("pack exceeds serialized size limit")
+	}
+	return b.data.Write(data)
+}
+
 // Build creates a ZIP containing the sticker files and optional tray icon.
 // The returned item metadata is cloned and uses the supplied file names.
 func Build(files []File, trayName string, tray []byte, limits Limits) ([]byte, []*waE2E.StickerPackMessage_Sticker, error) {
@@ -69,7 +90,7 @@ func Build(files []File, trayName string, tray []byte, limits Limits) ([]byte, [
 	if count > l.MaxEntries || (trayName == "") != (len(tray) == 0) {
 		return nil, nil, fmt.Errorf("invalid pack entry count or tray icon")
 	}
-	var buf bytes.Buffer
+	buf := archiveBuffer{limit: archiveSizeLimit(l)}
 	w := zip.NewWriter(&buf)
 	seen := map[string]bool{}
 	var total int64
@@ -107,7 +128,7 @@ func Build(files []File, trayName string, tray []byte, limits Limits) ([]byte, [
 	if err = w.Close(); err != nil {
 		return nil, nil, err
 	}
-	return buf.Bytes(), metadata, nil
+	return buf.data.Bytes(), metadata, nil
 }
 
 // Parse returns listed stickers in message order, skipping the tray icon.
@@ -117,8 +138,11 @@ func Parse(data []byte, metadata []*waE2E.StickerPackMessage_Sticker, trayName s
 	if err != nil {
 		return nil, err
 	}
-	if len(metadata) == 0 || len(metadata) > l.MaxEntries || int64(len(data)) > l.MaxTotalBytes+int64(l.MaxEntries)*1024 {
+	if len(metadata) == 0 || len(metadata) > l.MaxEntries || int64(len(data)) > archiveSizeLimit(l) {
 		return nil, fmt.Errorf("invalid pack size or sticker count")
+	}
+	if err := preflightDirectory(data, l.MaxEntries); err != nil {
+		return nil, fmt.Errorf("invalid pack ZIP: %w", err)
 	}
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
