@@ -12,21 +12,42 @@ lookup, session setup, encryption, privacy token). It replaces only the guarded 
 `sendNodeAndGetData`. Nothing in `socket/` changes, and no socket or Noise lock is held while
 `Admit` runs. Other traffic on the connection (receipts, presence, pings, IQs) is never blocked
 by admission. `SendMessage` already holds `messageSendLock` here, so a slow `Admit` can delay
-only other message sends on the same client, and `NativeAdmitTimeout` bounds that delay.
+only other message sends on the same client, and the enforced `NativeAdmitTimeout` bounds
+that delay.
 
 ## Contract
 
 - `Admit(ctx, id, write)` must call `write` at most once, synchronously. Returning without
   calling it refuses the send (`ErrNativeSendRefused`), and nothing is written.
-- `write` closes when `Admit` returns. A retained `write` called later is refused. If `write` is
-  running when `Admit` returns, the wrapper waits for it, so no write can start or still be
-  running after the send call returns.
+- `NativeAdmitTimeout` (2 s) is enforced. If `Admit` has not returned by then, the send is
+  refused and `write` is closed, even if `Admit` ignores its context. A panic in `Admit` before
+  `write` also refuses.
+- `write` closes when `Admit` returns or times out. A retained `write` called later is refused.
+  If `write` is running at that point, the wrapper waits for it, so no write can start or still
+  be running after the send call returns.
 - `write(sendCtx)` calls `Entered()` and then hands the node to the existing sender with
-  `sendCtx`. Cancel `sendCtx` when authority is revoked. The Noise writer already checks the
-  context after taking its write lock and before encrypting, so a revocation while the frame
-  waits in the writer queue refuses the write without consuming a nonce.
-- `Entered()` means the node was handed to the sender. Any failure after it returns
-  `ErrNativeSendUncertain`: the message may have been delivered and must never be resent.
+  `sendCtx`. Cancel `sendCtx` when authority is revoked.
+- `Entered()` means the node was handed to the sender. Any failure after it, including a panic,
+  returns `ErrNativeSendUncertain`: the message may have been delivered and must never be
+  resent. Errors returned after a successful handoff (ack timeout, context cancellation, a server
+  error code) are also post-handoff outcomes; classify them as unknown, never as not sent.
+
+## Window after admission
+
+The last authority decision is made when `Admit` calls `write`. After that, the frame waits for
+the Noise write lock (not interruptible), then the Noise writer checks `sendCtx`. A revocation
+that cancels `sendCtx` before this check refuses the write without consuming a nonce. After the
+check, the frame is encrypted and written by a goroutine whose WebSocket write uses the
+connection's lifetime context, not `sendCtx`. Cancelling `sendCtx` then makes the send return an
+error while the frame can still go out, so that outcome is unknown. The writer-lock wait is the
+same wait every ordinary send has today.
+
+## Library-added send metadata
+
+With `SendReportingTokens` enabled, HyperMeow adds a message secret and a reporting-token node,
+and it may add a privacy token (`tctoken` or `cstoken`). These come from the library, not from
+the guarded content. Integrators that pin "no send-time additions" must accept these explicitly
+or keep reporting tokens off for guarded sends.
 
 ## Retries
 
