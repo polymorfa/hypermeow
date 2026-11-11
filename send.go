@@ -216,7 +216,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		req = extra[0]
 	}
 	if req.NativeSend != nil {
-		if req.ID == "" || req.NativeSend.Admit == nil || req.NativeSend.Entered == nil || req.Peer || !req.InlineBotJID.IsEmpty() ||
+		if req.ID == "" || req.Timeout < 0 || req.NativeSend.Admit == nil || req.NativeSend.Entered == nil || req.Peer || !req.InlineBotJID.IsEmpty() ||
 			(to.Server != types.DefaultUserServer && to.Server != types.HiddenUserServer) || to.IsBot() ||
 			!validNativeText(message) || req.Meta != nil || req.AdditionalNodes != nil || req.MediaHandle != "" {
 			err = ErrNativeSendUnsupported

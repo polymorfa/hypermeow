@@ -33,7 +33,9 @@ func TestNativeSendRefusalWritesNothing(t *testing.T) {
 	var sends atomic.Int32
 	entered := false
 	hooks := &NativeSendHooks{
-		Admit:   func(context.Context, types.MessageID, func(context.Context) error) error { return errors.New("authority lost") },
+		Admit: func(context.Context, types.MessageID, func(context.Context) error) error {
+			return errors.New("authority lost")
+		},
 		Entered: func() { entered = true },
 	}
 	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
@@ -157,15 +159,69 @@ func TestSendMessageRefusesUnsupportedNativeSends(t *testing.T) {
 		msg   *waE2E.Message
 		extra SendRequestExtra
 	}{
-		"no id":     {user, text, SendRequestExtra{NativeSend: hooks}},
-		"group":     {group, text, SendRequestExtra{ID: "native-1", NativeSend: hooks}},
-		"peer":      {user, text, SendRequestExtra{ID: "native-1", NativeSend: hooks, Peer: true}},
-		"media":     {user, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}, SendRequestExtra{ID: "native-1", NativeSend: hooks}},
-		"extra":     {user, &waE2E.Message{Conversation: proto.String("hi"), ImageMessage: &waE2E.ImageMessage{}}, SendRequestExtra{ID: "native-1", NativeSend: hooks}},
-		"meta node": {user, text, SendRequestExtra{ID: "native-1", NativeSend: hooks, Meta: &types.MsgMetaInfo{}}},
+		"no id":            {user, text, SendRequestExtra{NativeSend: hooks}},
+		"group":            {group, text, SendRequestExtra{ID: "native-1", NativeSend: hooks}},
+		"peer":             {user, text, SendRequestExtra{ID: "native-1", NativeSend: hooks, Peer: true}},
+		"media":            {user, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}, SendRequestExtra{ID: "native-1", NativeSend: hooks}},
+		"extra":            {user, &waE2E.Message{Conversation: proto.String("hi"), ImageMessage: &waE2E.ImageMessage{}}, SendRequestExtra{ID: "native-1", NativeSend: hooks}},
+		"meta node":        {user, text, SendRequestExtra{ID: "native-1", NativeSend: hooks, Meta: &types.MsgMetaInfo{}}},
+		"negative timeout": {user, text, SendRequestExtra{ID: "native-1", NativeSend: hooks, Timeout: -1}},
 	} {
 		if _, err := (&Client{}).SendMessage(t.Context(), tc.to, tc.msg, tc.extra); !errors.Is(err, ErrNativeSendUnsupported) {
 			t.Errorf("%s: want ErrNativeSendUnsupported, got %v", name, err)
 		}
+	}
+}
+
+func TestNativeSendDeadlineIsEnforcedWhenAdmitIgnoresIt(t *testing.T) {
+	previous := nativeAdmitTimeout
+	nativeAdmitTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { nativeAdmitTimeout = previous })
+	var sends atomic.Int32
+	release := make(chan struct{})
+	lateWrite := make(chan error, 1)
+	hooks := &NativeSendHooks{
+		Admit: func(_ context.Context, _ types.MessageID, write func(context.Context) error) error {
+			<-release // ignores its context
+			lateWrite <- write(context.Background())
+			return nil
+		},
+		Entered: func() {},
+	}
+	start := time.Now()
+	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
+	if !errors.Is(err, ErrNativeSendRefused) || !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Fatalf("a stuck Admit must be refused at the deadline: err=%v after %v", err, time.Since(start))
+	}
+	close(release)
+	if !errors.Is(<-lateWrite, ErrNativeSendRefused) || sends.Load() != 0 {
+		t.Fatalf("a write after the deadline must not send: sends=%d", sends.Load())
+	}
+}
+
+func TestNativeSendEnteredPanicIsUncertain(t *testing.T) {
+	var sends atomic.Int32
+	hooks := &NativeSendHooks{
+		Admit: func(_ context.Context, _ types.MessageID, write func(context.Context) error) error {
+			_ = write(context.Background())
+			return nil
+		},
+		Entered: func() { panic("entered failed") },
+	}
+	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
+	if !errors.Is(err, ErrNativeSendUncertain) {
+		t.Fatalf("a panic after write began must be uncertain, never success: %v", err)
+	}
+}
+
+func TestNativeSendAdmitPanicIsRefused(t *testing.T) {
+	var sends atomic.Int32
+	hooks := &NativeSendHooks{
+		Admit:   func(context.Context, types.MessageID, func(context.Context) error) error { panic("admit failed") },
+		Entered: func() {},
+	}
+	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
+	if !errors.Is(err, ErrNativeSendRefused) || sends.Load() != 0 {
+		t.Fatalf("a panic before write must refuse: %v", err)
 	}
 }

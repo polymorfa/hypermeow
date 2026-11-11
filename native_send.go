@@ -30,6 +30,9 @@ var (
 // or Noise lock is held while Admit runs.
 const NativeAdmitTimeout = 2 * time.Second
 
+// nativeAdmitTimeout is NativeAdmitTimeout; tests shorten it.
+var nativeAdmitTimeout = NativeAdmitTimeout
+
 // NativeSendHooks are process-local and never serialized. They run at the message-node handoff
 // in sendDM, after all preparation awaits, without any socket or Noise lock held.
 //
@@ -84,6 +87,11 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 		state = nativeWriteWriting
 		mu.Unlock()
 		defer close(finished)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				writeErr = fmt.Errorf("native handoff panicked: %v", recovered)
+			}
+		}()
 		hooks.Entered()
 		data, writeErr = cli.sendNodeAndGetData(sendCtx, node)
 		mu.Lock()
@@ -92,9 +100,25 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 		return writeErr
 	}
 
-	admitCtx, cancel := context.WithTimeout(ctx, NativeAdmitTimeout)
-	admitErr := hooks.Admit(admitCtx, id, write)
-	cancel()
+	// Admit runs in its own goroutine so the deadline is enforced even if Admit ignores its
+	// context. A late Admit can no longer write: the callback is closed below.
+	admitCtx, cancel := context.WithTimeout(ctx, nativeAdmitTimeout)
+	defer cancel()
+	admitDone := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				admitDone <- fmt.Errorf("native admission panicked: %v", recovered)
+			}
+		}()
+		admitDone <- hooks.Admit(admitCtx, id, write)
+	}()
+	var admitErr error
+	select {
+	case admitErr = <-admitDone:
+	case <-admitCtx.Done():
+		admitErr = admitCtx.Err()
+	}
 
 	// Close the callback. A write that already started is waited for, so no write can begin
 	// or still be in flight after this function returns.
@@ -111,6 +135,13 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 		return nil, ErrNativeSendRefused
 	}
 	<-finished
+	mu.Lock()
+	completed := state == nativeWriteDone
+	mu.Unlock()
+	if !completed {
+		// Entered or the handoff panicked; the node may or may not have been sent.
+		return data, fmt.Errorf("%w: handoff did not complete", ErrNativeSendUncertain)
+	}
 	if writeErr != nil || admitErr != nil {
 		return data, fmt.Errorf("%w: %w", ErrNativeSendUncertain, errors.Join(writeErr, admitErr))
 	}
