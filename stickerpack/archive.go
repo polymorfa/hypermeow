@@ -170,7 +170,11 @@ func Parse(data []byte, metadata []*waE2E.StickerPackMessage_Sticker, trayName s
 		if err != nil {
 			return nil, err
 		}
-		content, readErr := io.ReadAll(io.LimitReader(reader, min(l.MaxFileBytes, l.MaxTotalBytes-total)+1))
+		readLimit := min(l.MaxFileBytes, l.MaxTotalBytes-total)
+		if readLimit < math.MaxInt64 {
+			readLimit++
+		}
+		content, readErr := io.ReadAll(io.LimitReader(reader, readLimit))
 		closeErr := reader.Close()
 		if readErr != nil {
 			return nil, fmt.Errorf("invalid pack entry: %w", readErr)

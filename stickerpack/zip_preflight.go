@@ -18,25 +18,33 @@ type directoryInfo struct {
 // and its actual directory scan. ZIP counts can wrap at 65536, so neither the
 // declared count nor the declared directory size alone bounds that scan.
 func preflightDirectory(data []byte, maxEntries int) error {
-	d, err := findDirectory(data)
-	if err != nil {
-		return err
+	valid := false
+	// Go 1.26 and 1.27 select ZIP64 using different directory-size sentinels.
+	// Bound both interpretations so an archive cannot hide extra entries from
+	// the preflight while the runtime reader selects the other interpretation.
+	for _, sentinel := range []uint64{0xffff, 0xffffffff} {
+		d, err := findDirectory(data, sentinel)
+		if err != nil || d.size > uint64(d.end) || d.offset > math.MaxInt64 {
+			continue // This interpretation fails before zip.NewReader allocates files.
+		}
+		valid = true
+		if d.records > uint64(maxEntries) {
+			return errTooManyEntries
+		}
+		start := d.end - int(d.size)
+		if err := countDirectory(data, start, maxEntries); err != nil {
+			return err
+		}
+		// archive/zip may prefer the nominal offset when a prepended archive or
+		// inaccurate directory size implies a positive base offset.
+		if d.offset < uint64(start) {
+			if err := countDirectory(data, int(d.offset), maxEntries); err != nil {
+				return err
+			}
+		}
 	}
-	if d.records > uint64(maxEntries) {
-		return errTooManyEntries
-	}
-	if d.size > uint64(d.end) || d.offset > math.MaxInt64 {
+	if !valid {
 		return zip.ErrFormat
-	}
-	start := d.end - int(d.size)
-	if err := countDirectory(data, start, maxEntries); err != nil {
-		return err
-	}
-	// archive/zip may prefer the nominal offset when a prepended archive or an
-	// inaccurate directory size implies a positive base offset. Bound that path
-	// too, without allocating names, extra fields, comments or File values.
-	if d.offset < uint64(start) {
-		return countDirectory(data, int(d.offset), maxEntries)
 	}
 	return nil
 }
@@ -56,7 +64,7 @@ func countDirectory(data []byte, offset, maxEntries int) error {
 	return nil
 }
 
-func findDirectory(data []byte) (directoryInfo, error) {
+func findDirectory(data []byte, sizeSentinel uint64) (directoryInfo, error) {
 	for end := len(data) - 22; end >= max(0, len(data)-65*1024); end-- {
 		if binary.LittleEndian.Uint32(data[end:]) != 0x06054b50 {
 			continue
@@ -67,9 +75,8 @@ func findDirectory(data []byte) (directoryInfo, error) {
 		}
 		d := directoryInfo{end: end, records: uint64(binary.LittleEndian.Uint16(header[10:])),
 			size: uint64(binary.LittleEndian.Uint32(header[12:])), offset: uint64(binary.LittleEndian.Uint32(header[16:]))}
-		// Match archive/zip's ZIP64 locator selection. Ordinary directories may
-		// also use a truncated 16-bit count without a ZIP64 locator.
-		if d.records == 0xffff || d.size == 0xffff || d.offset == 0xffffffff {
+		// Ordinary directories may use a truncated 16-bit count without a locator.
+		if d.records == 0xffff || d.size == sizeSentinel || d.offset == 0xffffffff {
 			locator := end - 20
 			if locator >= 0 && binary.LittleEndian.Uint32(data[locator:]) == 0x07064b50 &&
 				binary.LittleEndian.Uint32(data[locator+4:]) == 0 && binary.LittleEndian.Uint32(data[locator+16:]) == 1 {

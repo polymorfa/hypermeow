@@ -171,6 +171,7 @@ func TestDirectoryPreflightPreservesZIPVariants(t *testing.T) {
 	for _, limits := range []Limits{
 		{MaxEntries: math.MaxInt, MaxFileBytes: 1, MaxTotalBytes: 1},
 		{MaxEntries: 1, MaxFileBytes: 1, MaxTotalBytes: math.MaxInt64},
+		{MaxEntries: 1, MaxFileBytes: math.MaxInt64, MaxTotalBytes: math.MaxInt64},
 	} {
 		data, metadata, err := Build([]File{{Metadata: &waE2E.StickerPackMessage_Sticker{FileName: proto.String("a")}, Data: []byte("x")}}, "", nil, limits)
 		if err != nil {
@@ -200,9 +201,65 @@ func FuzzParse(f *testing.F) {
 	}
 	f.Add(data)
 	f.Add(zip64Fixture(data))
+	for _, sentinel := range []uint32{0xffff, 0xffffffff} {
+		variant := zip64Fixture(data)
+		footer := variant[len(variant)-22:]
+		binary.LittleEndian.PutUint16(footer[8:], 1)
+		binary.LittleEndian.PutUint16(footer[10:], 1)
+		binary.LittleEndian.PutUint32(footer[12:], sentinel)
+		binary.LittleEndian.PutUint32(footer[16:], binary.LittleEndian.Uint32(data[len(data)-6:]))
+		f.Add(variant)
+	}
 	f.Add([]byte{})
 	f.Add(directoryFixture(5, true))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = Parse(data, metadata, "", Limits{MaxEntries: 4, MaxFileBytes: 64, MaxTotalBytes: 256})
 	})
+}
+
+func TestParseBoundsAmbiguousZIP64Directory(t *testing.T) {
+	data := zip64Fixture(directoryFixture(65537, false))
+	z := data[len(data)-98 : len(data)-42]
+	binary.LittleEndian.PutUint64(z[40:], 47)
+	binary.LittleEndian.PutUint64(z[48:], uint64(len(data)-98-47))
+	footer := data[len(data)-22:]
+	binary.LittleEndian.PutUint16(footer[8:], 1)
+	binary.LittleEndian.PutUint16(footer[10:], 1)
+	binary.LittleEndian.PutUint32(footer[12:], 0xffff)
+	binary.LittleEndian.PutUint32(footer[16:], 0)
+	metadata := []*waE2E.StickerPackMessage_Sticker{{FileName: proto.String("a")}}
+	var err error
+	allocs := testing.AllocsPerRun(1, func() {
+		_, err = Parse(data, metadata, "", Limits{MaxEntries: 4})
+	})
+	if err == nil || !strings.Contains(err.Error(), "too many entries") {
+		t.Fatalf("ambiguous directory escaped the entry limit: %v", err)
+	}
+	if allocs > 64 {
+		t.Fatalf("ambiguous ZIP64 directory allocated %.0f objects", allocs)
+	}
+	t.Logf("rejected ambiguous ZIP64 directory with %.0f allocations", allocs)
+}
+
+func TestZIP64SizeSentinelsMatchReader(t *testing.T) {
+	data, metadata, err := Build([]File{{Metadata: &waE2E.StickerPackMessage_Sticker{FileName: proto.String("a")}, Data: []byte("x")}}, "", nil, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sentinel := range []uint32{0xffff, 0xffffffff} {
+		variant := zip64Fixture(data)
+		footer := variant[len(variant)-22:]
+		binary.LittleEndian.PutUint16(footer[8:], 1)
+		binary.LittleEndian.PutUint16(footer[10:], 1)
+		binary.LittleEndian.PutUint32(footer[12:], sentinel)
+		binary.LittleEndian.PutUint32(footer[16:], binary.LittleEndian.Uint32(data[len(data)-6:]))
+		_, readerErr := zip.NewReader(bytes.NewReader(variant), int64(len(variant)))
+		got, parseErr := Parse(variant, metadata, "", Limits{MaxEntries: 1})
+		if (readerErr == nil) != (parseErr == nil) {
+			t.Fatalf("size sentinel %#x: reader=%v, Parse=%v", sentinel, readerErr, parseErr)
+		}
+		if parseErr == nil && (len(got) != 1 || string(got[0].Data) != "x") {
+			t.Fatalf("size sentinel %#x changed the file", sentinel)
+		}
+	}
 }
