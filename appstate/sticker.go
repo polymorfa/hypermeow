@@ -4,8 +4,9 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 )
 
 // BuildFavoriteSticker builds a regular_low v7 favorite/unfavorite mutation.

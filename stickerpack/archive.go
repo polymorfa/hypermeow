@@ -12,8 +12,9 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
 // Limits bound untrusted archives. These are library safety limits, not claimed

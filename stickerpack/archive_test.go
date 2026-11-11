@@ -3,9 +3,11 @@ package stickerpack
 import (
 	"archive/zip"
 	"bytes"
-	"github.com/polymorfa/hypermeow/proto/waE2E"
-	"google.golang.org/protobuf/proto"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
 func TestRoundTrip(t *testing.T) {

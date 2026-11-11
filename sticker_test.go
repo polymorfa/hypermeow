@@ -3,13 +3,15 @@ package whatsmeow
 import (
 	"bytes"
 	"context"
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+
 	"github.com/polymorfa/hypermeow/appstate"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/proto/waServerSync"
 	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 	"github.com/polymorfa/hypermeow/types/events"
-	"google.golang.org/protobuf/proto"
-	"testing"
 )
 
 func TestStickerPackMedia(t *testing.T) {

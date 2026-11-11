@@ -4,8 +4,9 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waE2E"
 )
 
 // BuildStickerReuploadRequest requests fresh media details from the primary device.

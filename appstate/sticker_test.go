@@ -2,9 +2,11 @@ package appstate
 
 import (
 	"bytes"
-	"github.com/polymorfa/hypermeow/proto/waSyncAction"
-	"google.golang.org/protobuf/proto"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 )
 
 func TestStickerPatches(t *testing.T) {
