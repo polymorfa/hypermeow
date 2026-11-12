@@ -15,6 +15,7 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
+	waLog "github.com/polymorfa/hypermeow/util/log"
 )
 
 func nativeTestClient(sends *atomic.Int32, sendErr error) *Client {
@@ -281,5 +282,55 @@ func TestNativeSendWriteAtDeadlineIsRefused(t *testing.T) {
 		if !errors.Is(<-late, ErrNativeSendRefused) || !errors.Is(err, ErrNativeSendRefused) || sends.Load() != 0 {
 			t.Fatalf("iteration %d: a write at or after the deadline must be refused: err=%v sends=%d", i, err, sends.Load())
 		}
+	}
+}
+
+type nativeTestLIDs struct{ resolved types.JID }
+
+func (s nativeTestLIDs) PutManyLIDMappings(context.Context, []store.LIDMapping) error { return nil }
+func (s nativeTestLIDs) PutLIDMapping(context.Context, types.JID, types.JID) error    { return nil }
+func (s nativeTestLIDs) GetPNForLID(context.Context, types.JID) (types.JID, error) {
+	return types.EmptyJID, nil
+}
+func (s nativeTestLIDs) GetLIDForPN(context.Context, types.JID) (types.JID, error) {
+	return s.resolved, nil
+}
+func (s nativeTestLIDs) GetManyLIDsForPNs(context.Context, []types.JID) (map[types.JID]types.JID, error) {
+	return nil, nil
+}
+
+// A guarded send must reach only sendDM. A phone number that resolves to anything other than a
+// LID user would route to a sender where admission never runs.
+func TestSendMessageGuardedRevalidatesResolvedRecipient(t *testing.T) {
+	var admitted atomic.Int32
+	hooks := &NativeSendHooks{
+		Admit:   func(context.Context, types.MessageID, func(context.Context) error) error { admitted.Add(1); return nil },
+		Entered: func() {},
+	}
+	own := types.NewJID("15550100009", types.DefaultUserServer)
+	for _, resolved := range []types.JID{
+		types.NewJID("120363000000000000", types.GroupServer),
+		types.NewJID("status", types.BroadcastServer),
+		types.NewJID("120363000000000001", types.NewsletterServer),
+	} {
+		var sends atomic.Int32
+		cli := &Client{Store: &store.Device{ID: &own, LIDs: nativeTestLIDs{resolved: resolved}}, Log: waLog.Noop}
+		cli.testSendHook = func([]byte) error { sends.Add(1); return nil }
+		var err error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic: %v", r)
+				}
+			}()
+			_, err = cli.SendMessage(t.Context(), types.NewJID("15550100001", types.DefaultUserServer),
+				&waE2E.Message{Conversation: proto.String("hi")}, SendRequestExtra{ID: "native-1", NativeSend: hooks})
+		}()
+		if !errors.Is(err, ErrNativeSendUnsupported) || sends.Load() != 0 {
+			t.Errorf("resolved %s: want ErrNativeSendUnsupported with nothing sent, got err=%v sends=%d", resolved.Server, err, sends.Load())
+		}
+	}
+	if admitted.Load() != 0 {
+		t.Fatal("admission must not run for an ineligible resolved recipient")
 	}
 }

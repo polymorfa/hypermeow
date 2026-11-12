@@ -374,6 +374,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 			return
 		}
 		resp.DebugTimings.LIDFetch = time.Since(start)
+		if req.NativeSend != nil && (toLID.Server != types.HiddenUserServer || toLID.IsBot()) {
+			err = fmt.Errorf("%w: resolved recipient %s", ErrNativeSendUnsupported, toLID.Server)
+			return
+		}
 		cli.Log.Debugf("Replacing SendMessage destination with LID %s -> %s", to, toLID)
 		extraParams.peerRecipientPN = to
 		to = toLID
@@ -425,6 +429,12 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		}
 	}
 
+	// Revalidate after LID resolution: a guarded send may reach only sendDM, where admission
+	// runs. Any other resolved destination would bypass Admit and Entered.
+	if req.NativeSend != nil && ((to.Server != types.DefaultUserServer && to.Server != types.HiddenUserServer) || to.IsBot() || to.Device > 0) {
+		err = fmt.Errorf("%w: resolved recipient %s", ErrNativeSendUnsupported, to.Server)
+		return
+	}
 	respChan := cli.waitResponse(req.ID)
 	var phash string
 	var data []byte
