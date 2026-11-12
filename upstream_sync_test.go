@@ -6,7 +6,9 @@ package whatsmeow
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -184,5 +186,47 @@ func TestFullBotEditDecryptsWithTargetMessageID(t *testing.T) {
 	cli.decryptMessages(t.Context(), info, &waBinary.Node{Tag: "message", Content: []waBinary.Node{{Tag: "enc", Attrs: waBinary.Attrs{"type": "msmsg", "v": "2"}, Content: payload}}})
 	if !received {
 		t.Fatal("full bot edit failed to decrypt with target ID")
+	}
+}
+
+func TestUpstreamGroupPermissionsRetainBoundedCache(t *testing.T) {
+	cli, _, _ := newTestRemote(t)
+	admin := types.NewJID("100000000000001", types.HiddenUserServer)
+	member := types.NewJID("100000000000002", types.HiddenUserServer)
+	var last types.JID
+	for i := range maxGroupCacheEntries + 2 {
+		last = types.NewJID(fmt.Sprintf("120363000000%03d", i), types.GroupServer)
+		cli.cacheGroupInfo(&types.GroupInfo{
+			JID:           last,
+			GroupAnnounce: types.GroupAnnounce{IsAnnounce: true},
+			Participants:  []types.GroupParticipant{{JID: admin, IsAdmin: true}, {JID: member}},
+		}, true)
+	}
+	if len(cli.groupCache) != maxGroupCacheEntries {
+		t.Fatalf("group cache grew to %d entries", len(cli.groupCache))
+	}
+	cached := cli.groupCache[last]
+	if !cached.ReadOnly || !slices.Equal(cached.Admins, []types.JID{admin}) {
+		t.Fatal("bounded insertion lost upstream permission metadata")
+	}
+	cli.updateGroupParticipantCache(&events.GroupInfo{
+		JID: last, Promote: []types.JID{member}, Demote: []types.JID{admin},
+		Announce: &types.GroupAnnounce{IsAnnounce: false},
+	})
+	if cached.ReadOnly || !slices.Equal(cached.Admins, []types.JID{member}) {
+		t.Fatal("group permission changes were not applied to the bounded cache")
+	}
+	cli.updateGroupParticipantCache(&events.GroupInfo{JID: last, Leave: []types.JID{member}})
+	if slices.Contains(cached.Members, member) || slices.Contains(cached.Admins, member) {
+		t.Fatal("leaving participant retained group send permissions")
+	}
+}
+
+func TestResolveLIDRetainsUpstreamUnregisteredRecipientError(t *testing.T) {
+	cli := newTestShadow(t, &fakeShadowRelay{})
+	cli.Store.LIDs = &store.NoopStore{}
+	_, err := cli.ResolveLID(context.Background(), types.NewJID("15550000001", types.DefaultUserServer))
+	if !errors.Is(err, ErrRecipientNotOnWhatsApp) {
+		t.Fatalf("missing USync LID lost upstream recipient error: %v", err)
 	}
 }

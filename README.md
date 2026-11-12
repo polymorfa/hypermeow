@@ -9,7 +9,7 @@ The upstream project remains the smaller choice for applications that only need 
 
 ## Why HyperMeow instead of upstream WhatsMeow?
 
-This comparison was last verified against upstream `main` at [`c386243`](https://github.com/tulir/whatsmeow/commit/c386243a72bacad080ba2938b37e1e4e0f1ca3b2) on 2026-10-10. Each upstream sync must update this section when the difference changes.
+This comparison was last verified against upstream `main` at [`4b4986f`](https://github.com/tulir/whatsmeow/commit/4b4986ff80bcd65d6e7d1b3a860fd254af44c519) on 2026-10-27. Each upstream sync must update this section when the difference changes.
 
 | Area | HyperMeow advantage over upstream `main` |
 | --- | --- |
@@ -43,7 +43,7 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 
 ## Install
 
-HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.1 as its preferred toolchain.
+HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.2 as its preferred toolchain.
 
 Install the newest reviewed commit from the authoritative `main` branch:
 
