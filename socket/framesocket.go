@@ -168,12 +168,13 @@ func (fs *FrameSocket) dial(parentCtx, dialCtx context.Context, startPump bool) 
 	return nil
 }
 
-func (fs *FrameSocket) startReadPump() {
+func (fs *FrameSocket) startReadPump() bool {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 	if conn := fs.conn.Load(); conn != nil {
-		fs.startReadPumpLocked(conn)
+		return fs.startReadPumpLocked(conn)
 	}
+	return false
 }
 
 // startReadPumpLocked starts the read pump through the worker launcher. If the

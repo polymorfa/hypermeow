@@ -735,10 +735,15 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		raceURLs = cli.SocketConfig.RaceURLs
 	}
 	if len(raceURLs) > 1 {
-		raced, err := socket.ConnectRace(ctx, cli.Log.Sub("Socket"), client, raceURLs, fs.HTTPHeaders)
+		// Bind every racer before it dials so its read pump, writes and
+		// disconnect callback stay under the client's lifetime admission.
+		raced, releaseRaced, err := socket.ConnectRaceWithOptions(ctx, cli.Log.Sub("Socket"), client, raceURLs, fs.HTTPHeaders, socket.RaceOptions{
+			Bind: cli.bindSocket,
+		})
 		if err != nil {
 			return err
 		}
+		defer releaseRaced()
 		fs = raced
 	} else if err := fs.Connect(ctx); err != nil {
 		fs.Close(0)
