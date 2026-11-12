@@ -261,3 +261,25 @@ func TestSendMessageGuardedDoesNotMutateCallerMessage(t *testing.T) {
 		t.Fatal("a guarded send must not write library metadata into the caller's message")
 	}
 }
+
+func TestNativeSendWriteAtDeadlineIsRefused(t *testing.T) {
+	previous := nativeAdmitTimeout
+	nativeAdmitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { nativeAdmitTimeout = previous })
+	for i := 0; i < 50; i++ {
+		var sends atomic.Int32
+		late := make(chan error, 1)
+		hooks := &NativeSendHooks{
+			Admit: func(ctx context.Context, _ types.MessageID, write func(context.Context) error) error {
+				<-ctx.Done() // a decision that arrives at the deadline
+				late <- write(context.Background())
+				return nil
+			},
+			Entered: func() {},
+		}
+		_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
+		if !errors.Is(<-late, ErrNativeSendRefused) || !errors.Is(err, ErrNativeSendRefused) || sends.Load() != 0 {
+			t.Fatalf("iteration %d: a write at or after the deadline must be refused: err=%v sends=%d", i, err, sends.Load())
+		}
+	}
+}
