@@ -6,7 +6,9 @@ package whatsmeow
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/polymorfa/hypermeow/appstate"
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
@@ -184,5 +187,70 @@ func TestFullBotEditDecryptsWithTargetMessageID(t *testing.T) {
 	cli.decryptMessages(t.Context(), info, &waBinary.Node{Tag: "message", Content: []waBinary.Node{{Tag: "enc", Attrs: waBinary.Attrs{"type": "msmsg", "v": "2"}, Content: payload}}})
 	if !received {
 		t.Fatal("full bot edit failed to decrypt with target ID")
+	}
+}
+
+func TestUpstreamGroupPermissionsRetainBoundedCache(t *testing.T) {
+	cli, _, _ := newTestRemote(t)
+	admin := types.NewJID("100000000000001", types.HiddenUserServer)
+	member := types.NewJID("100000000000002", types.HiddenUserServer)
+	var last types.JID
+	for i := range maxGroupCacheEntries + 2 {
+		last = types.NewJID(fmt.Sprintf("120363000000%03d", i), types.GroupServer)
+		cli.cacheGroupInfo(&types.GroupInfo{
+			JID:           last,
+			GroupAnnounce: types.GroupAnnounce{IsAnnounce: true},
+			Participants:  []types.GroupParticipant{{JID: admin, IsAdmin: true}, {JID: member}},
+		}, true)
+	}
+	if len(cli.groupCache) != maxGroupCacheEntries {
+		t.Fatalf("group cache grew to %d entries", len(cli.groupCache))
+	}
+	cached := cli.groupCache[last]
+	if !cached.ReadOnly || !slices.Equal(cached.Admins, []types.JID{admin}) {
+		t.Fatal("bounded insertion lost upstream permission metadata")
+	}
+	cli.updateGroupParticipantCache(&events.GroupInfo{
+		JID: last, Promote: []types.JID{member}, Demote: []types.JID{admin},
+		Announce: &types.GroupAnnounce{IsAnnounce: false},
+	})
+	if cached.ReadOnly || !slices.Equal(cached.Admins, []types.JID{member}) {
+		t.Fatal("group permission changes were not applied to the bounded cache")
+	}
+	cli.updateGroupParticipantCache(&events.GroupInfo{JID: last, Leave: []types.JID{member}})
+	if slices.Contains(cached.Members, member) || slices.Contains(cached.Admins, member) {
+		t.Fatal("leaving participant retained group send permissions")
+	}
+}
+
+func TestResolveLIDRetainsUpstreamUnregisteredRecipientError(t *testing.T) {
+	cli := newTestShadow(t, &fakeShadowRelay{})
+	cli.Store.LIDs = &store.NoopStore{}
+	_, err := cli.ResolveLID(context.Background(), types.NewJID("15550000001", types.DefaultUserServer))
+	if !errors.Is(err, ErrRecipientNotOnWhatsApp) {
+		t.Fatalf("missing USync LID lost upstream recipient error: %v", err)
+	}
+}
+
+func TestAppStateActionLogRedactsSecrets(t *testing.T) {
+	action := &waSyncAction.SyncActionValue{
+		SharedDeviceSecretAction: &waSyncAction.SharedDeviceSecretAction{Secret: []byte("shared"), TtlMS: proto.Int64(1)},
+		WasaRootSecretAction: &waSyncAction.WASARootSecretAction{Secrets: []*waSyncAction.WASARootSecretAction_RootSecretEntry{
+			{RootSecret: []byte("root")},
+		}},
+	}
+	logged := appStateActionForLog(action)
+	if logged.GetSharedDeviceSecretAction().GetSecret() != nil || logged.GetWasaRootSecretAction().GetSecrets()[0].GetRootSecret() != nil {
+		t.Fatal("trace log action kept secret material")
+	}
+	if logged.GetSharedDeviceSecretAction().GetTtlMS() != 1 {
+		t.Fatal("redaction dropped non-secret fields")
+	}
+	if string(action.GetSharedDeviceSecretAction().GetSecret()) != "shared" || string(action.GetWasaRootSecretAction().GetSecrets()[0].GetRootSecret()) != "root" {
+		t.Fatal("redaction modified the dispatched action")
+	}
+	plain := &waSyncAction.SyncActionValue{Timestamp: proto.Int64(1)}
+	if appStateActionForLog(plain) != plain {
+		t.Fatal("actions without secrets should not be copied")
 	}
 }

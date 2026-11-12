@@ -315,6 +315,7 @@ func (cli *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types
 		}
 
 		if verifiedName != nil {
+			info.VerifiedName = verifiedName
 			cli.updateBusinessName(ctx, jid, info.LID, nil, verifiedName.Details.GetVerifiedName())
 		}
 		respData[jid] = info
@@ -427,7 +428,7 @@ func (cli *Client) ResolveLID(ctx context.Context, phone types.JID) (types.JID, 
 	}
 	lid = info[phone].LID.ToNonAD()
 	if lid.IsEmpty() {
-		return types.EmptyJID, fmt.Errorf("USync returned no LID for %s", phone)
+		return types.EmptyJID, fmt.Errorf("%w: USync returned no LID for %s", ErrRecipientNotOnWhatsApp, phone)
 	}
 	lid.Device = device
 	return lid, nil
@@ -1237,7 +1238,7 @@ func (cli *Client) UpdateBlocklist(ctx context.Context, jid types.JID, action ev
 			}
 			lid = info[jid].LID
 			if lid.IsEmpty() {
-				return nil, fmt.Errorf("no LID found for %s from server", jid)
+				return nil, fmt.Errorf("%w: no LID found for %s from server", ErrRecipientNotOnWhatsApp, jid)
 			}
 		}
 		lidJID = lid

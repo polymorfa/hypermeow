@@ -37,7 +37,8 @@ var (
 
 	ErrNoPrivacyToken = errors.New("no privacy token stored")
 
-	ErrAppStateUpdate = errors.New("server returned error updating app state")
+	ErrAppStateUpdate      = errors.New("server returned error updating app state")
+	ErrAppStateRateLimited = errors.New("app state fetch is rate limited by the server")
 )
 
 // Errors that happen while confirming device pairing
@@ -113,6 +114,8 @@ var (
 	ErrRecipientADJID           = errors.New("message recipient must be a user JID with no device part")
 	ErrServerReturnedError      = errors.New("server returned error")
 	ErrInvalidInlineBotID       = errors.New("invalid inline bot ID")
+	ErrNoPermissionInGroup      = errors.New("no permission to send that message in the group")
+	ErrRecipientNotOnWhatsApp   = errors.New("recipient is not on WhatsApp")
 )
 
 type DownloadHTTPError struct {

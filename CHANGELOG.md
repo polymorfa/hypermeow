@@ -16,6 +16,9 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Redact shared-device and root secrets from app-state mutations in trace logs.
+- Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
+- Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations, including duplicate view definitions, instead of reporting fabricated zeros or truncated reaction lists.
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
 - Report the destination in `SendFBMessage` responses and decrypt full bot edits using their target message ID.
@@ -26,8 +29,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Changed
 
-- Sync upstream protocol definitions and runtime changes through `c386243a72bacad080ba2938b37e1e4e0f1ca3b2`, while retaining HyperMeow's module path, Signal fork, bounded queues, and SQL batching.
-- Require Go 1.26 and select Go 1.27.1 as the preferred toolchain.
+- Sync upstream protocol definitions and runtime changes through `c88388f983b4bc43dfd0bcc2b46969fcde82d61f`, including optional group-send permission checks, bot LID sending, unified-session sends, app-state rate-limit backoff, handshake timeout reconnects, video streaming sidecars, verified business names in `GetUserInfo` and dependency updates, while retaining HyperMeow's module path, Signal fork, bounded caches, and strict stanza tag decoding. `ResolveLID` wraps `ErrRecipientNotOnWhatsApp` when the server returns no LID.
+- Require Go 1.26 and select Go 1.27.2 as the preferred toolchain.
 - Add `SendResponse.Chat`, `Client.PreKeysUploaded`, pairing-secret rotation events, rich-response types, and bot root-secret methods on `store.ChatSettingsStore`. SQL-backed stores upgrade to schema version 19.
 - Deprecate `SetGroupDescription` in favor of `SetGroupTopic`.
 

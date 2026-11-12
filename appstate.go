@@ -15,7 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/exslices"
-	"go.mau.fi/util/ptr"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/polymorfa/hypermeow/appstate"
 	waBinary "github.com/polymorfa/hypermeow/binary"
@@ -52,6 +52,9 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 			cli.dispatchEvent(syncError)
 		}
 	}()
+	if until := cli.appStateBackoff[name]; time.Now().Before(until) {
+		return nil, fmt.Errorf("%w: not fetching %s until %s", ErrAppStateRateLimited, name, until.Format(time.RFC3339))
+	}
 	if fullSync {
 		err := cli.Store.AppState.DeleteAppStateVersion(ctx, string(name))
 		if err != nil {
@@ -79,6 +82,12 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	}
 	for hasMore {
 		patches, err := cli.fetchAppStatePatches(ctx, name, state.Version, wantSnapshot)
+		var iqErr *IQError
+		if errors.As(err, &iqErr) && iqErr.Code == 429 && iqErr.ErrorNode != nil {
+			if backoff := iqErr.ErrorNode.AttrGetter().OptionalInt("backoff"); backoff > 0 {
+				cli.appStateBackoff[name] = time.Now().Add(time.Duration(backoff) * time.Second)
+			}
+		}
 		if err != nil {
 			if fullSync && ctx.Err() == nil && cli.BackgroundEventCtx.Err() == nil {
 				syncError = &events.AppStateSyncError{Name: name, FullSync: fullSync, Error: err}
@@ -278,7 +287,7 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		Hex("index_mac", mutation.IndexMAC).
 		Hex("value_mac", mutation.ValueMAC)
 	if logLevel == zerolog.TraceLevel {
-		logEvt.Any("action", mutation.Action)
+		logEvt.Any("action", appStateActionForLog(mutation.Action))
 	}
 	logEvt.Msg("Received app state mutation")
 
@@ -295,7 +304,8 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		return
 	}
 
-	if mutation.Operation != waServerSync.SyncdMutation_SET {
+	isContactRemove := mutation.Operation == waServerSync.SyncdMutation_REMOVE && mutation.Index[0] == appstate.IndexContact
+	if mutation.Operation != waServerSync.SyncdMutation_SET && !isContactRemove {
 		return
 	}
 
@@ -345,6 +355,9 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		}
 	case appstate.IndexContact:
 		act := mutation.Action.GetContactAction()
+		if isContactRemove {
+			act = nil
+		}
 		eventToDispatch = &events.Contact{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}
 		if cli.Store.Contacts != nil {
 			storeUpdateError = cli.Store.Contacts.PutContactName(ctx, jid, act.GetFirstName(), act.GetFullName())
@@ -747,7 +760,7 @@ func BuildFatalAppStateExceptionNotification(collections ...appstate.WAPatchName
 			Type: waE2E.ProtocolMessage_APP_STATE_FATAL_EXCEPTION_NOTIFICATION.Enum(),
 			AppStateFatalExceptionNotification: &waE2E.AppStateFatalExceptionNotification{
 				CollectionNames: exslices.CastToString[string](collections),
-				Timestamp:       ptr.Ptr(time.Now().UnixMilli()),
+				Timestamp:       new(time.Now().UnixMilli()),
 			},
 		},
 	}
@@ -766,9 +779,25 @@ func BuildAppStateRecoveryRequest(collection appstate.WAPatchName) *waE2E.Messag
 				PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY.Enum(),
 				SyncdCollectionFatalRecoveryRequest: &waE2E.PeerDataOperationRequestMessage_SyncDCollectionFatalRecoveryRequest{
 					CollectionName: (*string)(&collection),
-					Timestamp:      ptr.Ptr(time.Now().Unix()),
+					Timestamp:      new(time.Now().Unix()),
 				},
 			},
 		},
 	}
+}
+
+// appStateActionForLog returns the action with secret material cleared, so
+// trace logs never contain shared-device or root secrets.
+func appStateActionForLog(action *waSyncAction.SyncActionValue) *waSyncAction.SyncActionValue {
+	if action.GetSharedDeviceSecretAction() == nil && action.GetWasaRootSecretAction() == nil {
+		return action
+	}
+	redacted := proto.Clone(action).(*waSyncAction.SyncActionValue)
+	if shared := redacted.GetSharedDeviceSecretAction(); shared != nil {
+		shared.Secret = nil
+	}
+	for _, entry := range redacted.GetWasaRootSecretAction().GetSecrets() {
+		entry.RootSecret = nil
+	}
+	return redacted
 }
