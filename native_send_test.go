@@ -13,6 +13,7 @@ import (
 
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 )
 
@@ -241,5 +242,22 @@ func TestNativeSendRefusalAfterHandoffIsOnlyUncertain(t *testing.T) {
 	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
 	if !errors.Is(err, ErrNativeSendUncertain) || errors.Is(err, ErrNativeSendRefused) || sends.Load() != 1 {
 		t.Fatalf("an admission error after handoff must be uncertain only: %v", err)
+	}
+}
+
+func TestSendMessageGuardedDoesNotMutateCallerMessage(t *testing.T) {
+	hooks := &NativeSendHooks{Admit: func(context.Context, types.MessageID, func(context.Context) error) error { return nil }, Entered: func() {}}
+	msg := &waE2E.Message{Conversation: proto.String("hi")}
+	before := proto.Clone(msg)
+	own := types.NewJID("15550100009", types.DefaultUserServer)
+	// A logged-in minimal client reaches the reporting-token metadata write. It fails later
+	// without a full store; the caller's message must be unchanged either way.
+	cli := &Client{Store: &store.Device{ID: &own}, SendReportingTokens: true}
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = cli.SendMessage(t.Context(), types.NewJID("15550100001", types.DefaultUserServer), msg, SendRequestExtra{ID: "native-1", NativeSend: hooks})
+	}()
+	if !proto.Equal(msg, before) || !validNativeText(msg) {
+		t.Fatal("a guarded send must not write library metadata into the caller's message")
 	}
 }
