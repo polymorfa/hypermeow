@@ -9,7 +9,7 @@ The upstream project remains the smaller choice for applications that only need 
 
 ## Why HyperMeow instead of upstream WhatsMeow?
 
-This comparison was last verified against upstream `main` at [`c386243`](https://github.com/tulir/whatsmeow/commit/c386243a72bacad080ba2938b37e1e4e0f1ca3b2) on 2026-10-10. Each upstream sync must update this section when the difference changes.
+This comparison was last verified against upstream `main` at [`c88388f`](https://github.com/tulir/whatsmeow/commit/c88388f983b4bc43dfd0bcc2b46969fcde82d61f) on 2026-11-12. Each upstream sync must update this section when the difference changes.
 
 | Area | HyperMeow advantage over upstream `main` |
 | --- | --- |
@@ -43,7 +43,7 @@ The complete three-repeat system matrix documents allocation, RSS, CPU, latency,
 
 ## Install
 
-HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.1 as its preferred toolchain.
+HyperMeow requires Go 1.26 or newer; the module selects Go 1.27.2 as its preferred toolchain.
 
 Install the newest reviewed commit from the authoritative `main` branch:
 
@@ -81,6 +81,25 @@ go mod edit -dropreplace=go.mau.fi/whatsmeow
 go get github.com/polymorfa/hypermeow@main
 go mod tidy
 ```
+
+## Newsletter observations
+
+`NewsletterMessage.ViewCounts` preserves the reported view definitions, including
+an untyped legacy count and a separate `views` count. It does not select an
+account's view-definition gate. `ViewsCountPresent` and `ForwardsCountPresent`
+distinguish a reported zero from an absent or malformed counter. The existing
+scalar count fields remain available.
+
+A nil `ReactionCounts` means no valid reaction observation; an allocated empty
+map preserves an explicitly empty list. These observations do not reproduce the
+client's local database reconciliation. Original message IDs and timestamps may
+be absent in a live observation; its server position is a separate reference.
+
+`NewsletterMilestone` accepts quoted and numeric decimal integer positions
+without converting through floating point. An absent, `null` or zero position
+means the milestone has no message (for example a follower-count milestone) and
+decodes as position 0. It rejects negative, empty, fractional and overflowing
+positions. Its JSON output keeps quoted positions.
 
 ## Core compatibility
 
@@ -142,7 +161,8 @@ decode error.
 
 Custom `store.ChatSettingsStore` implementations must add `PutWASARootSecretID`
 and `GetWASARootSecretID` for bot root-secret state. `sqlstore` adds this field
-through schema version 19; its existing migrations remain unchanged.
+through schema version 19; its existing migrations remain unchanged. Schema
+version 20 adds the device `is_hosted` flag for hosted (coexistence) pairing.
 
 ## Connection options
 
@@ -229,7 +249,7 @@ See [LICENSING.md](LICENSING.md) for the file-level boundary.
 ### Connection lifecycle observers
 
 `AddConnectionEventHandler(func(context.Context, any))` observes `Connected`,
-`Disconnected`, `QR`, `LoggedOut` and `StreamReplaced`. The context is the original
+`Disconnected`, `QR`, `LoggedOut`, `StreamReplaced` and `CATRefreshError`. The context is the original
 connection's `ConnectContext` argument, captured before asynchronous delivery.
 A delayed event can arrive after that context is cancelled. Compare it with the
 connection authority your application owns before updating state; do not label an

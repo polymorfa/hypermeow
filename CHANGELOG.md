@@ -13,9 +13,22 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 - Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
 - `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
+- Persist hosted (coexistence) pairing as `store.Device.IsHosted` and report it on `events.PairSuccess.IsHosted`. SQL-backed stores upgrade to schema version 20, which adds `whatsmeow_device.is_hosted` (default `false`).
+- Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results. `GetBusinessProfile` is the reliable source: `GetUserInfo` and `IsOnWhatsApp` do not request the business profile, so their field is set only when the server includes it.
+- Add `VerifiedName.Serial`, `Issuer`, `PrivacyMode`, `IsAPI` and `IsBusinessApp`, typed actual-actor and host-storage values, and `MessageInfo.BizPrivacyMode` from `<biz>` on business messages.
+- Add `UndecryptableMessage.IsHostedUnavailable` for `<unavailable hosted="true"/>`.
 
 ### Fixed
 
+- Migrate an established hosted PN session when the peer starts sending from its hosted LID. SQL-backed migration uses literal address-prefix ranges so hosted underscores cannot select or delete another account's keys.
+- Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
+- Redact shared-device and root secrets from app-state mutations in trace logs.
+- Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
+- Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations, including duplicate view definitions, instead of reporting fabricated zeros or truncated reaction lists.
+- Copy group-cache metadata under its lock before send-permission checks, including participant and admin slices, so notifications cannot race those reads.
+- Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of retrying unchanged credentials.
+- Protect the unified-session interval check during concurrent sends.
+- Apply participant-hash device-cache invalidation to LID, hosted and bot recipients in both send paths.
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
 - Report the destination in `SendFBMessage` responses and decrypt full bot edits using their target message ID.
@@ -26,8 +39,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Changed
 
-- Sync upstream protocol definitions and runtime changes through `c386243a72bacad080ba2938b37e1e4e0f1ca3b2`, while retaining HyperMeow's module path, Signal fork, bounded queues, and SQL batching.
-- Require Go 1.26 and select Go 1.27.1 as the preferred toolchain.
+- Sync upstream protocol definitions and runtime changes through `c88388f983b4bc43dfd0bcc2b46969fcde82d61f`, including optional group-send permission checks, bot LID sending, unified-session sends, app-state rate-limit backoff, handshake timeout reconnects, video streaming sidecars, verified business names in `GetUserInfo` and dependency updates, while retaining HyperMeow's module path, Signal fork, bounded caches, and strict stanza tag decoding. `ResolveLID` wraps `ErrRecipientNotOnWhatsApp` when the server returns no LID.
+- Require Go 1.26 and select Go 1.27.2 as the preferred toolchain.
 - Add `SendResponse.Chat`, `Client.PreKeysUploaded`, pairing-secret rotation events, rich-response types, and bot root-secret methods on `store.ChatSettingsStore`. SQL-backed stores upgrade to schema version 19.
 - Deprecate `SetGroupDescription` in favor of `SetGroupTopic`.
 

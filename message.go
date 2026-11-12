@@ -273,6 +273,11 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 			if err != nil {
 				cli.Log.Warnf("Failed to parse verified_name node in %s: %v", info.ID, err)
 			}
+		case "biz":
+			// WAWebHandleMsgParser:316-327 ignores privacy mode on bot messages.
+			if !info.Sender.IsBot() {
+				info.BizPrivacyMode = parseBusinessPrivacyMode(child)
+			}
 		case "bot":
 			info.MsgBotInfo, err = cli.parseMsgBotInfo(child)
 			if err != nil {
@@ -291,6 +296,17 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 			if mediaType, ok := child.AttrGetter().GetString("mediatype", false); ok {
 				info.MediaType = mediaType
 			}
+		}
+	}
+	if info.VerifiedName != nil {
+		// Web reads the level and serial from the message stanza itself
+		// (<message verified_level verified_name>); fill them in when the
+		// certificate node doesn't carry them.
+		if info.VerifiedName.VerifiedLevel == "" {
+			info.VerifiedName.VerifiedLevel = ag.OptionalString("verified_level")
+		}
+		if serial := ag.OptionalString("verified_name"); serial != "" {
+			info.VerifiedName.Serial = serial
 		}
 	}
 
@@ -351,13 +367,20 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	}()
 	unavailableNode, ok := node.GetOptionalChildByTag("unavailable")
 	if ok && len(node.GetChildrenByTag("enc")) == 0 {
-		uType := events.UnavailableType(unavailableNode.AttrGetter().String("type"))
-		cli.Log.Warnf("Unavailable message %s from %s (type: %q)", info.ID, info.SourceString(), uType)
+		uag := unavailableNode.AttrGetter()
+		uType := events.UnavailableType(uag.String("type"))
+		// WAWebHandleMsgParser:245-248 compares the raw attribute to "true".
+		isHosted := uag.OptionalString("hosted") == "true"
+		cli.Log.Warnf("Unavailable message %s from %s (type: %q, hosted: %t)", info.ID, info.SourceString(), uType, isHosted)
+		handlerFailed := cli.dispatchEvent(&events.UndecryptableMessage{Info: *info, IsUnavailable: true, UnavailableType: uType, IsHostedUnavailable: isHosted})
+		if handlerFailed {
+			cli.Log.Warnf("Handler for unavailable message %s failed", info.ID)
+			return
+		}
 		cli.backgroundIfAsyncAckContext(ctx, func(ctx context.Context) {
 			cli.immediateRequestMessageFromPhone(ctx, info)
 			cli.sendAck(ctx, node, 0)
 		})
-		cli.dispatchEvent(&events.UndecryptableMessage{Info: *info, IsUnavailable: true, UnavailableType: uType})
 		return
 	}
 
@@ -365,7 +388,9 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	cli.Log.Debugf("Decrypting message from %s", info.SourceString())
 	containsDirectMsg := false
 	senderEncryptionJID := info.Sender
-	if info.Sender.Server == types.DefaultUserServer && !info.Sender.IsBot() {
+	if hostedSender, ok := rawHostedSender(node); ok {
+		senderEncryptionJID = cli.hostedSignalJID(ctx, hostedSender)
+	} else if info.Sender.Server == types.DefaultUserServer && !info.Sender.IsBot() {
 		if info.SenderAlt.Server == types.HiddenUserServer {
 			senderEncryptionJID = info.SenderAlt
 			cli.migrateSessionStore(ctx, info.Sender, info.SenderAlt)
@@ -466,10 +491,25 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			continue
 		} else if err != nil {
 			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
-			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, ErrEventBufferDB) {
 				return
 			}
 			isUnavailable := encType == "skmsg" && !containsDirectMsg && errors.Is(err, signalerror.ErrNoSenderKeyForUser)
+			decryptFail := ag.OptionalString("decrypt-fail")
+			if decryptFail == "" {
+				metaNode := node.GetChildByTag("meta")
+				decryptFail = metaNode.AttrGetter().OptionalString("decrypt-fail")
+			}
+			evt := &events.UndecryptableMessage{
+				Info:            *info,
+				IsUnavailable:   isUnavailable,
+				DecryptFailMode: events.DecryptFailMode(decryptFail),
+			}
+			handlerFailed := cli.dispatchEvent(evt)
+			if handlerFailed {
+				cli.Log.Warnf("Handler for undecryptable message %s failed", info.ID)
+				return
+			}
 			if encType == "msmsg" {
 				cli.backgroundIfAsyncAckContext(ctx, func(ctx context.Context) {
 					cli.sendAck(ctx, node, NackMissingMessageSecret)
@@ -482,11 +522,6 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 				cli.startRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable)
 				cli.startAck(ctx, node, 0)
 			}
-			cli.dispatchEvent(&events.UndecryptableMessage{
-				Info:            *info,
-				IsUnavailable:   isUnavailable,
-				DecryptFailMode: events.DecryptFailMode(ag.OptionalString("decrypt-fail")),
-			})
 			return
 		}
 		retryCount := ag.OptionalInt("count")
@@ -559,6 +594,7 @@ var ErrEventAlreadyProcessed = errors.New("event was already processed")
 
 // Deprecated: use ErrEventAlreadyProcessed.
 var EventAlreadyProcessed = ErrEventAlreadyProcessed
+var ErrEventBufferDB = errors.New("event buffer database error")
 
 func (cli *Client) bufferedDecrypt(
 	ctx context.Context,
@@ -582,7 +618,7 @@ func (cli *Client) bufferedDecrypt(
 	var buf *store.BufferedEvent
 	buf, err = cli.Store.EventBuffer.GetBufferedEvent(ctx, ciphertextHash)
 	if err != nil {
-		err = fmt.Errorf("failed to get buffered event: %w", err)
+		err = fmt.Errorf("%w: failed to get buffered event: %w", ErrEventBufferDB, err)
 		return
 	} else if buf != nil {
 		if buf.Plaintext == nil {
@@ -608,7 +644,7 @@ func (cli *Client) bufferedDecrypt(
 		}
 		innerErr = cli.Store.EventBuffer.PutBufferedEvent(ctx, ciphertextHash, plaintext, serverTimestamp)
 		if innerErr != nil {
-			innerErr = fmt.Errorf("failed to save decrypted event to buffer: %w", innerErr)
+			innerErr = fmt.Errorf("%w: failed to save decrypted event to buffer: %w", ErrEventBufferDB, innerErr)
 		}
 		return
 	})
@@ -971,6 +1007,15 @@ func (cli *Client) handleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.A
 		if isReRequest {
 			onlyResyncIfNotSynced = false
 		}
+		existing, err := cli.Store.AppStateKeys.GetAppStateSyncKey(ctx, key.GetKeyID().GetKeyID())
+		if err != nil {
+			cli.Log.Warnf("Failed to check for existing app state sync key %X: %v", key.GetKeyID().GetKeyID(), err)
+		} else if existing != nil && !bytes.Equal(existing.Data, key.GetKeyData().GetKeyData()) {
+			cli.Log.Warnf(
+				"Received app state sync key %X with different data than the stored key (stored ts: %d, new ts: %d, requested: %t)",
+				key.GetKeyID().GetKeyID(), existing.Timestamp, key.GetKeyData().GetTimestamp(), isReRequest,
+			)
+		}
 		err = cli.Store.AppStateKeys.PutAppStateSyncKey(ctx, key.GetKeyID().GetKeyID(), store.AppStateSyncKey{
 			Data:        key.GetKeyData().GetKeyData(),
 			Fingerprint: marshaledFingerprint,
@@ -980,7 +1025,7 @@ func (cli *Client) handleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.A
 			cli.Log.Errorf("Failed to store app state sync key %X: %v", key.GetKeyID().GetKeyID(), err)
 			continue
 		}
-		cli.Log.Debugf("Received app state sync key %X (ts: %d)", key.GetKeyID().GetKeyID(), key.GetKeyData().GetTimestamp())
+		cli.Log.Debugf("Received app state sync key %X (ts: %d, requested: %t)", key.GetKeyID().GetKeyID(), key.GetKeyData().GetTimestamp(), isReRequest)
 	}
 	cli.appStateKeyRequestsLock.RUnlock()
 
@@ -1014,6 +1059,13 @@ func (cli *Client) handlePlaceholderResendResponse(msg *waE2E.PeerDataOperationR
 }
 
 func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
+	ok, _ = handleProtocolMessageResult(cli, ctx, info, msg)
+	return
+}
+
+// Keep the legacy internal hook's bool result while the decrypt path carries
+// handler failure independently from ordinary Message-event suppression.
+func handleProtocolMessageResult(cli *Client, ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok, handlerFailed bool) {
 	ok = true
 	protoMsg := msg.GetProtocolMessage()
 
@@ -1024,7 +1076,7 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 	if protoMsg.GetHistorySyncNotification() != nil {
 		if !cli.ManualHistorySyncDownload {
 			if !cli.enqueueHistorySyncNotification(historySyncNotification{messageID: info.ID, notification: protoMsg.HistorySyncNotification}) {
-				return false
+				return false, false
 			}
 		}
 		if cli.shouldSendHistorySyncReceipt() {
@@ -1041,9 +1093,11 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		cli.storeLIDSyncMessage(ctx, protoMsg.GetLidMigrationMappingSyncMessage().GetEncodedMappingPayload())
 	}
 
-	if info.Sender.Device == 0 {
-		peerResp := protoMsg.GetPeerDataOperationRequestResponseMessage()
+	if peerResp := protoMsg.GetPeerDataOperationRequestResponseMessage(); info.Sender.Device == 0 && peerResp != nil {
 		switch peerResp.GetPeerDataOperationRequestType() {
+		case waE2E.PeerDataOperationRequestType_UPLOAD_STICKER:
+			handlerFailed = cli.dispatchEvent(&events.StickerReupload{RequestID: peerResp.GetStanzaID(), Results: peerResp.GetPeerDataOperationResult()})
+			ok = false
 		case waE2E.PeerDataOperationRequestType_PLACEHOLDER_MESSAGE_RESEND:
 			ok = cli.handlePlaceholderResendResponse(peerResp) && ok
 		case waE2E.PeerDataOperationRequestType_COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY:
@@ -1055,7 +1109,7 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		cli.startAppStateKeyShare(context.WithoutCancel(ctx), protoMsg.AppStateSyncKeyShare)
 	}
 
-	if info.Category == "peer" {
+	if info.Category == "peer" && !handlerFailed {
 		cli.startConnectionTask(ctx, func(ctx context.Context) {
 			err := cli.SendProtocolMessageReceipt(ctx, info.ID, types.ReceiptTypePeerMsg)
 			if err != nil {
@@ -1083,27 +1137,34 @@ func (cli *Client) shouldStoreHistorySyncNonce() bool {
 }
 
 func (cli *Client) processProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
+	ok, _ = processProtocolPartsResult(cli, ctx, info, msg)
+	return
+}
+
+func processProtocolPartsResult(cli *Client, ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok, handlerFailed bool) {
 	ok = true
 	cli.storeMessageSecret(ctx, info, msg)
 	// Hopefully sender key distribution messages and protocol messages can't be inside ephemeral messages
 	if msg.GetDeviceSentMessage().GetMessage() != nil {
 		msg = msg.GetDeviceSentMessage().GetMessage()
 	}
-	if msg.GetSenderKeyDistributionMessage() != nil {
+	if skdm := msg.GetSenderKeyDistributionMessage(); skdm != nil {
 		if !info.IsGroup {
-			cli.Log.Warnf("Got sender key distribution message in non-group chat from %s", info.Sender)
+			cli.Log.Warnf("Got sender key distribution message in non-group chat %s from %s (skdm group ID %s)", info.Chat, info.Sender, skdm.GetGroupID())
 		} else {
 			encryptionIdentity := info.Sender
 			if encryptionIdentity.Server == types.DefaultUserServer && info.SenderAlt.Server == types.HiddenUserServer {
 				encryptionIdentity = info.SenderAlt
 			}
-			cli.handleSenderKeyDistributionMessage(ctx, info.Chat, encryptionIdentity, msg.SenderKeyDistributionMessage.AxolotlSenderKeyDistributionMessage)
+			cli.handleSenderKeyDistributionMessage(ctx, info.Chat, encryptionIdentity, skdm.AxolotlSenderKeyDistributionMessage)
 		}
 	}
 	// N.B. Edits are protocol messages, but they're also wrapped inside EditedMessage,
 	// which is only unwrapped after processProtocolParts, so this won't trigger for edits.
 	if msg.GetProtocolMessage() != nil {
-		ok = cli.handleProtocolMessage(ctx, info, msg) && ok
+		protocolOK, failed := handleProtocolMessageResult(cli, ctx, info, msg)
+		ok = protocolOK && ok
+		handlerFailed = failed
 	}
 	return
 }
@@ -1335,7 +1396,10 @@ func (cli *Client) storeHistoricalPNLIDMappings(ctx context.Context, mappings []
 }
 
 func (cli *Client) handleDecryptedMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message, retryCount int) (handlerFailed bool) {
-	ok := cli.processProtocolParts(ctx, info, msg)
+	ok, failed := processProtocolPartsResult(cli, ctx, info, msg)
+	if failed {
+		return true
+	}
 	if !ok {
 		return false
 	}

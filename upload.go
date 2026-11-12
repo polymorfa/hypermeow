@@ -9,6 +9,7 @@ package whatsmeow
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -38,6 +39,8 @@ type UploadResponse struct {
 	FileEncSHA256 []byte `json:"-"`
 	FileSHA256    []byte `json:"-"`
 	FileLength    uint64 `json:"-"`
+
+	StreamingSidecar []byte `json:"-"`
 }
 
 // Upload uploads the given attachment to WhatsApp servers.
@@ -67,9 +70,32 @@ type UploadResponse struct {
 //	// handle error again
 //
 // The same applies to the other message types like DocumentMessage, just replace the struct type and Message field name.
-func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaType) (resp UploadResponse, err error) {
+func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaType) (UploadResponse, error) {
+	return cli.upload(ctx, plaintext, appInfo, "", nil)
+}
+
+// UploadSticker uploads a sticker using image encryption keys and the sticker MMS path.
+// Evidence: WAWebCryptoMediaTypeInfo.js:11 and WAWebMmsMediaTypes.js:17,
+// whatsapp-1053201649. The caller validates/converts the sticker before uploading.
+func (cli *Client) UploadSticker(ctx context.Context, plaintext []byte) (UploadResponse, error) {
+	return cli.upload(ctx, plaintext, MediaImage, "sticker", nil)
+}
+
+// UploadStickerPackThumbnail uses the parent pack's master media key with the
+// distinct thumbnail key domain. StickerPackMessage has no second media key.
+func (cli *Client) UploadStickerPackThumbnail(ctx context.Context, plaintext, packMediaKey []byte) (UploadResponse, error) {
+	if len(packMediaKey) != 32 {
+		return UploadResponse{}, fmt.Errorf("pack media key must contain 32 bytes")
+	}
+	return cli.upload(ctx, plaintext, MediaStickerPackThumbnail, "", packMediaKey)
+}
+
+func (cli *Client) upload(ctx context.Context, plaintext []byte, appInfo MediaType, mmsType string, mediaKey []byte) (resp UploadResponse, err error) {
 	resp.FileLength = uint64(len(plaintext))
-	resp.MediaKey = random.Bytes(32)
+	resp.MediaKey = bytes.Clone(mediaKey)
+	if len(resp.MediaKey) == 0 {
+		resp.MediaKey = random.Bytes(32)
+	}
 
 	plaintextSHA256 := sha256.Sum256(plaintext)
 	resp.FileSHA256 = plaintextSHA256[:]
@@ -91,7 +117,14 @@ func (cli *Client) Upload(ctx context.Context, plaintext []byte, appInfo MediaTy
 	dataHash := sha256.Sum256(dataToUpload)
 	resp.FileEncSHA256 = dataHash[:]
 
-	err = cli.rawUpload(ctx, bytes.NewReader(dataToUpload), uint64(len(dataToUpload)), resp.FileEncSHA256, appInfo, false, &resp)
+	if appInfo == MediaVideo {
+		resp.StreamingSidecar, err = makeStreamingSidecar(iv, macKey, bytes.NewReader(dataToUpload))
+		if err != nil {
+			return
+		}
+	}
+
+	err = cli.rawUpload(ctx, bytes.NewReader(dataToUpload), uint64(len(dataToUpload)), resp.FileEncSHA256, appInfo, false, &resp, mmsType)
 	return
 }
 
@@ -135,8 +168,44 @@ func (cli *Client) UploadReader(ctx context.Context, plaintext io.Reader, tempFi
 		err = fmt.Errorf("failed to seek to start of temporary file: %w", err)
 		return
 	}
+	if appInfo == MediaVideo {
+		resp.StreamingSidecar, err = makeStreamingSidecar(iv, macKey, tempFile)
+		if err != nil {
+			return
+		}
+		_, err = tempFile.Seek(0, io.SeekStart)
+		if err != nil {
+			err = fmt.Errorf("failed to seek to start of temporary file: %w", err)
+			return
+		}
+	}
 	err = cli.rawUpload(ctx, tempFile, uploadSize, resp.FileEncSHA256, appInfo, false, &resp)
 	return
+}
+
+const streamingSidecarChunkSize = 64 * 1024
+
+func makeStreamingSidecar(iv, macKey []byte, encrypted io.Reader) ([]byte, error) {
+	buf := make([]byte, streamingSidecarChunkSize+aes.BlockSize)
+	filled := copy(buf, iv)
+	mac := hmac.New(sha256.New, macKey)
+	var sidecar []byte
+	for {
+		n, err := io.ReadFull(encrypted, buf[filled:])
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("failed to read encrypted file for sidecar: %w", err)
+		} else if n == 0 && len(sidecar) > 0 {
+			return sidecar, nil
+		}
+		filled += n
+		mac.Reset()
+		mac.Write(buf[:filled])
+		sidecar = append(sidecar, mac.Sum(nil)[:10]...)
+		if err != nil {
+			return sidecar, nil
+		}
+		filled = copy(buf, buf[streamingSidecarChunkSize:])
+	}
 }
 
 // UploadNewsletter uploads the given attachment to WhatsApp servers without encrypting it first.
@@ -200,7 +269,7 @@ func (cli *Client) UploadNewsletterReader(ctx context.Context, data io.ReadSeeke
 	return
 }
 
-func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse) error {
+func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse, mmsTypeOverride ...string) error {
 	mediaConn, err := cli.refreshMediaConn(ctx, false)
 	if err != nil {
 		return fmt.Errorf("failed to refresh media connections: %w", err)
@@ -215,6 +284,9 @@ func (cli *Client) rawUpload(ctx context.Context, dataToUpload io.Reader, upload
 		"token": []string{token},
 	}
 	mmsType := mediaTypeToMMSType[appInfo]
+	if len(mmsTypeOverride) > 0 && mmsTypeOverride[0] != "" {
+		mmsType = mmsTypeOverride[0]
+	}
 	uploadPrefix := "mms"
 	if cli.MessengerConfig != nil {
 		uploadPrefix = "wa-msgr/mms"

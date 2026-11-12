@@ -19,7 +19,7 @@ type Contact struct {
 	JID       types.JID // The contact who was modified.
 	Timestamp time.Time // The time when the modification happened.'
 
-	Action       *waSyncAction.ContactAction // The new contact info.
+	Action       *waSyncAction.ContactAction // The new contact info, or nil if the contact was removed.
 	FromFullSync bool                        // Whether the action is emitted because of a fullSync
 }
 
@@ -211,4 +211,22 @@ type AppStateSyncError struct {
 	Name     appstate.WAPatchName
 	Error    error
 	FullSync bool
+}
+
+// FavoriteSticker is emitted for a favorite/unfavorite mutation, including full snapshots.
+// FileSHA256 is the base64-encoded plaintext sticker hash, not a chat JID.
+type FavoriteSticker struct {
+	FileSHA256   string
+	Timestamp    time.Time
+	Action       *waSyncAction.StickerAction
+	FromFullSync bool
+}
+
+// RemoveRecentSticker removes only recents no newer than Action.LastStickerSentTS.
+// This does not delete the sticker from favorites.
+type RemoveRecentSticker struct {
+	FileSHA256   string
+	Timestamp    time.Time
+	Action       *waSyncAction.RemoveRecentStickerAction
+	FromFullSync bool
 }

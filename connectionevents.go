@@ -53,16 +53,11 @@ func (cli *Client) handleStreamError(ctx context.Context, node *waBinary.Node) {
 		// This seems to happen when the server wants to restart or something.
 		// The disconnection will be emitted as an events.Disconnected and then the auto-reconnect will do its thing.
 		cli.Log.Warnf("Got 503 stream error, assuming automatic reconnect will handle it")
-	case cli.RefreshCAT != nil && (code == events.ConnectFailureCATInvalid.NumberString() || code == events.ConnectFailureCATExpired.NumberString()):
+	case code == events.ConnectFailureCATInvalid.NumberString() || code == events.ConnectFailureCATExpired.NumberString():
 		cli.Log.Infof("Got %s stream error, refreshing CAT before reconnecting...", code)
 		cli.socketLock.RLock()
 		defer cli.socketLock.RUnlock()
-		err := cli.RefreshCAT(ctx)
-		if err != nil {
-			cli.Log.Errorf("Failed to refresh CAT: %v", err)
-			cli.expectDisconnect()
-			cli.dispatchEventAsync(&events.CATRefreshError{Error: err})
-		}
+		cli.refreshCAT(ctx)
 	default:
 		cli.Log.Errorf("Unknown stream error: %s", node)
 		cli.dispatchEventAsync(&events.StreamError{Code: code, Raw: node})
@@ -141,17 +136,24 @@ func (cli *Client) handleConnectFailure(ctx context.Context, node *waBinary.Node
 		cli.dispatchEventAsync(&events.ClientOutdated{})
 	} else if reason == events.ConnectFailureCATInvalid || reason == events.ConnectFailureCATExpired {
 		cli.Log.Infof("Got %d/%s connect failure, refreshing CAT before reconnecting...", int(reason), message)
-		err := cli.RefreshCAT(ctx)
-		if err != nil {
-			cli.Log.Errorf("Failed to refresh CAT: %v", err)
-			cli.expectDisconnect()
-			cli.dispatchEventAsync(&events.CATRefreshError{Error: err})
-		}
+		cli.refreshCAT(ctx)
 	} else if willAutoReconnect {
 		cli.Log.Warnf("Got %d/%s connect failure, assuming automatic reconnect will handle it", int(reason), message)
 	} else {
 		cli.Log.Warnf("Unknown connect failure: %s", node)
 		cli.dispatchEventAsync(&events.ConnectFailure{Reason: reason, Message: message, Raw: node})
+	}
+}
+
+func (cli *Client) refreshCAT(ctx context.Context) {
+	err := ErrCATRefreshUnavailable
+	if cli.RefreshCAT != nil {
+		err = cli.RefreshCAT(ctx)
+	}
+	if err != nil {
+		cli.Log.Errorf("Failed to refresh CAT: %v", err)
+		cli.expectDisconnect()
+		cli.dispatchConnectionEventAsync(ctx, &events.CATRefreshError{Error: err})
 	}
 }
 
@@ -210,6 +212,9 @@ func (cli *Client) handleConnectSuccess(ctx context.Context, node *waBinary.Node
 		}
 		cli.dispatchConnectionEvent(ctx, &events.Connected{})
 		cli.closeSocketWaitChan()
+		if cli.UnifiedSessionInterval > 0 {
+			cli.sendUnifiedSessionContext(ctx, true)
+		}
 	})
 }
 

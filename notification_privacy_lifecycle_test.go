@@ -250,7 +250,7 @@ func TestFinalPrivacyUnifiedBackgroundReuseAndJoin(t *testing.T) {
 		t.Fatal("background semantics/value lost")
 	}
 	c.Disconnect()
-	if !c.startUnifiedSession() {
+	if !c.startUnifiedSession(false) {
 		t.Fatal("ordinary disconnect sealed reuse")
 	}
 	select {
@@ -263,7 +263,7 @@ func TestFinalPrivacyUnifiedBackgroundReuseAndJoin(t *testing.T) {
 	}
 	finalTestBlocked(t, c)
 	finalTestWait(t, inherited.Done())
-	if c.startUnifiedSession() {
+	if c.startUnifiedSession(false) {
 		t.Fatal("unified launch after seal")
 	}
 	unblock()

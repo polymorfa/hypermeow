@@ -521,7 +521,9 @@ func (cli *Client) handleRetryReceiptRemote(ctx context.Context, receipt *events
 		}
 		req.Bundle = bundle
 	}
-	if receipt.Sender.Server == types.DefaultUserServer {
+	if hostedSender, ok := rawHostedSender(node); ok {
+		req.EncryptionJID = cli.hostedSignalJID(ctx, hostedSender)
+	} else if receipt.Sender.Server == types.DefaultUserServer {
 		if lid, err := cli.Store.LIDs.GetLIDForPN(ctx, receipt.Sender); err != nil {
 			cli.Log.Warnf("Failed to get LID for %s: %v", receipt.Sender, err)
 		} else if !lid.IsEmpty() {
