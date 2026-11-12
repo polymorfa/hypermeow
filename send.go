@@ -1016,6 +1016,8 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 		return "image"
 	case msg.StickerMessage != nil:
 		return "sticker"
+	case msg.StickerPackMessage != nil:
+		return "sticker_pack"
 	case msg.DocumentMessage != nil:
 		return "document"
 	case msg.AudioMessage != nil:

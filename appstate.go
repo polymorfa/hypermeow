@@ -74,7 +74,7 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	wantSnapshot := fullSync
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if fullSync && !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync {
+	if fullSync && !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync && !cli.EmitStickerEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	for hasMore {
@@ -118,7 +118,7 @@ func (cli *Client) handleAppStateRecovery(
 	}
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync {
+	if !cli.EmitAppStateEventsOnFullSync && !cli.EmitLabelEventsOnFullSync && !cli.EmitQuickReplyEventsOnFullSync && !cli.EmitStickerEventsOnFullSync {
 		eventsToDispatchPtr = nil
 	}
 	snapshot, err := appstate.ParseRecovery(result[0].GetSyncdSnapshotFatalRecoveryResponse())
@@ -215,6 +215,9 @@ func (cli *Client) shouldEmitFullSyncMutation(index []string) bool {
 	if len(index) == 0 {
 		return false
 	}
+	if cli.EmitStickerEventsOnFullSync && (index[0] == appstate.IndexFavoriteSticker || index[0] == appstate.IndexRemoveRecentSticker) {
+		return true
+	}
 	if cli.EmitQuickReplyEventsOnFullSync && index[0] == appstate.IndexQuickReply {
 		return true
 	}
@@ -304,6 +307,16 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 
 	var storeUpdateError error
 	switch mutation.Index[0] {
+	case appstate.IndexFavoriteSticker:
+		if len(mutation.Index) != 2 || mutation.Index[1] == "" || (mutation.Action.GetStickerAction() == nil || mutation.Action.GetStickerAction().IsFavorite == nil) {
+			return
+		}
+		eventToDispatch = &events.FavoriteSticker{FileSHA256: mutation.Index[1], Timestamp: ts, Action: mutation.Action.GetStickerAction(), FromFullSync: fullSync}
+	case appstate.IndexRemoveRecentSticker:
+		if len(mutation.Index) != 2 || mutation.Index[1] == "" || mutation.Action.GetRemoveRecentStickerAction() == nil {
+			return
+		}
+		eventToDispatch = &events.RemoveRecentSticker{FileSHA256: mutation.Index[1], Timestamp: ts, Action: mutation.Action.GetRemoveRecentStickerAction(), FromFullSync: fullSync}
 	case appstate.IndexMute:
 		act := mutation.Action.GetMuteAction()
 		eventToDispatch = &events.Mute{JID: jid, Timestamp: ts, Action: act, FromFullSync: fullSync}

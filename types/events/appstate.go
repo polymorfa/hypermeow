@@ -212,3 +212,21 @@ type AppStateSyncError struct {
 	Error    error
 	FullSync bool
 }
+
+// FavoriteSticker is emitted for a favorite/unfavorite mutation, including full snapshots.
+// FileSHA256 is the base64-encoded plaintext sticker hash, not a chat JID.
+type FavoriteSticker struct {
+	FileSHA256   string
+	Timestamp    time.Time
+	Action       *waSyncAction.StickerAction
+	FromFullSync bool
+}
+
+// RemoveRecentSticker removes only recents no newer than Action.LastStickerSentTS.
+// This does not delete the sticker from favorites.
+type RemoveRecentSticker struct {
+	FileSHA256   string
+	Timestamp    time.Time
+	Action       *waSyncAction.RemoveRecentStickerAction
+	FromFullSync bool
+}
