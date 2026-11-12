@@ -18,6 +18,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Reject guest registration redirects and bound guest prekey uploads and retained keys.
+
 - Preserve guest identity-reader trust and deletion fences during identity verification.
 
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.

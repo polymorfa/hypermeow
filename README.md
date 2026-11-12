@@ -274,3 +274,11 @@ guest login payload, turns off the post-connect passive IQ and uses the
 registered browser's User-Agent. `Request.BaseURL` points registration at
 another host, such as a simulator. A guest can only join the
 call link it registered for. Messaging, groups and app state don't apply.
+
+Guest registration never follows HTTP redirects, including with a supplied
+HTTP client. Point `BaseURL` directly at the intended registration service.
+The in-memory guest store retains at most 1024 unconsumed prekeys, including
+at most 64 retry keys. Upload attempts are at least one second apart; new
+upload batches are generated at most once per minute. A failed upload can
+retry its pending keys after the shorter interval. These local resource limits
+return an error when reached and never evict an unconsumed key.
