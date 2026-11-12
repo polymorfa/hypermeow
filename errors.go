@@ -25,7 +25,8 @@ var (
 	ErrNotLoggedIn     = errors.New("the store doesn't contain a device JID")
 	ErrMessageTimedOut = errors.New("timed out waiting for message send response")
 
-	ErrAlreadyConnected = errors.New("websocket is already connected")
+	ErrAlreadyConnected      = errors.New("websocket is already connected")
+	ErrCATRefreshUnavailable = errors.New("CAT refresh callback is not configured")
 
 	ErrPhoneNumberTooShort           = errors.New("phone number too short")
 	ErrPhoneNumberIsNotInternational = errors.New("international phone number required (must not start with 0)")

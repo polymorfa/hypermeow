@@ -20,6 +20,7 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Decode newsletter milestone positions from either quoted or numeric integers without losing precision.
 - Preserve reported newsletter counter presence, explicit zeros and distinct view definitions. Omit malformed or ambiguous observations, including duplicate view definitions, instead of reporting fabricated zeros or truncated reaction lists.
 - Copy group-cache metadata under its lock before send-permission checks, including participant and admin slices, so notifications cannot race those reads.
+- Stop automatic reconnect and emit `CATRefreshError` to generic and connection-scoped observers when a 413/414 failure cannot refresh its token, including when `RefreshCAT` is unset. The missing callback returns `ErrCATRefreshUnavailable` instead of retrying unchanged credentials.
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
 - Report the destination in `SendFBMessage` responses and decrypt full bot edits using their target message ID.
