@@ -1,5 +1,6 @@
 <!--
 Copyright (c) 2026 Rajeh Taher
+Copyright (c) 2026 Polymorfa (Softium LLC)
 Licensed under the MIT License. See LICENSE-MIT for details.
 -->
 
@@ -25,6 +26,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Sending a message wrapped in `AssociatedChildMessage` (for example the HD half of an image or video dual upload) now derives the stanza `type` and enc `mediatype` from the child, as WhatsApp Web does, so an HD image child is sent as `type="media"` with `mediatype="image"` instead of `type="text"`. Retry receipts use the same attributes.
 
 ### Changed
+
+- Include Softium LLC alongside Polymorfa in fork-owned notices and generated MEX attribution, preserving upstream attribution and license terms.
 
 - Sync upstream protocol definitions and runtime changes through `c386243a72bacad080ba2938b37e1e4e0f1ca3b2`, while retaining HyperMeow's module path, Signal fork, bounded queues, and SQL batching.
 - Require Go 1.26 and select Go 1.27.1 as the preferred toolchain.
