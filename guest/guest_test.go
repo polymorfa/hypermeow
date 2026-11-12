@@ -5,6 +5,7 @@
 package guest
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -19,10 +20,301 @@ import (
 	"testing"
 	"time"
 
+	"github.com/polymorfa/libsignal-protocol-go/ecc"
+	"github.com/polymorfa/libsignal-protocol-go/keys/identity"
+	"github.com/polymorfa/libsignal-protocol-go/keys/prekey"
+	"github.com/polymorfa/libsignal-protocol-go/protocol"
+	"github.com/polymorfa/libsignal-protocol-go/session"
+	"github.com/polymorfa/libsignal-protocol-go/util/optional"
+
 	"github.com/polymorfa/hypermeow/proto/waWa6"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 )
+
+func guestSignalUsage(t *testing.T, m *memoryStore) (int, int64) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var size int64
+	for address := range m.identities {
+		size += int64(len(address) + 32)
+	}
+	for address, value := range m.sessions {
+		size += int64(len(address)) + int64(len(value))
+	}
+	for address, value := range m.senderKeys {
+		size += int64(len(address)) + int64(len(value))
+	}
+	if size != m.signalBytes {
+		t.Fatalf("Signal byte accounting mismatch: tracked=%d stored=%d", m.signalBytes, size)
+	}
+	return len(m.identities) + len(m.sessions) + len(m.senderKeys), size
+}
+
+func TestGuestSignalStoreRejectsOversizedAddresses(t *testing.T) {
+	ctx := context.Background()
+	address := strings.Repeat("1", maxGuestSignalAddressBytes+1)
+	for _, write := range []func(*memoryStore) error{
+		func(m *memoryStore) error { return m.PutIdentity(ctx, address, [32]byte{1}) },
+		func(m *memoryStore) error { _, err := m.EnsureIdentity(ctx, address, [32]byte{1}, 0); return err },
+		func(m *memoryStore) error { _, err := m.IsTrustedIdentity(ctx, address, [32]byte{1}); return err },
+		func(m *memoryStore) error { return m.PutSession(ctx, address, []byte{1}) },
+		func(m *memoryStore) error { return m.PutManySessions(ctx, map[string][]byte{address: {1}}) },
+		func(m *memoryStore) error { return m.PutSenderKey(ctx, address, "1:0", []byte{1}) },
+		func(m *memoryStore) error { return m.PutSenderKey(ctx, "call", address, []byte{1}) },
+	} {
+		m := newMemoryStore()
+		if err := write(m); !errors.Is(err, errGuestSignalLimit) {
+			t.Fatal("oversized Signal address was accepted")
+		}
+		if entries, size := guestSignalUsage(t, m); entries != 0 || size != 0 {
+			t.Fatal("rejected Signal address was retained")
+		}
+	}
+}
+
+func TestGuestSignalStoreSharesEntryBudget(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	for i := range maxGuestSignalEntries - 2 {
+		if err := m.PutSession(ctx, strconv.Itoa(i)+":0", []byte{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.PutIdentity(ctx, "identity:0", [32]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutSenderKey(ctx, "call", "sender:0", []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutIdentity(ctx, "new:0", [32]byte{2}); !errors.Is(err, errGuestSignalLimit) {
+		t.Fatal("identity write bypassed the shared entry budget")
+	}
+	if _, err := m.EnsureIdentity(ctx, "new:1", [32]byte{2}, 0); !errors.Is(err, errGuestSignalLimit) {
+		t.Fatal("identity reader bypassed the shared entry budget")
+	}
+	if err := m.PutSession(ctx, "0:0", []byte{2}); err != nil {
+		t.Fatal("existing session could not update at the entry limit")
+	}
+	if err := m.PutIdentity(ctx, "identity:0", [32]byte{1}); err != nil {
+		t.Fatal("existing identity could not update at the entry limit")
+	}
+	if err := m.DeleteSession(ctx, "0:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutIdentity(ctx, "new:0", [32]byte{2}); err != nil {
+		t.Fatal("session deletion did not free shared capacity")
+	}
+	if err := m.DeleteIdentity(ctx, "new:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutSession(ctx, "replacement:0", []byte{3}); err != nil {
+		t.Fatal("identity deletion did not free shared capacity")
+	}
+	if entries, size := guestSignalUsage(t, m); entries != maxGuestSignalEntries || size > maxGuestSignalBytes {
+		t.Fatal("Signal store exceeded its shared budget")
+	}
+}
+
+func TestGuestSignalStoreByteBudgetAndAtomicBatches(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	if err := m.PutSession(ctx, "1:0", make([]byte, maxGuestSignalBytes-len("1:0"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutSenderKey(ctx, "call", "2:0", []byte{1}); !errors.Is(err, errGuestSignalLimit) {
+		t.Fatal("sender-key write bypassed the shared byte budget")
+	}
+	if err := m.PutSession(ctx, "1:0", make([]byte, maxGuestSignalBytes)); !errors.Is(err, errGuestSignalLimit) {
+		t.Fatal("oversized replacement was accepted")
+	}
+	if err := m.PutManySessions(ctx, map[string][]byte{"1:0": {1}, "2:0": make([]byte, maxGuestSignalBytes)}); !errors.Is(err, errGuestSignalLimit) {
+		t.Fatal("oversized batch was accepted")
+	}
+	if entries, size := guestSignalUsage(t, m); entries != 1 || size != maxGuestSignalBytes {
+		t.Fatal("rejected batch or replacement changed the store")
+	}
+	if err := m.PutManySessions(ctx, map[string][]byte{"1:0": {1}, "2:0": {2}}); err != nil {
+		t.Fatal("atomic shrink-and-add batch could not use freed capacity")
+	}
+	if err := m.DeleteAllSessions(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, size := guestSignalUsage(t, m); entries != 1 || size != 4 {
+		t.Fatal("session deletion retained byte usage")
+	}
+}
+
+func TestGuestSignalStoreDeletionFreesIdentityBudget(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	for _, address := range []string{"123:0", "123:1", "1234:0"} {
+		if err := m.PutIdentity(ctx, address, [32]byte{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored, generation, err := m.GetManyIdentities(ctx, []string{"123:0", "123:1"})
+	if err != nil || len(stored) != 2 {
+		t.Fatal("stored identities were not available before deletion")
+	}
+	if err = m.DeleteAllIdentities(ctx, "123"); err != nil {
+		t.Fatal(err)
+	}
+	if trusted, err := m.EnsureIdentity(ctx, "123:0", [32]byte{2}, generation); err != nil || trusted {
+		t.Fatal("stale identity generation was accepted")
+	}
+	if entries, size := guestSignalUsage(t, m); entries != 1 || size != int64(len("1234:0")+32) {
+		t.Fatal("identity deletion retained budget or removed another user")
+	}
+	if err = m.DeleteIdentity(ctx, "1234:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.DeleteIdentity(ctx, "1234:0"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, size := guestSignalUsage(t, m); entries != 0 || size != 0 {
+		t.Fatal("repeated identity deletion corrupted the budget")
+	}
+	if err = m.PutIdentity(ctx, strings.Repeat("1", maxGuestSignalAddressBytes), [32]byte{1}); err != nil {
+		t.Fatal("address at the permitted boundary was rejected")
+	}
+	guestSignalUsage(t, m)
+}
+
+func TestGuestSignalStoreConcurrentWritesRespectBudget(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	var workers sync.WaitGroup
+	for worker := range 64 {
+		workers.Go(func() {
+			for offset := range 32 {
+				address := strconv.Itoa(worker*32+offset) + ":0"
+				var err error
+				switch offset % 3 {
+				case 0:
+					err = m.PutIdentity(ctx, address, [32]byte{1})
+				case 1:
+					err = m.PutSession(ctx, address, []byte{1})
+				case 2:
+					err = m.PutSenderKey(ctx, "call", address, []byte{1})
+				}
+				if err != nil && !errors.Is(err, errGuestSignalLimit) {
+					t.Error("unexpected concurrent store error")
+				}
+			}
+		})
+	}
+	workers.Wait()
+	if entries, size := guestSignalUsage(t, m); entries != maxGuestSignalEntries || size > maxGuestSignalBytes {
+		t.Fatal("concurrent stores exceeded their shared budget")
+	}
+}
+
+func newGuestSignalExchange(t *testing.T) (*store.Device, *session.Cipher, uint32) {
+	t.Helper()
+	receiver, sender := NewDevice(nil), NewDevice(nil)
+	key, err := receiver.PreKeys.GenOnePreKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := prekey.NewBundle(receiver.RegistrationID, 0, optional.NewOptionalUint32(key.KeyID),
+		receiver.SignedPreKey.KeyID, ecc.NewDjbECPublicKey(*key.Pub), ecc.NewDjbECPublicKey(*receiver.SignedPreKey.Pub),
+		*receiver.SignedPreKey.Signature, identity.NewKey(ecc.NewDjbECPublicKey(*receiver.IdentityKey.Pub)))
+	address := protocol.NewSignalAddress("200", 0)
+	builder := session.NewBuilderFromSignal(sender, address, store.SignalProtobufSerializer)
+	if err = builder.ProcessBundle(context.Background(), bundle); err != nil {
+		t.Fatal("could not establish the synthetic Signal sender")
+	}
+	return receiver, session.NewCipher(builder, address), key.KeyID
+}
+
+func TestGuestSignalBadMACCannotGrowIdentityStore(t *testing.T) {
+	for _, large := range []bool{false, true} {
+		t.Run("large="+strconv.FormatBool(large), func(t *testing.T) {
+			device, sender, preKeyID := newGuestSignalExchange(t)
+			serializer := store.SignalProtobufSerializer
+			message, err := sender.Encrypt(context.Background(), []byte("synthetic fixture"))
+			if err != nil {
+				t.Fatal("could not encrypt the synthetic prekey message")
+			}
+			outer, err := serializer.PreKeySignalMessage.Deserialize(message.Serialize())
+			if err != nil {
+				t.Fatal("could not parse the synthetic prekey message")
+			}
+			inner, err := serializer.SignalMessage.Deserialize(outer.Message)
+			if err != nil || len(inner.Mac) == 0 {
+				t.Fatal("synthetic Signal message has no MAC")
+			}
+			inner.Mac[0] ^= 1
+			outer.Message = serializer.SignalMessage.Serialize(inner)
+			bad, err := protocol.NewPreKeySignalMessageFromStruct(outer, serializer.PreKeySignalMessage, serializer.SignalMessage)
+			if err != nil {
+				t.Fatal("could not construct the bad-MAC fixture")
+			}
+			count := maxGuestSignalEntries + 8
+			if large {
+				count = 4
+			}
+			for i := range count {
+				name := strconv.Itoa(i + 1000)
+				if large {
+					name = strings.Repeat("1", 1<<20) + name
+				}
+				address := protocol.NewSignalAddress(name, 0)
+				builder := session.NewBuilderFromSignal(device, address, serializer)
+				if _, err = session.NewCipher(builder, address).DecryptMessage(context.Background(), bad); err == nil {
+					t.Fatal("bad-MAC message was accepted")
+				}
+			}
+			m := device.Identities.(*memoryStore)
+			entries, size := guestSignalUsage(t, m)
+			if entries > maxGuestSignalEntries || size > maxGuestSignalBytes || (large && entries != 0) {
+				t.Fatalf("bad-MAC messages retained excessive state: entries=%d bytes=%d", entries, size)
+			}
+			if len(m.sessions) != 0 {
+				t.Fatal("failed decrypt stored a Signal session")
+			}
+			if key, _ := device.PreKeys.GetPreKey(context.Background(), preKeyID); key == nil {
+				t.Fatal("failed decrypt consumed the prekey")
+			}
+		})
+	}
+}
+
+func TestGuestSignalValidExchangeStillWorks(t *testing.T) {
+	device, sender, preKeyID := newGuestSignalExchange(t)
+	serializer := store.SignalProtobufSerializer
+	address := protocol.NewSignalAddress("100", 0)
+	builder := session.NewBuilderFromSignal(device, address, serializer)
+	receiver := session.NewCipher(builder, address)
+	first, err := sender.Encrypt(context.Background(), []byte("first fixture"))
+	if err != nil {
+		t.Fatal("synthetic sender failed to encrypt")
+	}
+	plain, err := receiver.DecryptMessage(context.Background(), first.(*protocol.PreKeySignalMessage))
+	if err != nil || !bytes.Equal(plain, []byte("first fixture")) {
+		t.Fatal("valid prekey message failed")
+	}
+	if key, _ := device.PreKeys.GetPreKey(context.Background(), preKeyID); key != nil {
+		t.Fatal("successful prekey decrypt did not consume the prekey")
+	}
+	reply, err := receiver.Encrypt(context.Background(), []byte("reply fixture"))
+	if err != nil {
+		t.Fatal("synthetic receiver failed to reply")
+	}
+	if _, err = sender.Decrypt(context.Background(), reply.(*protocol.SignalMessage)); err != nil {
+		t.Fatal("synthetic sender failed to decrypt the reply")
+	}
+	next, err := sender.Encrypt(context.Background(), []byte("next fixture"))
+	if err != nil {
+		t.Fatal("synthetic sender failed to encrypt the next message")
+	}
+	plain, err = receiver.Decrypt(context.Background(), next.(*protocol.SignalMessage))
+	if err != nil || !bytes.Equal(plain, []byte("next fixture")) {
+		t.Fatal("established Signal session failed")
+	}
+}
 
 // newTestDevice is a NewDevice with fixed registration and prekey IDs, so the
 // key encodings can be checked byte for byte.

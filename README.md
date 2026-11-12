@@ -302,3 +302,10 @@ at most 64 retry keys. Upload attempts are at least one second apart; new
 upload batches are generated at most once per minute. A failed upload can
 retry its pending keys after the shorter interval. These local resource limits
 return an error when reached and never evict an unconsumed key.
+
+Signal identities, sessions and sender keys share a limit of 1024 entries and
+16 MiB of stored key/value data, in addition to the prekey limit. Each address
+is limited to 512 bytes. Writes beyond those limits return an error without
+evicting trusted identities. Replacing existing state or deleting identities
+and sessions releases the corresponding capacity. These are local policies
+for one-call guests, not WhatsApp server limits.
