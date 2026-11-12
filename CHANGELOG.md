@@ -16,6 +16,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Add `types.AEAAccountType` (`not_set`, `e2ee`, `hybrid_e2ee`, `non_e2ee`) on `BusinessProfile`, `UserInfo` and `IsOnWhatsAppResponse`, read from `<aea_account_type>` in business profile and usync business results. `GetBusinessProfile` is the reliable source: `GetUserInfo` and `IsOnWhatsApp` do not request the business profile, so their field is set only when the server includes it.
 - Add `VerifiedName.Serial`, `Issuer`, `PrivacyMode`, `IsAPI` and `IsBusinessApp`, typed actual-actor and host-storage values, and `MessageInfo.BizPrivacyMode` from `<biz>` on business messages.
 - Add `UndecryptableMessage.IsHostedUnavailable` for `<unavailable hosted="true"/>`.
+- Add call-link guest registration and login with one-call in-memory Signal stores.
+
 - Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
 - `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
 
@@ -35,6 +37,9 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Parse newsletter live updates inside `messages` wrappers and retain forward counts, while preserving the legacy unwrapped form.
 - Preserve the upstream `ErrRecipientNotOnWhatsApp` error through HyperMeow's LID resolver.
 - Apply participant-hash device-cache invalidation to the fork's LID, hosted and bot recipients in both send paths.
+- Reject guest registration redirects and bound guest prekey uploads and retained keys.
+
+- Preserve guest identity-reader trust and deletion fences during identity verification.
 
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
