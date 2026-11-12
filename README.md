@@ -224,6 +224,8 @@ copyright notices and remain licensed under [MPL-2.0](LICENSE).
 Polymorfa-added files: Copyright (c) 2026 Rajeh Taher, licensed under the
 [MIT License](LICENSE-MIT).
 
+Copyright (c) 2026 Polymorfa (Softium LLC).
+
 See [LICENSING.md](LICENSING.md) for the file-level boundary.
 
 ### Connection lifecycle observers
