@@ -273,6 +273,11 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 			if err != nil {
 				cli.Log.Warnf("Failed to parse verified_name node in %s: %v", info.ID, err)
 			}
+		case "biz":
+			// WAWebHandleMsgParser:316-327 ignores privacy mode on bot messages.
+			if !info.Sender.IsBot() {
+				info.BizPrivacyMode = parseBusinessPrivacyMode(child)
+			}
 		case "bot":
 			info.MsgBotInfo, err = cli.parseMsgBotInfo(child)
 			if err != nil {
@@ -291,6 +296,17 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 			if mediaType, ok := child.AttrGetter().GetString("mediatype", false); ok {
 				info.MediaType = mediaType
 			}
+		}
+	}
+	if info.VerifiedName != nil {
+		// Web reads the level and serial from the message stanza itself
+		// (<message verified_level verified_name>); fill them in when the
+		// certificate node doesn't carry them.
+		if info.VerifiedName.VerifiedLevel == "" {
+			info.VerifiedName.VerifiedLevel = ag.OptionalString("verified_level")
+		}
+		if serial := ag.OptionalString("verified_name"); serial != "" {
+			info.VerifiedName.Serial = serial
 		}
 	}
 
@@ -351,9 +367,12 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	}()
 	unavailableNode, ok := node.GetOptionalChildByTag("unavailable")
 	if ok && len(node.GetChildrenByTag("enc")) == 0 {
-		uType := events.UnavailableType(unavailableNode.AttrGetter().String("type"))
-		cli.Log.Warnf("Unavailable message %s from %s (type: %q)", info.ID, info.SourceString(), uType)
-		handlerFailed := cli.dispatchEvent(&events.UndecryptableMessage{Info: *info, IsUnavailable: true, UnavailableType: uType})
+		uag := unavailableNode.AttrGetter()
+		uType := events.UnavailableType(uag.String("type"))
+		// WAWebHandleMsgParser:245-248 compares the raw attribute to "true".
+		isHosted := uag.OptionalString("hosted") == "true"
+		cli.Log.Warnf("Unavailable message %s from %s (type: %q, hosted: %t)", info.ID, info.SourceString(), uType, isHosted)
+		handlerFailed := cli.dispatchEvent(&events.UndecryptableMessage{Info: *info, IsUnavailable: true, UnavailableType: uType, IsHostedUnavailable: isHosted})
 		if handlerFailed {
 			cli.Log.Warnf("Handler for unavailable message %s failed", info.ID)
 			return
@@ -369,7 +388,9 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 	cli.Log.Debugf("Decrypting message from %s", info.SourceString())
 	containsDirectMsg := false
 	senderEncryptionJID := info.Sender
-	if info.Sender.Server == types.DefaultUserServer && !info.Sender.IsBot() {
+	if hostedSender, ok := rawHostedSender(node); ok {
+		senderEncryptionJID = cli.hostedSignalJID(ctx, hostedSender)
+	} else if info.Sender.Server == types.DefaultUserServer && !info.Sender.IsBot() {
 		if info.SenderAlt.Server == types.HiddenUserServer {
 			senderEncryptionJID = info.SenderAlt
 			cli.migrateSessionStore(ctx, info.Sender, info.SenderAlt)

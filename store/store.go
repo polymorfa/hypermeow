@@ -265,6 +265,11 @@ type Device struct {
 	LIDMigrationTimestamp int64
 	CompanionMetaNonce    string
 
+	// IsHosted is true when this companion was paired to a hosted (Cloud API
+	// coexistence) account, i.e. the pair-success ADV identity used
+	// accountType HOSTED. WhatsApp Web stores the same fact as isHostedMeAccount.
+	IsHosted bool
+
 	FacebookUUID uuid.UUID
 
 	Initialized bool
