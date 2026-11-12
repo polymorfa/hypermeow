@@ -11,10 +11,14 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Added
 
+- Add call-link guest registration and login with one-call in-memory Signal stores.
+
 - Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
 - `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
 
 ### Fixed
+
+- Preserve guest identity-reader trust and deletion fences during identity verification.
 
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
