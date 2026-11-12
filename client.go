@@ -120,6 +120,7 @@ type Client struct {
 	EnableDecryptedEventBuffer    bool
 	synchronousMessageNameUpdates atomic.Bool
 	lastDecryptedBufferClear      time.Time
+	unifiedSessionLock            sync.Mutex
 	lastUnifiedSessionSend        time.Time
 	UnifiedSessionInterval        time.Duration
 
@@ -1345,10 +1346,13 @@ func (cli *Client) sendUnifiedSession(checkLastSend bool) {
 	if cli == nil {
 		return
 	}
+	cli.unifiedSessionLock.Lock()
 	if checkLastSend && time.Since(cli.lastUnifiedSessionSend) < cli.UnifiedSessionInterval {
+		cli.unifiedSessionLock.Unlock()
 		return
 	}
 	cli.lastUnifiedSessionSend = time.Now()
+	cli.unifiedSessionLock.Unlock()
 	node := waBinary.Node{
 		Tag:   "ib",
 		Attrs: waBinary.Attrs{},
