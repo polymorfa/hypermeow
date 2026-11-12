@@ -456,10 +456,16 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	case <-timeoutChan:
 		cli.cancelResponse(req.ID, respChan)
 		err = ErrMessageTimedOut
+		if req.NativeSend != nil {
+			err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, err)
+		}
 		return
 	case <-ctx.Done():
 		cli.cancelResponse(req.ID, respChan)
 		err = ctx.Err()
+		if req.NativeSend != nil {
+			err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, err)
+		}
 		return
 	}
 	resp.DebugTimings.Resp = time.Since(start)
@@ -481,6 +487,9 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	resp.Timestamp = ag.UnixTime("t")
 	if errorCode := ag.Int("error"); errorCode != 0 {
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
+		if req.NativeSend != nil {
+			err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, err)
+		}
 	}
 	expectedPHash := ag.OptionalString("phash")
 	if setParticipantHashMismatch(&resp, phash, expectedPHash) {

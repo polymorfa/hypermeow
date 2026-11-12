@@ -37,7 +37,9 @@ var nativeAdmitTimeout = NativeAdmitTimeout
 // in sendDM, after all preparation awaits, without any socket or Noise lock held.
 //
 // Admit must call write at most once, synchronously, before returning. Returning without
-// calling write refuses the send. write refuses once Admit has returned. sendCtx should be
+// calling write refuses the send. Call write synchronously from Admit: a write that is not
+// synchronized before Admit returns may either refuse or complete, but no write can start or
+// still be running after the send call returns. sendCtx should be
 // cancelled by the integrator when authority is revoked: the existing Noise writer checks it
 // after taking its write lock and before encrypting, so a revocation while queued refuses the
 // write without consuming a nonce.
@@ -143,7 +145,12 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 		return data, fmt.Errorf("%w: handoff did not complete", ErrNativeSendUncertain)
 	}
 	if writeErr != nil || admitErr != nil {
-		return data, fmt.Errorf("%w: %w", ErrNativeSendUncertain, errors.Join(writeErr, admitErr))
+		// Never expose ErrNativeSendRefused after handoff: a caller must not mistake a possibly
+		// delivered message for one that was refused.
+		if writeErr != nil {
+			return data, fmt.Errorf("%w: %w (admission: %v)", ErrNativeSendUncertain, writeErr, admitErr)
+		}
+		return data, fmt.Errorf("%w: admission after handoff: %v", ErrNativeSendUncertain, admitErr)
 	}
 	return data, nil
 }
