@@ -264,3 +264,33 @@ Disconnect and wait for owned work to settle before accepting replacement
 connection authority. `FrameSocket.SetOnDisconnect` replaces the callback under the socket lock; assign
 the legacy field only before connecting.
 These additions are unreleased until their reviewed main commit is adopted.
+
+## Call-link guests
+
+The `guest` package registers a one-time guest identity for a WhatsApp call
+link and logs it in without pairing a phone. The identity lives only in
+memory and only for one call:
+
+```go
+import "github.com/polymorfa/hypermeow/guest"
+
+device := guest.NewDevice(nil) // fresh keys, in-memory stores
+reg, err := guest.Register(ctx, device, guest.Request{
+    InviteCode: "https://call.whatsapp.com/voice/TOKEN",
+    Name:       "Ada",
+})
+if err != nil {
+    return err
+}
+client, err := guest.NewClient(device, reg, nil)
+if err != nil {
+    return err
+}
+err = client.Connect()
+```
+
+`NewClient` applies the guest identity before creating the client, sets the
+guest login payload, turns off the post-connect passive IQ and uses the
+registered browser's User-Agent. `Request.BaseURL` points registration at
+another host, such as a simulator. A guest can only join the
+call link it registered for. Messaging, groups and app state don't apply.
