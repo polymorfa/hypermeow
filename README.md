@@ -9,7 +9,7 @@ The upstream project remains the smaller choice for applications that only need 
 
 ## Why HyperMeow instead of upstream WhatsMeow?
 
-This comparison was last verified against upstream `main` at [`4b4986f`](https://github.com/tulir/whatsmeow/commit/4b4986ff80bcd65d6e7d1b3a860fd254af44c519) on 2026-10-27. Each upstream sync must update this section when the difference changes.
+This comparison was last verified against upstream `main` at [`c88388f`](https://github.com/tulir/whatsmeow/commit/c88388f983b4bc43dfd0bcc2b46969fcde82d61f) on 2026-11-12. Each upstream sync must update this section when the difference changes.
 
 | Area | HyperMeow advantage over upstream `main` |
 | --- | --- |

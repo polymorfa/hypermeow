@@ -32,12 +32,10 @@ type FrameSocket struct {
 	HTTPClient  *http.Client
 
 	Frames chan []byte
-	// Use SetOnDisconnect to change the handler while the socket is in use.
-	OnDisconnect func(ctx context.Context, remote bool)
-
 	Header []byte
 
-	closed atomic.Bool
+	onDisconnect atomic.Pointer[func(ctx context.Context, remote bool)]
+	closed       atomic.Bool
 
 	incomingLength int
 	receivedLength int
@@ -70,7 +68,11 @@ func (fs *FrameSocket) IsConnected() bool {
 func (fs *FrameSocket) SetOnDisconnect(handler func(ctx context.Context, remote bool)) {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
-	fs.OnDisconnect = handler
+	if handler == nil {
+		fs.onDisconnect.Store(nil)
+	} else {
+		fs.onDisconnect.Store(&handler)
+	}
 }
 
 func (fs *FrameSocket) Close(code websocket.StatusCode) {
@@ -107,8 +109,8 @@ func (fs *FrameSocket) CloseWithReason(code websocket.StatusCode, reason string)
 	}
 	fs.cancel()
 	fs.cancel = nil
-	if fs.OnDisconnect != nil {
-		go fs.OnDisconnect(fs.parentCtx, code == 0)
+	if onDisconnect := fs.onDisconnect.Swap(nil); onDisconnect != nil {
+		go (*onDisconnect)(fs.parentCtx, code == 0)
 	}
 }
 

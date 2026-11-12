@@ -37,7 +37,8 @@ var (
 
 	ErrNoPrivacyToken = errors.New("no privacy token stored")
 
-	ErrAppStateUpdate = errors.New("server returned error updating app state")
+	ErrAppStateUpdate      = errors.New("server returned error updating app state")
+	ErrAppStateRateLimited = errors.New("app state fetch is rate limited by the server")
 )
 
 // Errors that happen while confirming device pairing

@@ -26,7 +26,7 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Changed
 
-- Sync upstream protocol definitions and runtime changes through `4b4986ff80bcd65d6e7d1b3a860fd254af44c519`, including optional group-send permission checks, bot LID sending, unified-session sends and dependency updates, while retaining HyperMeow's module path, Signal fork, bounded caches, and strict stanza tag decoding. `ResolveLID` wraps `ErrRecipientNotOnWhatsApp` when the server returns no LID.
+- Sync upstream protocol definitions and runtime changes through `c88388f983b4bc43dfd0bcc2b46969fcde82d61f`, including optional group-send permission checks, bot LID sending, unified-session sends, app-state rate-limit backoff, handshake timeout reconnects, video streaming sidecars, verified business names in `GetUserInfo` and dependency updates, while retaining HyperMeow's module path, Signal fork, bounded caches, and strict stanza tag decoding. `ResolveLID` wraps `ErrRecipientNotOnWhatsApp` when the server returns no LID.
 - Require Go 1.26 and select Go 1.27.2 as the preferred toolchain.
 - Add `SendResponse.Chat`, `Client.PreKeysUploaded`, pairing-secret rotation events, rich-response types, and bot root-secret methods on `store.ChatSettingsStore`. SQL-backed stores upgrade to schema version 19.
 - Deprecate `SetGroupDescription` in favor of `SetGroupTopic`.

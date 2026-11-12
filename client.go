@@ -143,6 +143,7 @@ type Client struct {
 
 	appStateProc     *appstate.Processor
 	appStateSyncLock sync.Mutex
+	appStateBackoff  map[appstate.WAPatchName]time.Time
 
 	historySyncNotifications        chan historySyncNotification
 	historySyncHandlerStarted       atomic.Bool
@@ -403,6 +404,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		historySyncNotifications: make(chan historySyncNotification, 32),
 
 		GetMessageForRetry: func(requester, to types.JID, id types.MessageID) *waE2E.Message { return nil },
+		appStateBackoff:    make(map[appstate.WAPatchName]time.Time),
 
 		EnableAutoReconnect: true,
 		AutoTrustIdentity:   true,
@@ -625,7 +627,9 @@ func isRetryableConnectError(err error) bool {
 	if exhttp.IsNetworkError(err) {
 		return true
 	}
-	return errors.Is(err, socket.ErrDialFailed)
+	return errors.Is(err, socket.ErrDialFailed) ||
+		errors.Is(err, ErrHandshakeTimeout) ||
+		errors.Is(err, socket.ErrSocketClosed)
 }
 
 func (cli *Client) ConnectContext(ctx context.Context) error {
@@ -1280,7 +1284,7 @@ func (cli *Client) ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageIn
 				return nil, ErrNotLoggedIn
 			}
 		}
-	} else if chatJID.Server == types.DefaultUserServer || chatJID.Server == types.HiddenUserServer || chatJID.Server == types.NewsletterServer {
+	} else if chatJID.Server == types.DefaultUserServer || chatJID.Server == types.HiddenUserServer || chatJID.Server == types.NewsletterServer || chatJID.Server == types.BotServer {
 		info.Sender = chatJID
 	} else if webMsg.GetParticipant() != "" {
 		info.Sender, err = types.ParseJID(webMsg.GetParticipant())
