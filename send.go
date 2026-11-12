@@ -224,6 +224,9 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		}
 		hooks := *req.NativeSend
 		req.NativeSend = &hooks
+		// Library metadata (message secret, reporting token) must not leak into the caller's
+		// message, or a retry after refusal would fail validNativeText.
+		message = proto.Clone(message).(*waE2E.Message)
 	}
 	if to.Device > 0 && !req.Peer {
 		err = ErrRecipientADJID
