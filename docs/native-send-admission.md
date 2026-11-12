@@ -22,15 +22,17 @@ that delay.
 - `NativeAdmitTimeout` (2 s) is enforced. If `Admit` has not returned by then, the send is
   refused and `write` is closed, even if `Admit` ignores its context. A panic in `Admit` before
   `write` also refuses.
-- `write` closes when `Admit` returns or times out. A retained `write` called later is refused.
-  If `write` is running at that point, the wrapper waits for it, so no write can start or still
+- Call `write` synchronously from `Admit`. `write` closes when the send call stops waiting for
+  `Admit` (return or deadline). A `write` that is not synchronized before that point, such as one
+  from another goroutine, may either refuse or complete. Either way, no write can start or still
   be running after the send call returns.
 - `write(sendCtx)` calls `Entered()` and then hands the node to the existing sender with
   `sendCtx`. Cancel `sendCtx` when authority is revoked.
 - `Entered()` means the node was handed to the sender. Any failure after it, including a panic,
   returns `ErrNativeSendUncertain`: the message may have been delivered and must never be
-  resent. Errors returned after a successful handoff (ack timeout, context cancellation, a server
-  error code) are also post-handoff outcomes; classify them as unknown, never as not sent.
+  resent. For guarded sends, `SendMessage` also wraps the acknowledgment timeout, context
+  cancellation while waiting, a disconnect response and a server error code in
+  `ErrNativeSendUncertain`. After handoff, the result never matches `ErrNativeSendRefused`.
 
 ## Window after admission
 

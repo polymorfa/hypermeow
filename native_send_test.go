@@ -3,6 +3,7 @@ package whatsmeow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -223,5 +224,22 @@ func TestNativeSendAdmitPanicIsRefused(t *testing.T) {
 	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
 	if !errors.Is(err, ErrNativeSendRefused) || sends.Load() != 0 {
 		t.Fatalf("a panic before write must refuse: %v", err)
+	}
+}
+
+func TestNativeSendRefusalAfterHandoffIsOnlyUncertain(t *testing.T) {
+	var sends atomic.Int32
+	hooks := &NativeSendHooks{
+		Admit: func(_ context.Context, _ types.MessageID, write func(context.Context) error) error {
+			if err := write(context.Background()); err != nil {
+				return err
+			}
+			return fmt.Errorf("late check: %w", ErrNativeSendRefused)
+		},
+		Entered: func() {},
+	}
+	_, err := nativeTestClient(&sends, nil).sendNativeMessageNode(t.Context(), nativeTestNode, "native-1", hooks)
+	if !errors.Is(err, ErrNativeSendUncertain) || errors.Is(err, ErrNativeSendRefused) || sends.Load() != 1 {
+		t.Fatalf("an admission error after handoff must be uncertain only: %v", err)
 	}
 }
