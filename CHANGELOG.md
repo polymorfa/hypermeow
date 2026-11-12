@@ -16,6 +16,7 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Redact shared-device and root secrets from app-state mutations in trace logs.
 - Keep connection handler completion pending until an active handler exits, and process retired stream errors before automatic reconnect decisions. Manual disconnect retains its five-second wait bound.
 - Keep the newest pairing secret through bursts of rotation notifications and refresh the active QR code.
 - Report the destination in `SendFBMessage` responses and decrypt full bot edits using their target message ID.

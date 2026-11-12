@@ -17,6 +17,7 @@ import (
 	"github.com/polymorfa/hypermeow/appstate"
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/proto/waSyncAction"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
@@ -228,5 +229,28 @@ func TestResolveLIDRetainsUpstreamUnregisteredRecipientError(t *testing.T) {
 	_, err := cli.ResolveLID(context.Background(), types.NewJID("15550000001", types.DefaultUserServer))
 	if !errors.Is(err, ErrRecipientNotOnWhatsApp) {
 		t.Fatalf("missing USync LID lost upstream recipient error: %v", err)
+	}
+}
+
+func TestAppStateActionLogRedactsSecrets(t *testing.T) {
+	action := &waSyncAction.SyncActionValue{
+		SharedDeviceSecretAction: &waSyncAction.SharedDeviceSecretAction{Secret: []byte("shared"), TtlMS: proto.Int64(1)},
+		WasaRootSecretAction: &waSyncAction.WASARootSecretAction{Secrets: []*waSyncAction.WASARootSecretAction_RootSecretEntry{
+			{RootSecret: []byte("root")},
+		}},
+	}
+	logged := appStateActionForLog(action)
+	if logged.GetSharedDeviceSecretAction().GetSecret() != nil || logged.GetWasaRootSecretAction().GetSecrets()[0].GetRootSecret() != nil {
+		t.Fatal("trace log action kept secret material")
+	}
+	if logged.GetSharedDeviceSecretAction().GetTtlMS() != 1 {
+		t.Fatal("redaction dropped non-secret fields")
+	}
+	if string(action.GetSharedDeviceSecretAction().GetSecret()) != "shared" || string(action.GetWasaRootSecretAction().GetSecrets()[0].GetRootSecret()) != "root" {
+		t.Fatal("redaction modified the dispatched action")
+	}
+	plain := &waSyncAction.SyncActionValue{Timestamp: proto.Int64(1)}
+	if appStateActionForLog(plain) != plain {
+		t.Fatal("actions without secrets should not be copied")
 	}
 }

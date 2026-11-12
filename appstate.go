@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/exslices"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/polymorfa/hypermeow/appstate"
 	waBinary "github.com/polymorfa/hypermeow/binary"
@@ -286,7 +287,7 @@ func (cli *Client) dispatchAppState(ctx context.Context, name appstate.WAPatchNa
 		Hex("index_mac", mutation.IndexMAC).
 		Hex("value_mac", mutation.ValueMAC)
 	if logLevel == zerolog.TraceLevel {
-		logEvt.Any("action", mutation.Action)
+		logEvt.Any("action", appStateActionForLog(mutation.Action))
 	}
 	logEvt.Msg("Received app state mutation")
 
@@ -783,4 +784,20 @@ func BuildAppStateRecoveryRequest(collection appstate.WAPatchName) *waE2E.Messag
 			},
 		},
 	}
+}
+
+// appStateActionForLog returns the action with secret material cleared, so
+// trace logs never contain shared-device or root secrets.
+func appStateActionForLog(action *waSyncAction.SyncActionValue) *waSyncAction.SyncActionValue {
+	if action.GetSharedDeviceSecretAction() == nil && action.GetWasaRootSecretAction() == nil {
+		return action
+	}
+	redacted := proto.Clone(action).(*waSyncAction.SyncActionValue)
+	if shared := redacted.GetSharedDeviceSecretAction(); shared != nil {
+		shared.Secret = nil
+	}
+	for _, entry := range redacted.GetWasaRootSecretAction().GetSecrets() {
+		entry.RootSecret = nil
+	}
+	return redacted
 }
