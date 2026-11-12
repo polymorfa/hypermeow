@@ -696,6 +696,35 @@ func TestRegisterRejectsRedirects(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsMalformedRedirectWithoutExposingLocation(t *testing.T) {
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			var hits atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				hits.Add(1)
+				w.Header().Set("Location", "http://%zz/"+req.URL.RawQuery)
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			_, err := Register(context.Background(), NewDevice(nil), Request{
+				InviteCode: "PRIVATE_INVITE", Name: "Private Guest", BaseURL: server.URL,
+			})
+			if err == nil || hits.Load() != 1 {
+				t.Fatal("malformed redirect was not rejected after one request")
+			}
+			for _, sensitive := range []string{"PRIVATE_INVITE", "Private%20Guest", "authkey=", "invite_code=", "guest_name="} {
+				if strings.Contains(err.Error(), sensitive) {
+					t.Fatal("malformed redirect error exposed registration data")
+				}
+			}
+			var regErr *Error
+			if !errors.As(err, &regErr) || regErr.HTTPStatus != status {
+				t.Fatal("redirect refusal lost the HTTP status")
+			}
+		})
+	}
+}
+
 func TestGuestPreKeyRetentionCannotExceedLimit(t *testing.T) {
 	m := newMemoryStore()
 	for i := 0; i < 1100; i++ {

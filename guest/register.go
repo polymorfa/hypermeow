@@ -206,6 +206,11 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 		client = http.DefaultClient
 	}
 	registrationClient := *client
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	registrationClient.Transport = registrationTransport{base: transport}
 	registrationClient.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("guest: registration redirects are not allowed")
 	}
@@ -221,6 +226,33 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 		return nil, fmt.Errorf("guest: read registration response: %w", err)
 	}
 	return parseRegistration(resp.StatusCode, body, name, browser)
+}
+
+type registrationTransport struct{ base http.RoundTripper }
+
+func (tr registrationTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if tr.base == nil {
+		return nil, errors.New("guest: registration transport is unavailable")
+	}
+	resp, err := tr.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	// Client.Do parses Location before CheckRedirect, so reject at the transport.
+	switch resp.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, &Error{HTTPStatus: resp.StatusCode}
+	}
+	return resp, nil
+}
+
+func (tr registrationTransport) CancelRequest(req *http.Request) {
+	if canceler, ok := tr.base.(interface{ CancelRequest(*http.Request) }); ok {
+		canceler.CancelRequest(req)
+	}
 }
 
 func redactURLError(err error) error {
