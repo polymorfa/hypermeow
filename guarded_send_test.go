@@ -374,3 +374,18 @@ func TestGuardedSendAdmitIsAClientOwnedTask(t *testing.T) {
 		t.Fatalf("a guarded send after FinalClose must be refused: %v", err)
 	}
 }
+
+func TestGuardedSendWithoutSocketAfterFinalCloseReportsClosure(t *testing.T) {
+	cli := NewClient(&store.Device{}, nil)
+	if err := cli.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
+		t.Fatalf("FinalClose: %v", err)
+	}
+	hooks := &GuardedSendHooks{
+		Admit:   func(context.Context, types.MessageID, func(context.Context) error) error { return nil },
+		Entered: func() {},
+	}
+	_, err := cli.sendGuardedMessageNode(t.Context(), guardedTestNode, "guarded-1", hooks)
+	if !errors.Is(err, ErrGuardedSendRefused) || !errors.Is(err, ErrClientClosed) || errors.Is(err, ErrNotConnected) {
+		t.Fatalf("a closed client must report closure, not a reusable disconnect: %v", err)
+	}
+}

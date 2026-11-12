@@ -393,3 +393,24 @@ func TestFinalNotificationHandlerActualJoinAndSealRefusal(t *testing.T) {
 		t.Fatal("late notification handler admitted")
 	}
 }
+
+// With synchronous ACKs, a notification whose handler task was refused by final
+// close was never processed, so it must not be acknowledged.
+func TestRefusedNotificationTaskIsNotAcknowledged(t *testing.T) {
+	c := NewClient(&store.Device{}, nil)
+	c.SynchronousAck = true
+	var sends atomic.Int32
+	c.testSendHook = func([]byte) error { sends.Add(1); return nil }
+	if err := c.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
+		t.Fatalf("FinalClose: %v", err)
+	}
+	for _, notifType := range []string{"encrypt", "account_sync", "link_code_companion_reg", "crsc_continuation"} {
+		c.handleNotification(t.Context(), &waBinary.Node{
+			Tag:   "notification",
+			Attrs: waBinary.Attrs{"id": "n-" + notifType, "type": notifType, "from": types.ServerJID},
+		})
+	}
+	if got := sends.Load(); got != 0 {
+		t.Fatalf("refused notification tasks were acknowledged %d times", got)
+	}
+}

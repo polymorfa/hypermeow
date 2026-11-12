@@ -47,7 +47,10 @@ func newNoiseSocket(
 	fs.SetOnDisconnect(func(ctx context.Context, remote bool) {
 		disconnectHandler(ctx, ns, remote)
 	})
-	if !fs.startWorker(func() { ns.consumeFrames(fs.Context(), fs.Frames) }) {
+	// Capture this connection's context now: a deferred worker must not pick
+	// up a later connection's context and consume its frames with these keys.
+	ctx, frames := fs.Context(), fs.Frames
+	if !fs.startWorker(func() { ns.consumeFrames(ctx, frames) }) {
 		return nil, ErrSocketClosed
 	}
 	return ns, nil

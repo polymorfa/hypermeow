@@ -13,8 +13,10 @@ the same teardown, rather than retrying it. No stop receipt may be derived from
 any of these errors, a socket disconnect, or a cancelled context.
 
 Concurrent callers share one teardown of the same pointer. Replacement Client
-instances have separate lifetimes. Do not copy Client values. No client or socket
-state lock is held across a completion wait. A blocked external transport or
+instances have separate lifetimes. Do not copy Client values. The caller's wait
+holds no client or socket state lock. The owned teardown can hold `socketLock`
+while `Disconnect` waits up to five seconds for the handler queue, so a handler
+that needs that lock cannot finish during that wait. A blocked external transport or
 callback can keep the owned teardown alive after a caller's deadline. Calling
 FinalClose from a callback cannot finish joining that callback until it returns;
 the deadline ends its waiter and does not manufacture completion.

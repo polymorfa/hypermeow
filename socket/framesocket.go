@@ -291,7 +291,10 @@ func (fs *FrameSocket) readPump(conn *websocket.Conn, ctx context.Context) {
 	fs.log.Debugf("Frame websocket read pump starting %p", fs)
 	defer func() {
 		fs.log.Debugf("Frame websocket read pump exiting %p", fs)
-		fs.startWorker(func() { fs.Close(0) })
+		// An owner that refuses the cleanup worker still gets a closed socket.
+		if !fs.startWorker(func() { fs.Close(0) }) {
+			fs.Close(0)
+		}
 	}()
 	for {
 		msgType, data, err := conn.Read(ctx)

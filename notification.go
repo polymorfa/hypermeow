@@ -530,15 +530,16 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	}
 	switch notifType {
 	case "encrypt":
-		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleEncryptNotification(ctx, node) })
+		// A refused task did not process the notification; never ACK it.
+		cancelled = !cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleEncryptNotification(ctx, node) })
 	case "server_sync":
 		if cli.SynchronousAck {
 			cancelled = !cli.handleAppStateNotification(ctx, node)
 		} else {
-			cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleAppStateNotification(ctx, node) })
+			cancelled = !cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleAppStateNotification(ctx, node) })
 		}
 	case "account_sync":
-		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleAccountSyncNotification(ctx, node) })
+		cancelled = !cli.startConnectionTask(ctx, func(ctx context.Context) { cli.handleAccountSyncNotification(ctx, node) })
 	case "devices":
 		cli.handleDeviceNotification(ctx, node)
 	case "fbid:devices":
@@ -566,7 +567,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "privacy_token":
 		cli.handlePrivacyTokenNotification(ctx, node)
 	case "link_code_companion_reg":
-		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandleCodePairNotification(ctx, node) })
+		cancelled = !cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandleCodePairNotification(ctx, node) })
 	case "newsletter":
 		cli.handleNewsletterNotification(ctx, node)
 	case "mex":
@@ -578,7 +579,7 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "business":
 		cli.handleQueuedBusinessCatalogNotification(node)
 	case "crsc_continuation":
-		cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandlePasskeyContinuationNotification(ctx, node) })
+		cancelled = !cli.startConnectionTask(ctx, func(ctx context.Context) { cli.tryHandlePasskeyContinuationNotification(ctx, node) })
 	case "companion_reg_refresh":
 		_, refresh := node.GetOptionalChildByTag("companion_reg_refresh")
 		_, rotateQR := node.GetOptionalChildByTag("pair-device-rotate-qr")

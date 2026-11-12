@@ -70,6 +70,10 @@ func (cli *Client) sendGuardedMessageNode(ctx context.Context, node waBinary.Nod
 	cli.socketLock.RUnlock()
 	// A shadow relay is a separate transport and is not admitted here.
 	if !connected && cli.testSendHook == nil {
+		if cli.nativeClosed() {
+			// Tell permanent closure apart from a reusable disconnect.
+			return nil, fmt.Errorf("%w: %w", ErrGuardedSendRefused, ErrClientClosed)
+		}
 		return nil, ErrNotConnected
 	}
 
