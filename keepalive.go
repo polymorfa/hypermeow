@@ -39,10 +39,8 @@ func (cli *Client) keepAliveLoop(ctx, connCtx context.Context) {
 				return
 			} else if !isSuccess {
 				errorCount++
-				go cli.dispatchEvent(&events.KeepAliveTimeout{
-					ErrorCount:  errorCount,
-					LastSuccess: lastSuccess,
-				})
+				evt := &events.KeepAliveTimeout{ErrorCount: errorCount, LastSuccess: lastSuccess}
+				cli.startNative(func() { cli.dispatchEvent(evt) })
 				if cli.EnableAutoReconnect && time.Since(lastSuccess) > KeepAliveMaxFailTime {
 					cli.Log.Debugf("Forcing reconnect due to keepalive failure")
 					cli.ResetConnection()
@@ -50,7 +48,7 @@ func (cli *Client) keepAliveLoop(ctx, connCtx context.Context) {
 			} else {
 				if errorCount > 0 {
 					errorCount = 0
-					go cli.dispatchEvent(&events.KeepAliveRestored{})
+					cli.startNative(func() { cli.dispatchEvent(&events.KeepAliveRestored{}) })
 				}
 				lastSuccess = time.Now()
 			}

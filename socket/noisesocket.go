@@ -47,7 +47,12 @@ func newNoiseSocket(
 	fs.SetOnDisconnect(func(ctx context.Context, remote bool) {
 		disconnectHandler(ctx, ns, remote)
 	})
-	go ns.consumeFrames(fs.Context(), fs.Frames)
+	// Capture this connection's context now: a deferred worker must not pick
+	// up a later connection's context and consume its frames with these keys.
+	ctx, frames := fs.Context(), fs.Frames
+	if !fs.startWorker(func() { ns.consumeFrames(ctx, frames) }) {
+		return nil, ErrSocketClosed
+	}
 	return ns, nil
 }
 
@@ -97,9 +102,11 @@ func (ns *NoiseSocket) SendFrame(ctx context.Context, plaintext []byte) error {
 	ciphertext := ns.writeKey.Seal(nil, generateIV(ns.writeCounter), plaintext, nil)
 	ns.writeCounter++
 	doneChan := make(chan error, 1)
-	go func() {
+	if !ns.fs.startWorker(func() {
 		doneChan <- ns.fs.SendFrame(ciphertext)
-	}()
+	}) {
+		return ErrSocketClosed
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

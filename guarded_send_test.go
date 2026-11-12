@@ -334,3 +334,58 @@ func TestSendMessageGuardedRevalidatesResolvedRecipient(t *testing.T) {
 		t.Fatal("admission must not run for an ineligible resolved recipient")
 	}
 }
+
+func TestGuardedSendAdmitIsAClientOwnedTask(t *testing.T) {
+	var sends atomic.Int32
+	cli := NewClient(&store.Device{}, nil)
+	cli.testSendHook = func([]byte) error { sends.Add(1); return nil }
+	admitting := make(chan struct{})
+	admitCancelled := make(chan struct{})
+	hooks := &GuardedSendHooks{
+		Admit: func(ctx context.Context, _ types.MessageID, _ func(context.Context) error) error {
+			close(admitting)
+			<-ctx.Done()
+			close(admitCancelled)
+			return ctx.Err()
+		},
+		Entered: func() {},
+	}
+	sendDone := make(chan error, 1)
+	go func() {
+		_, err := cli.sendGuardedMessageNode(t.Context(), guardedTestNode, "guarded-1", hooks)
+		sendDone <- err
+	}()
+	<-admitting
+	// FinalClose cancels and joins the admission goroutine instead of leaving it running.
+	if err := cli.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
+		t.Fatalf("FinalClose: %v", err)
+	}
+	select {
+	case <-admitCancelled:
+	default:
+		t.Fatal("FinalClose returned before the Admit task observed cancellation")
+	}
+	if err := <-sendDone; !errors.Is(err, ErrGuardedSendRefused) || sends.Load() != 0 {
+		t.Fatalf("a cancelled admission must refuse without writing: err=%v sends=%d", err, sends.Load())
+	}
+
+	_, err := cli.sendGuardedMessageNode(t.Context(), guardedTestNode, "guarded-2", hooks)
+	if !errors.Is(err, ErrGuardedSendRefused) || !errors.Is(err, ErrClientClosed) {
+		t.Fatalf("a guarded send after FinalClose must be refused: %v", err)
+	}
+}
+
+func TestGuardedSendWithoutSocketAfterFinalCloseReportsClosure(t *testing.T) {
+	cli := NewClient(&store.Device{}, nil)
+	if err := cli.FinalClose(finalTestContext(t)); !errors.Is(err, ErrClientShutdownIncomplete) {
+		t.Fatalf("FinalClose: %v", err)
+	}
+	hooks := &GuardedSendHooks{
+		Admit:   func(context.Context, types.MessageID, func(context.Context) error) error { return nil },
+		Entered: func() {},
+	}
+	_, err := cli.sendGuardedMessageNode(t.Context(), guardedTestNode, "guarded-1", hooks)
+	if !errors.Is(err, ErrGuardedSendRefused) || !errors.Is(err, ErrClientClosed) || errors.Is(err, ErrNotConnected) {
+		t.Fatalf("a closed client must report closure, not a reusable disconnect: %v", err)
+	}
+}
