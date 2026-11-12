@@ -309,3 +309,7 @@ is limited to 512 bytes. Writes beyond those limits return an error without
 evicting trusted identities. Replacing existing state or deleting identities
 and sessions releases the corresponding capacity. These are local policies
 for one-call guests, not WhatsApp server limits.
+
+Registration error strings omit provider response text. Typed `guest.Error`
+fields and unwrapped causes remain available for explicit diagnostics and may
+contain reflected request data; avoid logging them without redaction.

@@ -22,6 +22,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Keep provider response text out of displayed guest registration errors while retaining explicit diagnostics.
+
 - Bound guest Signal identities, sessions and sender keys before retaining peer data.
 
 - Redact malformed call-link and registration URLs from returned errors, including reflected redirect locations.

@@ -112,7 +112,9 @@ type Registration struct {
 	Browser Browser
 }
 
-// Error is a non-successful registration response.
+// Error is a non-successful registration response. Provider fields are retained
+// for explicit inspection and may contain sensitive request data. Error prints
+// only the HTTP status.
 type Error struct {
 	HTTPStatus int
 	Status     string
@@ -125,14 +127,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	switch {
-	case e.Reason != "":
-		return fmt.Sprintf("guest: registration failed: HTTP %d, %s (%s)", e.HTTPStatus, e.Status, e.Reason)
-	case e.Status != "":
-		return fmt.Sprintf("guest: registration failed: HTTP %d, %s", e.HTTPStatus, e.Status)
-	default:
-		return fmt.Sprintf("guest: registration failed: HTTP %d", e.HTTPStatus)
-	}
+	return fmt.Sprintf("guest: registration failed: HTTP %d", e.HTTPStatus)
 }
 
 // ErrMissingKeys is returned when the device has no registration key material.
@@ -150,7 +145,7 @@ func ParseInviteCode(tokenOrURL string) (string, error) {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil {
-		return "", fmt.Errorf("guest: parse call link: %w", redactURLError(err))
+		return "", registrationFailure("parse call link", err)
 	}
 	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
 	token := segments[len(segments)-1]
@@ -187,7 +182,7 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("guest: build registration request: %w", redactURLError(err))
+		return nil, registrationFailure("build registration request", err)
 	}
 	origin := req.Origin
 	if origin == "" {
@@ -216,14 +211,12 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 	}
 	resp, err := registrationClient.Do(httpReq)
 	if err != nil {
-		// The request URL carries the invite code, the name and key material;
-		// keep only the cause so callers can log the error safely.
-		return nil, fmt.Errorf("guest: send registration: %w", redactURLError(err))
+		return nil, registrationFailure("send registration", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return nil, fmt.Errorf("guest: read registration response: %w", err)
+		return nil, registrationFailure("read registration response", err)
 	}
 	return parseRegistration(resp.StatusCode, body, name, browser)
 }
@@ -263,6 +256,18 @@ func redactURLError(err error) error {
 		}
 		err = urlErr.Err
 	}
+}
+
+type registrationFailureError struct {
+	operation string
+	cause     error
+}
+
+func (e *registrationFailureError) Error() string { return "guest: " + e.operation + " failed" }
+func (e *registrationFailureError) Unwrap() error { return e.cause }
+
+func registrationFailure(operation string, cause error) error {
+	return &registrationFailureError{operation: operation, cause: redactURLError(cause)}
 }
 
 func registrationURL(device *store.Device, req Request, inviteCode, name string, browser Browser) (string, error) {
@@ -381,7 +386,7 @@ func parseRegistration(httpStatus int, body []byte, name string, browser Browser
 		user = user[:at]
 	}
 	if _, err := strconv.ParseUint(user, 10, 64); err != nil {
-		return nil, fmt.Errorf("guest: registration returned an invalid lid %q", parsed.LID)
+		return nil, errors.New("guest: registration returned an invalid lid")
 	}
 	return &Registration{
 		LID:            types.NewJID(user, types.HiddenUserServer),
