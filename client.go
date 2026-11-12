@@ -132,7 +132,10 @@ type Client struct {
 	EmitAppStateEventsOnFullSync   bool
 	EmitLabelEventsOnFullSync      bool
 	EmitQuickReplyEventsOnFullSync bool
-	AppStateDebugLogs              bool
+
+	// EmitStickerEventsOnFullSync emits favorite and recent-removal snapshot events.
+	EmitStickerEventsOnFullSync bool
+	AppStateDebugLogs           bool
 
 	AutomaticMessageRerequestFromPhone bool
 	pendingPhoneRerequests             map[types.MessageID]context.CancelFunc

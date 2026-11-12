@@ -1016,6 +1016,13 @@ func (cli *Client) handlePlaceholderResendResponse(msg *waE2E.PeerDataOperationR
 }
 
 func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
+	ok, _ = handleProtocolMessageResult(cli, ctx, info, msg)
+	return
+}
+
+// Keep the legacy internal hook's bool result while the decrypt path carries
+// handler failure independently from ordinary Message-event suppression.
+func handleProtocolMessageResult(cli *Client, ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok, handlerFailed bool) {
 	ok = true
 	protoMsg := msg.GetProtocolMessage()
 
@@ -1044,9 +1051,11 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		cli.storeLIDSyncMessage(ctx, protoMsg.GetLidMigrationMappingSyncMessage().GetEncodedMappingPayload())
 	}
 
-	if info.Sender.Device == 0 {
-		peerResp := protoMsg.GetPeerDataOperationRequestResponseMessage()
+	if peerResp := protoMsg.GetPeerDataOperationRequestResponseMessage(); info.Sender.Device == 0 && peerResp != nil {
 		switch peerResp.GetPeerDataOperationRequestType() {
+		case waE2E.PeerDataOperationRequestType_UPLOAD_STICKER:
+			handlerFailed = cli.dispatchEvent(&events.StickerReupload{RequestID: peerResp.GetStanzaID(), Results: peerResp.GetPeerDataOperationResult()})
+			ok = false
 		case waE2E.PeerDataOperationRequestType_PLACEHOLDER_MESSAGE_RESEND:
 			ok = cli.handlePlaceholderResendResponse(peerResp) && ok
 		case waE2E.PeerDataOperationRequestType_COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY:
@@ -1058,7 +1067,7 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 		go cli.handleAppStateSyncKeyShare(context.WithoutCancel(ctx), protoMsg.AppStateSyncKeyShare)
 	}
 
-	if info.Category == "peer" {
+	if info.Category == "peer" && !handlerFailed {
 		go func() {
 			err := cli.SendProtocolMessageReceipt(ctx, info.ID, types.ReceiptTypePeerMsg)
 			if err != nil {
@@ -1086,6 +1095,11 @@ func (cli *Client) shouldStoreHistorySyncNonce() bool {
 }
 
 func (cli *Client) processProtocolParts(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok bool) {
+	ok, _ = processProtocolPartsResult(cli, ctx, info, msg)
+	return
+}
+
+func processProtocolPartsResult(cli *Client, ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) (ok, handlerFailed bool) {
 	ok = true
 	cli.storeMessageSecret(ctx, info, msg)
 	// Hopefully sender key distribution messages and protocol messages can't be inside ephemeral messages
@@ -1106,7 +1120,9 @@ func (cli *Client) processProtocolParts(ctx context.Context, info *types.Message
 	// N.B. Edits are protocol messages, but they're also wrapped inside EditedMessage,
 	// which is only unwrapped after processProtocolParts, so this won't trigger for edits.
 	if msg.GetProtocolMessage() != nil {
-		ok = cli.handleProtocolMessage(ctx, info, msg) && ok
+		protocolOK, failed := handleProtocolMessageResult(cli, ctx, info, msg)
+		ok = protocolOK && ok
+		handlerFailed = failed
 	}
 	return
 }
@@ -1338,7 +1354,10 @@ func (cli *Client) storeHistoricalPNLIDMappings(ctx context.Context, mappings []
 }
 
 func (cli *Client) handleDecryptedMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message, retryCount int) (handlerFailed bool) {
-	ok := cli.processProtocolParts(ctx, info, msg)
+	ok, failed := processProtocolPartsResult(cli, ctx, info, msg)
+	if failed {
+		return true
+	}
 	if !ok {
 		return false
 	}

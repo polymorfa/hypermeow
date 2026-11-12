@@ -47,8 +47,9 @@ const (
 	MediaHistory  MediaType = "WhatsApp History Keys"
 	MediaAppState MediaType = "WhatsApp App State Keys"
 
-	MediaStickerPack   MediaType = "WhatsApp Sticker Pack Keys"
-	MediaLinkThumbnail MediaType = "WhatsApp Link Thumbnail Keys"
+	MediaStickerPackThumbnail MediaType = "WhatsApp Sticker Pack Thumbnail Keys"
+	MediaStickerPack          MediaType = "WhatsApp Sticker Pack Keys"
+	MediaLinkThumbnail        MediaType = "WhatsApp Link Thumbnail Keys"
 )
 
 // DownloadableMessage represents a protobuf message that contains attachment info.
@@ -89,6 +90,7 @@ var (
 	_ DownloadableMessage   = (*waE2E.HistorySyncNotification)(nil)
 	_ DownloadableMessage   = (*waServerSync.ExternalBlobReference)(nil)
 	_ DownloadableThumbnail = (*waE2E.ExtendedTextMessage)(nil)
+	_ DownloadableThumbnail = (*waE2E.StickerPackMessage)(nil)
 	_ DownloadableMessage   = (*types.StickerPackItem)(nil)
 )
 
@@ -107,6 +109,7 @@ var classToMediaType = map[protoreflect.Name]MediaType{
 
 var classToThumbnailMediaType = map[protoreflect.Name]MediaType{
 	"ExtendedTextMessage": MediaLinkThumbnail,
+	"StickerPackMessage":  MediaStickerPackThumbnail,
 }
 
 var mediaTypeToMMSType = map[MediaType]string{
@@ -117,8 +120,9 @@ var mediaTypeToMMSType = map[MediaType]string{
 	MediaHistory:  "md-msg-hist",
 	MediaAppState: "md-app-state",
 
-	MediaStickerPack:   "sticker-pack",
-	MediaLinkThumbnail: "thumbnail-link",
+	MediaStickerPack:          "sticker-pack",
+	MediaLinkThumbnail:        "thumbnail-link",
+	MediaStickerPackThumbnail: "thumbnail-sticker-pack",
 }
 
 // DownloadAny loops through the downloadable parts of the given message and downloads the first non-nil item.
@@ -139,6 +143,8 @@ func (cli *Client) DownloadAny(ctx context.Context, msg *waE2E.Message) (data []
 		return cli.Download(ctx, msg.DocumentMessage)
 	case msg.StickerMessage != nil:
 		return cli.Download(ctx, msg.StickerMessage)
+	case msg.StickerPackMessage != nil:
+		return cli.Download(ctx, msg.StickerPackMessage)
 	default:
 		return nil, ErrNothingDownloadableFound
 	}
