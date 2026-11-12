@@ -22,6 +22,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Redact malformed call-link and registration URLs from returned errors.
+
 - Reject guest registration redirects and bound guest prekey uploads and retained keys.
 
 - Preserve guest identity-reader trust and deletion fences during identity verification.

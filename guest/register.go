@@ -150,7 +150,7 @@ func ParseInviteCode(tokenOrURL string) (string, error) {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil {
-		return "", fmt.Errorf("guest: parse call link: %w", err)
+		return "", fmt.Errorf("guest: parse call link: %w", redactURLError(err))
 	}
 	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
 	token := segments[len(segments)-1]
@@ -187,7 +187,7 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("guest: build registration request: %w", err)
+		return nil, fmt.Errorf("guest: build registration request: %w", redactURLError(err))
 	}
 	origin := req.Origin
 	if origin == "" {
@@ -213,11 +213,7 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 	if err != nil {
 		// The request URL carries the invite code, the name and key material;
 		// keep only the cause so callers can log the error safely.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err
-		}
-		return nil, fmt.Errorf("guest: send registration: %w", err)
+		return nil, fmt.Errorf("guest: send registration: %w", redactURLError(err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -225,6 +221,16 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 		return nil, fmt.Errorf("guest: read registration response: %w", err)
 	}
 	return parseRegistration(resp.StatusCode, body, name, browser)
+}
+
+func redactURLError(err error) error {
+	for {
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			return err
+		}
+		err = urlErr.Err
+	}
 }
 
 func registrationURL(device *store.Device, req Request, inviteCode, name string, browser Browser) (string, error) {
