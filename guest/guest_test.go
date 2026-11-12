@@ -234,6 +234,69 @@ func TestRegisterRejectsPairedDeviceAndRedactsURL(t *testing.T) {
 	}
 }
 
+func TestRegisterRedactsMalformedRequestURLs(t *testing.T) {
+	for _, base := range []string{
+		"http://127.0.0.1/%zz",
+		"http://127.0.0.1/\n",
+		"http://127.0.0.1:bad",
+	} {
+		t.Run(strconv.Quote(base), func(t *testing.T) {
+			_, err := Register(context.Background(), NewDevice(nil), Request{
+				InviteCode: "PRIVATE_INVITE", Name: "Private Guest", BaseURL: base,
+			})
+			if err == nil {
+				t.Fatal("malformed registration URL was accepted")
+			}
+			for _, sensitive := range []string{
+				"PRIVATE_INVITE", "Private Guest", "Private%20Guest", "invite_code=", "guest_name=", "authkey=", "e_ident=", "e_skey_val=",
+			} {
+				if strings.Contains(err.Error(), sensitive) {
+					t.Fatal("request-construction error exposed registration data")
+				}
+			}
+			var urlErr *url.Error
+			if errors.As(err, &urlErr) {
+				t.Fatal("request-construction error retained the request URL")
+			}
+		})
+	}
+}
+
+func TestParseInviteCodeRedactsMalformedURL(t *testing.T) {
+	_, err := ParseInviteCode("https://call.whatsapp.com/voice/%zz/PRIVATE_INVITE")
+	if err == nil {
+		t.Fatal("malformed call link was accepted")
+	}
+	var escapeErr url.EscapeError
+	if !errors.As(err, &escapeErr) {
+		t.Fatal("call-link parse error lost its underlying cause")
+	}
+	if strings.Contains(err.Error(), "PRIVATE_INVITE") || strings.Contains(err.Error(), "call.whatsapp.com") {
+		t.Fatal("call-link parse error exposed the invite URL")
+	}
+}
+
+type registrationErrorTransport struct{ err error }
+
+func (tr registrationErrorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, tr.err
+}
+
+func TestRegisterRedactsNestedURLErrorsAndPreservesCause(t *testing.T) {
+	cause := &url.Error{Op: "parse", URL: "https://invalid/PRIVATE_INVITE", Err: context.Canceled}
+	client := &http.Client{Transport: registrationErrorTransport{err: cause}}
+	_, err := Register(context.Background(), NewDevice(nil), Request{
+		InviteCode: "PRIVATE_INVITE", Name: "Private Guest", HTTPClient: client,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("registration error lost its underlying cause")
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) || strings.Contains(err.Error(), "PRIVATE_INVITE") {
+		t.Fatal("registration error exposed a nested request URL")
+	}
+}
+
 func TestGuestStoreReadsDoNotExposeMutableSessionState(t *testing.T) {
 	ctx := context.Background()
 	device := NewDevice(nil)
