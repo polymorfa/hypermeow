@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -414,6 +416,63 @@ func TestRegisterReportsRejections(t *testing.T) {
 	if !errors.As(err, &regErr) || regErr.HTTPStatus != http.StatusForbidden || regErr.Reason != "blocked" ||
 		regErr.Param != "invite_code" || regErr.RetryAfter != "30" {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRegisterResponseErrorsDoNotLogProviderText(t *testing.T) {
+	for _, kind := range []string{"status", "reason", "lid", "http"} {
+		t.Run(kind, func(t *testing.T) {
+			sent := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				echo := req.URL.RawQuery
+				select {
+				case sent <- echo:
+				default:
+				}
+				if kind == "http" {
+					conn, buffer, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error("could not prepare malformed HTTP response")
+						return
+					}
+					defer conn.Close()
+					_, _ = buffer.WriteString("REFLECTED " + echo + "\r\n\r\n")
+					_ = buffer.Flush()
+					return
+				}
+				body := map[string]string{"status": "fail", "reason": "blocked"}
+				switch kind {
+				case "status":
+					body["status"], body["reason"] = echo, ""
+				case "reason":
+					body["reason"] = echo
+				case "lid":
+					body["status"], body["lid"] = "ok", echo
+				}
+				_ = json.NewEncoder(w).Encode(body)
+			}))
+			defer server.Close()
+			_, err := Register(context.Background(), NewDevice(nil), Request{
+				InviteCode: "PRIVATE_CALL_INVITE_TOKEN", Name: "Private Guest", BaseURL: server.URL,
+			})
+			if err == nil {
+				t.Fatal("reflected failure response was accepted")
+			}
+			for _, displayed := range []string{err.Error(), fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Errorf("registration attempt: %w", err).Error()} {
+				for _, sensitive := range []string{"PRIVATE_CALL_INVITE_TOKEN", "Private%20Guest", "authkey=", "invite_code=", "guest_name="} {
+					if strings.Contains(displayed, sensitive) {
+						t.Fatal("displayed registration error exposed provider text")
+					}
+				}
+			}
+			echo := <-sent
+			if kind == "status" || kind == "reason" {
+				var details *Error
+				if !errors.As(err, &details) || (kind == "status" && details.Status != echo) || (kind == "reason" && details.Reason != echo) {
+					t.Fatal("typed provider diagnostics were not retained")
+				}
+			}
+		})
 	}
 }
 
