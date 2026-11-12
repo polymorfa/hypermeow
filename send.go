@@ -151,10 +151,10 @@ func setParticipantHashMismatch(resp *SendResponse, sent, acknowledged string) b
 //
 // Trying to add multiple extra parameters will return an error.
 type SendRequestExtra struct {
-	// NativeSend is an optional process-local admission at the message-node handoff. It is
+	// GuardedSend is an optional process-local admission at the message-node handoff. It is
 	// supported only for a preallocated-ID ordinary one-to-one text send. Nil keeps the
-	// existing send path. See NativeSendHooks.
-	NativeSend *NativeSendHooks
+	// existing send path. See GuardedSendHooks.
+	GuardedSend *GuardedSendHooks
 	// The message ID to use when sending. If this is not provided, a random message ID will be generated
 	ID types.MessageID
 	// JID of the bot to be invoked (optional)
@@ -215,17 +215,17 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	} else if len(extra) == 1 {
 		req = extra[0]
 	}
-	if req.NativeSend != nil {
-		if req.ID == "" || req.Timeout < 0 || req.NativeSend.Admit == nil || req.NativeSend.Entered == nil || req.Peer || !req.InlineBotJID.IsEmpty() ||
+	if req.GuardedSend != nil {
+		if req.ID == "" || req.Timeout < 0 || req.GuardedSend.Admit == nil || req.GuardedSend.Entered == nil || req.Peer || !req.InlineBotJID.IsEmpty() ||
 			(to.Server != types.DefaultUserServer && to.Server != types.HiddenUserServer) || to.IsBot() ||
-			!validNativeText(message) || req.Meta != nil || req.AdditionalNodes != nil || req.MediaHandle != "" {
-			err = ErrNativeSendUnsupported
+			!validGuardedText(message) || req.Meta != nil || req.AdditionalNodes != nil || req.MediaHandle != "" {
+			err = ErrGuardedSendUnsupported
 			return
 		}
-		hooks := *req.NativeSend
-		req.NativeSend = &hooks
+		hooks := *req.GuardedSend
+		req.GuardedSend = &hooks
 		// Library metadata (message secret, reporting token) must not leak into the caller's
-		// message, or a retry after refusal would fail validNativeText.
+		// message, or a retry after refusal would fail validGuardedText.
 		message = proto.Clone(message).(*waE2E.Message)
 	}
 	if to.Device > 0 && !req.Peer {
@@ -267,7 +267,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	isBotMode := isInlineBotMode || to.IsBot()
 	needsMessageSecret := isBotMode || cli.shouldIncludeReportingToken(message)
 	var extraParams nodeExtraParams
-	extraParams.nativeSend = req.NativeSend
+	extraParams.guardedSend = req.GuardedSend
 
 	if needsMessageSecret {
 		if message.MessageContextInfo == nil {
@@ -374,8 +374,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 			return
 		}
 		resp.DebugTimings.LIDFetch = time.Since(start)
-		if req.NativeSend != nil && (toLID.Server != types.HiddenUserServer || toLID.IsBot()) {
-			err = fmt.Errorf("%w: resolved recipient %s", ErrNativeSendUnsupported, toLID.Server)
+		if req.GuardedSend != nil && (toLID.Server != types.HiddenUserServer || toLID.IsBot()) {
+			err = fmt.Errorf("%w: resolved recipient %s", ErrGuardedSendUnsupported, toLID.Server)
 			return
 		}
 		cli.Log.Debugf("Replacing SendMessage destination with LID %s -> %s", to, toLID)
@@ -413,7 +413,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	defer cli.messageSendLock.Unlock()
 
 	// Peer message retries aren't implemented yet. Guarded sends are never cached for retry.
-	if !req.Peer && req.NativeSend == nil {
+	if !req.Peer && req.GuardedSend == nil {
 		err = cli.addRecentMessage(ctx, to, req.ID, message, nil)
 		if err != nil {
 			return
@@ -431,8 +431,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 
 	// Revalidate after LID resolution: a guarded send may reach only sendDM, where admission
 	// runs. Any other resolved destination would bypass Admit and Entered.
-	if req.NativeSend != nil && ((to.Server != types.DefaultUserServer && to.Server != types.HiddenUserServer) || to.IsBot() || to.Device > 0) {
-		err = fmt.Errorf("%w: resolved recipient %s", ErrNativeSendUnsupported, to.Server)
+	if req.GuardedSend != nil && ((to.Server != types.DefaultUserServer && to.Server != types.HiddenUserServer) || to.IsBot() || to.Device > 0) {
+		err = fmt.Errorf("%w: resolved recipient %s", ErrGuardedSendUnsupported, to.Server)
 		return
 	}
 	respChan := cli.waitResponse(req.ID)
@@ -469,22 +469,22 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	case <-timeoutChan:
 		cli.cancelResponse(req.ID, respChan)
 		err = ErrMessageTimedOut
-		if req.NativeSend != nil {
-			err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, err)
+		if req.GuardedSend != nil {
+			err = fmt.Errorf("%w: %w", ErrGuardedSendUncertain, err)
 		}
 		return
 	case <-ctx.Done():
 		cli.cancelResponse(req.ID, respChan)
 		err = ctx.Err()
-		if req.NativeSend != nil {
-			err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, err)
+		if req.GuardedSend != nil {
+			err = fmt.Errorf("%w: %w", ErrGuardedSendUncertain, err)
 		}
 		return
 	}
 	resp.DebugTimings.Resp = time.Since(start)
-	if isDisconnectNode(respNode) && req.NativeSend != nil {
+	if isDisconnectNode(respNode) && req.GuardedSend != nil {
 		// A guarded send is never resent; its outcome is uncertain.
-		err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, &DisconnectedError{Action: "guarded message send"})
+		err = fmt.Errorf("%w: %w", ErrGuardedSendUncertain, &DisconnectedError{Action: "guarded message send"})
 		return
 	}
 	if isDisconnectNode(respNode) {
@@ -500,8 +500,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	resp.Timestamp = ag.UnixTime("t")
 	if errorCode := ag.Int("error"); errorCode != 0 {
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
-		if req.NativeSend != nil {
-			err = fmt.Errorf("%w: %w", ErrNativeSendUncertain, err)
+		if req.GuardedSend != nil {
+			err = fmt.Errorf("%w: %w", ErrGuardedSendUncertain, err)
 		}
 	}
 	expectedPHash := ag.OptionalString("phash")
@@ -797,7 +797,7 @@ func (cli *Client) sendNewsletter(
 }
 
 type nodeExtraParams struct {
-	nativeSend      *NativeSendHooks
+	guardedSend     *GuardedSendHooks
 	botNode         *waBinary.Node
 	metaNode        *waBinary.Node
 	additionalNodes *[]waBinary.Node
@@ -956,7 +956,7 @@ func (cli *Client) sendDM(
 	}
 
 	start = time.Now()
-	data, err := cli.sendNativeMessageNode(ctx, *node, id, extraParams.nativeSend)
+	data, err := cli.sendGuardedMessageNode(ctx, *node, id, extraParams.guardedSend)
 	timings.Send = time.Since(start)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to send message node: %w", err)

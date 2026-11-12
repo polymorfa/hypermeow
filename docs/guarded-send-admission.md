@@ -1,6 +1,6 @@
-# Optional native send admission
+# Guarded sends with last-moment admission
 
-`SendRequestExtra.NativeSend` is process-local and nil by default. When it is nil, the send path
+`SendRequestExtra.GuardedSend` is process-local and nil by default. When it is nil, the send path
 is unchanged. It supports one ordinary text DM with a preallocated message ID. Groups, peer
 messages, bots, media, meta nodes and additional nodes are refused before preparation. The hook
 is not a renderer and grants nothing.
@@ -12,17 +12,17 @@ lookup, session setup, encryption, privacy token). It replaces only the guarded 
 `sendNodeAndGetData`. Nothing in `socket/` changes, and no socket or Noise lock is held while
 `Admit` runs. Other traffic on the connection (receipts, presence, pings, IQs) is never blocked
 by admission. `SendMessage` already holds `messageSendLock` here, so a slow `Admit` can delay
-only other message sends on the same client. The enforced `NativeAdmitTimeout` bounds the wait
+only other message sends on the same client. The enforced `GuardAdmitTimeout` bounds the wait
 for `Admit` before a write starts; it does not bound a write that has already started.
 
 ## Contract
 
 - `Admit(ctx, id, write)` must call `write` at most once, synchronously. Returning without
-  calling it refuses the send (`ErrNativeSendRefused`), and nothing is written.
-- `NativeAdmitTimeout` (2 s) is enforced. If `Admit` has not returned by then and has not
+  calling it refuses the send (`ErrGuardedSendRefused`), and nothing is written.
+- `GuardAdmitTimeout` (2 s) is enforced. If `Admit` has not returned by then and has not
   called `write`, the send is refused and `write` is closed, even if `Admit` ignores its
   context. A panic in `Admit` before `write` also refuses. Two exceptions: if `Admit` already
-  called `write` and then runs past the deadline, the result is `ErrNativeSendUncertain`, not a
+  called `write` and then runs past the deadline, the result is `ErrGuardedSendUncertain`, not a
   refusal; and a `write` that is still running is waited for, beyond the deadline. Never treat
   every admission timeout as a safe refusal.
 - Call `write` synchronously from `Admit`. `write` closes when the send call stops waiting for
@@ -32,10 +32,10 @@ for `Admit` before a write starts; it does not bound a write that has already st
 - `write(sendCtx)` calls `Entered()` and then hands the node to the existing sender with
   `sendCtx`. Cancel `sendCtx` when authority is revoked.
 - `Entered()` means the node was handed to the sender. Any failure after it, including a panic,
-  returns `ErrNativeSendUncertain`: the message may have been delivered and must never be
+  returns `ErrGuardedSendUncertain`: the message may have been delivered and must never be
   resent. For guarded sends, `SendMessage` also wraps the acknowledgment timeout, context
   cancellation while waiting, a disconnect response and a server error code in
-  `ErrNativeSendUncertain`. After handoff, the result never matches `ErrNativeSendRefused`.
+  `ErrGuardedSendUncertain`. After handoff, the result never matches `ErrGuardedSendRefused`.
 
 ## Window after admission
 
@@ -61,7 +61,7 @@ Integrators that pin "no send-time additions" must account for each of these exp
 ## Retries
 
 Guarded sends do not populate the retry message cache and do not use the disconnect
-`retryFrame` resend. A disconnect response returns `ErrNativeSendUncertain`. Integrators must
+`retryFrame` resend. A disconnect response returns `ErrGuardedSendUncertain`. Integrators must
 keep their `GetMessageForRetry` fallback from returning guarded content and must not wrap this
 API in an automatic retry. Durable retry, receipt and outbox policy belongs to the integrating
 application.
