@@ -92,7 +92,9 @@ type Request struct {
 	// AccessSessionID groups this registration with the rest of the guest
 	// session. A random UUID is used when empty.
 	AccessSessionID string
-	// HTTPClient sends the request. http.DefaultClient when nil.
+	// HTTPClient supplies the transport, timeout and cookie jar, with
+	// http.DefaultClient used when nil. Registration never follows redirects;
+	// the caller's client is not mutated.
 	HTTPClient *http.Client
 }
 
@@ -203,7 +205,11 @@ func Register(ctx context.Context, device *store.Device, req Request) (*Registra
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(httpReq)
+	registrationClient := *client
+	registrationClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("guest: registration redirects are not allowed")
+	}
+	resp, err := registrationClient.Do(httpReq)
 	if err != nil {
 		// The request URL carries the invite code, the name and key material;
 		// keep only the cause so callers can log the error safely.

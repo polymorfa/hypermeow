@@ -22,6 +22,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Reject guest registration redirects and bound guest prekey uploads and retained keys.
+
 - Preserve guest identity-reader trust and deletion fences during identity verification.
 
 - Migrate an established hosted PN session when the peer starts sending from its hosted LID. SQL-backed migration uses literal address-prefix ranges so hosted underscores cannot select or delete another account's keys.

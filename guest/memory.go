@@ -8,8 +8,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
@@ -22,6 +25,9 @@ import (
 // sessions, prekeys and sender keys work normally, other state (app state,
 // contacts, chat settings) is discarded, and saving the device does nothing.
 // Nothing survives the process, which is what a one-time guest identity needs.
+// The store retains at most 1024 unconsumed prekeys, including at most 64 retry
+// keys. Upload attempts are at least one second apart, and new upload batches
+// are generated at most once per minute. These are local guest resource policies.
 func NewDevice(log waLog.Logger) *store.Device {
 	if log == nil {
 		log = waLog.Noop
@@ -61,17 +67,38 @@ func randomBytes(n int) []byte {
 
 // memoryStore keeps Signal state in memory and accepts everything else as a
 // no-op through the embedded NoopStore (whose nil Error means success).
+const (
+	maxGuestPreKeys             = 1024
+	maxGuestRetryPreKeys        = 64
+	guestPreKeyUploadPeriod     = time.Second
+	guestPreKeyGenerationPeriod = time.Minute
+	maxGuestPreKeyID            = 0xffffff
+)
+
+var (
+	errGuestPreKeyLimit = errors.New("guest: prekey retention or ID limit reached")
+	errGuestPreKeyRate  = errors.New("guest: prekey upload rate limit reached")
+)
+
+type memoryPreKey struct {
+	key      *keys.PreKey
+	uploaded bool
+	retry    bool
+}
+
 type memoryStore struct {
 	*store.NoopStore
 
-	mu                sync.Mutex
-	identities        map[string][32]byte
-	identityDeleteGen uint64
-	sessions          map[string][]byte
-	preKeys           map[uint32]*keys.PreKey
-	nextPreKey        uint32
-	uploadedTo        uint32
-	senderKeys        map[string][]byte
+	mu                   sync.Mutex
+	identities           map[string][32]byte
+	identityDeleteGen    uint64
+	sessions             map[string][]byte
+	preKeys              map[uint32]memoryPreKey
+	nextPreKey           uint32
+	lastPreKeyUpload     time.Time
+	lastPreKeyGeneration time.Time
+	now                  func() time.Time
+	senderKeys           map[string][]byte
 }
 
 var _ store.AllStores = (*memoryStore)(nil)
@@ -82,8 +109,9 @@ func newMemoryStore() *memoryStore {
 		NoopStore:  &store.NoopStore{},
 		identities: make(map[string][32]byte),
 		sessions:   make(map[string][]byte),
-		preKeys:    make(map[uint32]*keys.PreKey),
+		preKeys:    make(map[uint32]memoryPreKey),
 		nextPreKey: 1,
+		now:        time.Now,
 		senderKeys: make(map[string][]byte),
 	}
 }
@@ -225,17 +253,44 @@ func (m *memoryStore) MigratePNToLID(context.Context, types.JID, types.JID) erro
 func (m *memoryStore) GetOrGenPreKeys(_ context.Context, count uint32) ([]*keys.PreKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]*keys.PreKey, 0, count)
-	for id := m.uploadedTo + 1; id < m.nextPreKey && uint32(len(out)) < count; id++ {
-		if key, ok := m.preKeys[id]; ok {
-			out = append(out, key)
+	if count == 0 {
+		return []*keys.PreKey{}, nil
+	}
+	if count > maxGuestPreKeys {
+		return nil, errGuestPreKeyLimit
+	}
+	now := m.now()
+	if !m.lastPreKeyUpload.IsZero() && now.Before(m.lastPreKeyUpload.Add(guestPreKeyUploadPeriod)) {
+		return nil, errGuestPreKeyRate
+	}
+	pending := make([]*keys.PreKey, 0, len(m.preKeys))
+	for _, entry := range m.preKeys {
+		if !entry.uploaded {
+			pending = append(pending, entry.key)
 		}
 	}
-	for uint32(len(out)) < count {
-		key := keys.NewPreKey(m.nextPreKey)
-		m.preKeys[key.KeyID] = key
-		m.nextPreKey++
+	sort.Slice(pending, func(i, j int) bool { return pending[i].KeyID < pending[j].KeyID })
+	if len(pending) > int(count) {
+		pending = pending[:count]
+	}
+	needed := int(count) - len(pending)
+	if needed > 0 && !m.lastPreKeyGeneration.IsZero() && now.Before(m.lastPreKeyGeneration.Add(guestPreKeyGenerationPeriod)) {
+		return nil, errGuestPreKeyRate
+	}
+	if needed > maxGuestPreKeys-len(m.preKeys) || uint64(m.nextPreKey)+uint64(needed) > maxGuestPreKeyID+1 {
+		return nil, errGuestPreKeyLimit
+	}
+	m.lastPreKeyUpload = now
+	out := pending
+	for len(out) < int(count) {
+		key, err := m.newPreKeyLocked(false)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, key)
+	}
+	if needed > 0 {
+		m.lastPreKeyGeneration = now
 	}
 	return out, nil
 }
@@ -243,19 +298,34 @@ func (m *memoryStore) GetOrGenPreKeys(_ context.Context, count uint32) ([]*keys.
 func (m *memoryStore) GenOnePreKey(_ context.Context) (*keys.PreKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	key := keys.NewPreKey(m.nextPreKey)
-	m.preKeys[key.KeyID] = key
-	m.nextPreKey++
-	if key.KeyID > m.uploadedTo {
-		m.uploadedTo = key.KeyID
+	return m.newPreKeyLocked(true)
+}
+
+func (m *memoryStore) newPreKeyLocked(retry bool) (*keys.PreKey, error) {
+	if len(m.preKeys) >= maxGuestPreKeys || m.nextPreKey > maxGuestPreKeyID {
+		return nil, errGuestPreKeyLimit
 	}
+	if retry {
+		count := 0
+		for _, entry := range m.preKeys {
+			if entry.retry {
+				count++
+			}
+		}
+		if count >= maxGuestRetryPreKeys {
+			return nil, errGuestPreKeyLimit
+		}
+	}
+	key := keys.NewPreKey(m.nextPreKey)
+	m.preKeys[key.KeyID] = memoryPreKey{key: key, uploaded: retry, retry: retry}
+	m.nextPreKey++
 	return key, nil
 }
 
 func (m *memoryStore) GetPreKey(_ context.Context, id uint32) (*keys.PreKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.preKeys[id], nil
+	return m.preKeys[id].key, nil
 }
 
 func (m *memoryStore) RemovePreKey(_ context.Context, id uint32) error {
@@ -268,8 +338,11 @@ func (m *memoryStore) RemovePreKey(_ context.Context, id uint32) error {
 func (m *memoryStore) MarkPreKeysAsUploaded(_ context.Context, upToID uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if upToID > m.uploadedTo {
-		m.uploadedTo = upToID
+	for id, entry := range m.preKeys {
+		if id <= upToID {
+			entry.uploaded = true
+			m.preKeys[id] = entry
+		}
 	}
 	return nil
 }
@@ -278,8 +351,8 @@ func (m *memoryStore) UploadedPreKeyCount(_ context.Context) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0
-	for id := range m.preKeys {
-		if id <= m.uploadedTo {
+	for _, entry := range m.preKeys {
+		if entry.uploaded {
 			count++
 		}
 	}

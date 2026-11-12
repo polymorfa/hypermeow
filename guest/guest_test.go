@@ -8,11 +8,16 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/polymorfa/hypermeow/proto/waWa6"
 	"github.com/polymorfa/hypermeow/store"
@@ -263,5 +268,317 @@ func TestGuestIdentityCannotReplaceAnAccount(t *testing.T) {
 	device.ID = &account
 	if err := Apply(device, &Registration{LID: types.NewJID("456", types.HiddenUserServer)}); err == nil || *device.ID != account {
 		t.Fatal("existing account replaced")
+	}
+}
+
+type redirectCountingTransport struct {
+	base http.RoundTripper
+	hits atomic.Int32
+}
+
+func (tr *redirectCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	tr.hits.Add(1)
+	return tr.base.RoundTrip(req)
+}
+
+func TestRegisterRejectsRedirects(t *testing.T) {
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		for _, custom := range []bool{false, true} {
+			for _, relative := range []bool{false, true} {
+				t.Run(strconv.Itoa(status)+"/custom="+strconv.FormatBool(custom)+"/relative="+strconv.FormatBool(relative), func(t *testing.T) {
+					var targetHits atomic.Int32
+					target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						targetHits.Add(1)
+						_, _ = w.Write([]byte(`{"status":"ok","lid":"123456"}`))
+					}))
+					defer target.Close()
+					origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+						if req.URL.Path == "/internal-control" {
+							targetHits.Add(1)
+							_, _ = w.Write([]byte(`{"status":"ok","lid":"123456"}`))
+							return
+						}
+						location := target.URL + "/internal-control"
+						if relative {
+							location = "/internal-control"
+						}
+						http.Redirect(w, req, location, status)
+					}))
+					defer origin.Close()
+					var client *http.Client
+					var transport *redirectCountingTransport
+					var callerPolicyCalled bool
+					if custom {
+						transport = &redirectCountingTransport{base: http.DefaultTransport}
+						client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+							callerPolicyCalled = true
+							return nil
+						}}
+					}
+					_, err := Register(context.Background(), NewDevice(nil), Request{
+						InviteCode: "PRIVATE_INVITE", Name: "Guest", BaseURL: origin.URL, HTTPClient: client,
+					})
+					if err == nil || targetHits.Load() != 0 {
+						t.Fatalf("redirect accepted: err=%v, target hits=%d", err, targetHits.Load())
+					}
+					for _, secret := range []string{"PRIVATE_INVITE", origin.URL, target.URL, "internal-control"} {
+						if strings.Contains(err.Error(), secret) {
+							t.Fatal("redirect error exposed a request URL or invite")
+						}
+					}
+					if custom {
+						if transport.hits.Load() != 1 || callerPolicyCalled {
+							t.Fatal("registration did not preserve the transport and enforce its own redirect policy")
+						}
+						_ = client.CheckRedirect(nil, nil)
+						if !callerPolicyCalled {
+							t.Fatal("Register mutated the caller's HTTP client")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGuestPreKeyRetentionCannotExceedLimit(t *testing.T) {
+	m := newMemoryStore()
+	for i := 0; i < 1100; i++ {
+		if _, err := m.GenOnePreKey(context.Background()); err != nil {
+			break
+		}
+	}
+	if len(m.preKeys) != 64 {
+		t.Fatalf("retained %d unconsumed prekeys", len(m.preKeys))
+	}
+}
+
+func TestGuestPreKeyUploadRateLimitAfterAcknowledgement(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	batch, err := m.GetOrGenPreKeys(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.MarkPreKeysAsUploaded(ctx, batch[len(batch)-1].KeyID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.GetOrGenPreKeys(ctx, 50); err == nil {
+		t.Fatal("acknowledgement bypassed the local upload rate limit")
+	}
+	for _, key := range batch {
+		_ = m.RemovePreKey(ctx, key.KeyID)
+	}
+	if _, err = m.GetOrGenPreKeys(ctx, 50); err == nil {
+		t.Fatal("consumption bypassed the local upload rate limit")
+	}
+}
+
+func TestGuestPreKeyRejectsOversizedBatch(t *testing.T) {
+	m := newMemoryStore()
+	for _, count := range []uint32{2048, math.MaxUint32} {
+		if _, err := m.GetOrGenPreKeys(context.Background(), count); err == nil || len(m.preKeys) != 0 {
+			t.Fatalf("oversized request allocated keys: err=%v, retained=%d", err, len(m.preKeys))
+		}
+	}
+}
+
+func TestGuestRetryPreKeyDoesNotMarkPendingKeysUploaded(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	if _, err := m.GetOrGenPreKeys(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.GenOnePreKey(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := m.UploadedPreKeyCount(ctx); err != nil || count != 1 {
+		t.Fatalf("retry key changed pending upload state: count=%d, err=%v", count, err)
+	}
+}
+
+func TestGuestPreKeysInitialBatchAndConsumedCapacity(t *testing.T) {
+	m := newMemoryStore()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+	ctx := context.Background()
+	initial, err := m.GetOrGenPreKeys(ctx, 812)
+	if err != nil || len(initial) != 812 {
+		t.Fatalf("initial batch: count=%d, err=%v", len(initial), err)
+	}
+	if err = m.MarkPreKeysAsUploaded(ctx, initial[len(initial)-1].KeyID); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		now = now.Add(time.Minute)
+		batch, batchErr := m.GetOrGenPreKeys(ctx, 50)
+		if batchErr != nil || len(batch) != 50 {
+			t.Fatalf("normal batch: count=%d, err=%v", len(batch), batchErr)
+		}
+		if err = m.MarkPreKeysAsUploaded(ctx, batch[len(batch)-1].KeyID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now = now.Add(time.Minute)
+	if _, err = m.GetOrGenPreKeys(ctx, 50); err == nil || len(m.preKeys) != 1012 {
+		t.Fatalf("full store allocated a partial batch: count=%d, err=%v", len(m.preKeys), err)
+	}
+	// Consumed keys free capacity; unconsumed keys are never evicted.
+	for _, key := range initial[:50] {
+		if err = m.RemovePreKey(ctx, key.KeyID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if batch, batchErr := m.GetOrGenPreKeys(ctx, 50); batchErr != nil || len(batch) != 50 {
+		t.Fatalf("consumed capacity was not reusable: count=%d, err=%v", len(batch), batchErr)
+	}
+	if key, _ := m.GetPreKey(ctx, initial[50].KeyID); key != initial[50] {
+		t.Fatal("unconsumed prekey changed")
+	}
+	if key, _ := m.GetPreKey(ctx, initial[0].KeyID); key != nil {
+		t.Fatal("consumed prekey was retained")
+	}
+}
+
+func TestGuestPreKeysRetryPreservesPendingBatch(t *testing.T) {
+	m := newMemoryStore()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+	ctx := context.Background()
+	pending, err := m.GetOrGenPreKeys(ctx, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.GenOnePreKey(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, delta := range []time.Duration{-time.Second, 500 * time.Millisecond} {
+		now = time.Unix(1000, 0).Add(delta)
+		if _, err = m.GetOrGenPreKeys(ctx, 3); err == nil {
+			t.Fatal("early retry or clock rollback bypassed the rate limit")
+		}
+	}
+	now = time.Unix(1000, 0).Add(time.Second)
+	retry, err := m.GetOrGenPreKeys(ctx, 3)
+	if err != nil || len(retry) != len(pending) || len(m.preKeys) != 4 {
+		t.Fatalf("retry allocated another batch: err=%v, retained=%d", err, len(m.preKeys))
+	}
+	for i := range pending {
+		if pending[i] != retry[i] {
+			t.Fatal("retry changed an unacknowledged key")
+		}
+	}
+	_ = m.MarkPreKeysAsUploaded(ctx, pending[2].KeyID)
+	_ = m.MarkPreKeysAsUploaded(ctx, pending[0].KeyID)
+	if count, _ := m.UploadedPreKeyCount(ctx); count != 4 {
+		t.Fatalf("older acknowledgement reversed upload state: %d", count)
+	}
+}
+
+func TestGuestPreKeysConcurrentGeneratorsStayBounded(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	if _, err := m.GetOrGenPreKeys(ctx, 1010); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = m.GenOnePreKey(ctx)
+		}()
+	}
+	wg.Wait()
+	if len(m.preKeys) != 1024 {
+		t.Fatalf("concurrent generators retained %d keys", len(m.preKeys))
+	}
+}
+
+func TestGuestPreKeysDoNotWrapWireIDs(t *testing.T) {
+	m := newMemoryStore()
+	m.nextPreKey = 0xffffff
+	ctx := context.Background()
+	last, err := m.GenOnePreKey(ctx)
+	if err != nil || last.KeyID != 0xffffff {
+		t.Fatalf("last key: %v, %v", last, err)
+	}
+	if _, err = m.GenOnePreKey(ctx); err == nil || len(m.preKeys) != 1 {
+		t.Fatal("single-key generator wrapped the three-byte ID")
+	}
+	if _, err = m.GetOrGenPreKeys(ctx, 1); err == nil || len(m.preKeys) != 1 {
+		t.Fatal("batch generator wrapped the three-byte ID")
+	}
+}
+
+func TestGuestRetryKeysCannotStarveNormalPreKeyUploads(t *testing.T) {
+	m := newMemoryStore()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+	ctx := context.Background()
+	initial, err := m.GetOrGenPreKeys(ctx, 812)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = m.MarkPreKeysAsUploaded(ctx, initial[len(initial)-1].KeyID)
+	for range 212 {
+		_, _ = m.GenOnePreKey(ctx)
+	}
+	now = now.Add(time.Minute)
+	if batch, batchErr := m.GetOrGenPreKeys(ctx, 50); batchErr != nil || len(batch) != 50 {
+		t.Fatalf("retry-key exhaustion blocked a normal upload: count=%d, err=%v", len(batch), batchErr)
+	}
+}
+
+func TestGuestFailedInitialUploadCanRetryPendingKeys(t *testing.T) {
+	m := newMemoryStore()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+	ctx := context.Background()
+	initial, err := m.GetOrGenPreKeys(ctx, 812)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No ACK: retry the same keys after a transient failure, not a new batch.
+	now = now.Add(30 * time.Second)
+	retry, err := m.GetOrGenPreKeys(ctx, 812)
+	if err != nil || len(retry) != len(initial) || len(m.preKeys) != 812 {
+		t.Fatalf("failed initial upload cannot retry safely: err=%v, count=%d", err, len(retry))
+	}
+	for i := range initial {
+		if initial[i] != retry[i] {
+			t.Fatal("failed upload retry changed pending key material")
+		}
+	}
+}
+
+func TestGuestPreKeyUploadAttemptsAreSerializedAndThrottled(t *testing.T) {
+	m := newMemoryStore()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var success atomic.Int32
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := m.GetOrGenPreKeys(ctx, 50); err == nil {
+				success.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if success.Load() != 1 || len(m.preKeys) != 50 {
+		t.Fatalf("concurrent upload attempts escaped the gate: success=%d, keys=%d", success.Load(), len(m.preKeys))
+	}
+	for range 10 {
+		now = now.Add(time.Second)
+		if pending, err := m.GetOrGenPreKeys(ctx, 50); err != nil || len(pending) != 50 || len(m.preKeys) != 50 {
+			t.Fatalf("pending retry grew state: err=%v, keys=%d", err, len(m.preKeys))
+		}
+		if _, err := m.GetOrGenPreKeys(ctx, 50); err == nil {
+			t.Fatal("pending retry bypassed the unconditional upload interval")
+		}
 	}
 }
