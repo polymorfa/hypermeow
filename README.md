@@ -249,7 +249,7 @@ See [LICENSING.md](LICENSING.md) for the file-level boundary.
 ### Connection lifecycle observers
 
 `AddConnectionEventHandler(func(context.Context, any))` observes `Connected`,
-`Disconnected`, `QR`, `LoggedOut` and `StreamReplaced`. The context is the original
+`Disconnected`, `QR`, `LoggedOut`, `StreamReplaced` and `CATRefreshError`. The context is the original
 connection's `ConnectContext` argument, captured before asynchronous delivery.
 A delayed event can arrive after that context is cancelled. Compare it with the
 connection authority your application owns before updating state; do not label an
