@@ -92,6 +92,17 @@ func (fs *FrameSocket) SetOnDisconnect(handler func(ctx context.Context, remote 
 }
 
 func (fs *FrameSocket) Close(code websocket.StatusCode) {
+	fs.CloseWithReason(code, "")
+}
+
+// CloseWithReason closes the socket with an explicit close reason.
+//
+// WhatsApp Web races two websockets on every connect and closes the one that
+// loses with code 1000 and the reason "loser socket"
+// (WAWebOpenSocket.js:44-52). A close with an empty reason where the client
+// sends one is observable, so the reason is part of the wire behaviour and not
+// a log detail.
+func (fs *FrameSocket) CloseWithReason(code websocket.StatusCode, reason string) {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 
@@ -102,7 +113,7 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 
 	fs.closed.Store(true)
 	if code > 0 {
-		err := conn.Close(code, "")
+		err := conn.Close(code, reason)
 		if err != nil {
 			fs.log.Warnf("Error sending close to websocket: %v", err)
 		}
@@ -121,16 +132,24 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 }
 
 func (fs *FrameSocket) Connect(ctx context.Context) error {
+	return fs.dial(ctx, ctx, true)
+}
+
+// dial separates the lifetime of the opened socket from the context used
+// for the HTTP upgrade. Most callers use the same context for both through
+// Connect. Socket racing uses a short-lived dial context so aborting another
+// in-flight upgrade cannot cancel a connection that has already opened.
+func (fs *FrameSocket) dial(parentCtx, dialCtx context.Context, startPump bool) error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 	if fs.conn.Load() != nil {
 		return ErrSocketAlreadyOpen
 	}
-	fs.parentCtx = ctx
-	fs.cancelCtx, fs.cancel = context.WithCancel(ctx)
+	fs.parentCtx = parentCtx
+	fs.cancelCtx, fs.cancel = context.WithCancel(parentCtx)
 
 	fs.log.Debugf("Dialing %s", fs.URL)
-	conn, resp, err := websocket.Dial(ctx, fs.URL, fs.makeDialOptions())
+	conn, resp, err := websocket.Dial(dialCtx, fs.URL, fs.makeDialOptions())
 	if err != nil {
 		if resp != nil {
 			err = ErrWithStatusCode{err, resp.StatusCode}
@@ -141,15 +160,33 @@ func (fs *FrameSocket) Connect(ctx context.Context) error {
 	conn.SetReadLimit(FrameMaxSize)
 
 	fs.conn.Store(conn)
-
-	if !fs.startWorker(func() { fs.readPump(conn, ctx) }) {
-		fs.conn.Store(nil)
-		fs.closed.Store(true)
-		fs.cancel()
-		_ = conn.CloseNow()
+	if startPump && !fs.startReadPumpLocked(conn) {
 		return ErrSocketClosed
 	}
 	return nil
+}
+
+func (fs *FrameSocket) startReadPump() {
+	fs.lock.Lock()
+	defer fs.lock.Unlock()
+	if conn := fs.conn.Load(); conn != nil {
+		fs.startReadPumpLocked(conn)
+	}
+}
+
+// startReadPumpLocked starts the read pump through the worker launcher. If the
+// owning lifetime refuses the worker, the socket is closed without a
+// disconnect callback and false is returned. The caller holds fs.lock.
+func (fs *FrameSocket) startReadPumpLocked(conn *websocket.Conn) bool {
+	ctx := fs.cancelCtx
+	if fs.startWorker(func() { fs.readPump(conn, ctx) }) {
+		return true
+	}
+	fs.conn.Store(nil)
+	fs.closed.Store(true)
+	fs.cancel()
+	_ = conn.CloseNow()
+	return false
 }
 
 func (fs *FrameSocket) Context() context.Context {
@@ -188,7 +225,7 @@ func (fs *FrameSocket) SendFrame(data []byte) error {
 	return conn.Write(fs.cancelCtx, websocket.MessageBinary, wholeFrame)
 }
 
-func (fs *FrameSocket) frameComplete() {
+func (fs *FrameSocket) frameComplete() bool {
 	data := fs.incoming
 	fs.incoming = nil
 	fs.partialHeader = nil
@@ -196,7 +233,9 @@ func (fs *FrameSocket) frameComplete() {
 	fs.receivedLength = 0
 	select {
 	case fs.Frames <- data:
+		return true
 	case <-fs.cancelCtx.Done():
+		return false
 	}
 }
 
@@ -216,7 +255,9 @@ func (fs *FrameSocket) processData(msg []byte) {
 				if len(msg) >= length {
 					fs.incoming = msg[:length]
 					msg = msg[length:]
-					fs.frameComplete()
+					if !fs.frameComplete() {
+						return
+					}
 				} else {
 					fs.incoming = make([]byte, length)
 					copy(fs.incoming, msg)
@@ -231,7 +272,9 @@ func (fs *FrameSocket) processData(msg []byte) {
 			if fs.receivedLength+len(msg) >= fs.incomingLength {
 				copy(fs.incoming[fs.receivedLength:], msg[:fs.incomingLength-fs.receivedLength])
 				msg = msg[fs.incomingLength-fs.receivedLength:]
-				fs.frameComplete()
+				if !fs.frameComplete() {
+					return
+				}
 			} else {
 				copy(fs.incoming[fs.receivedLength:], msg)
 				fs.receivedLength += len(msg)
