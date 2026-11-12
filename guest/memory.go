@@ -27,7 +27,10 @@ import (
 // Nothing survives the process, which is what a one-time guest identity needs.
 // The store retains at most 1024 unconsumed prekeys, including at most 64 retry
 // keys. Upload attempts are at least one second apart, and new upload batches
-// are generated at most once per minute. These are local guest resource policies.
+// are generated at most once per minute. Signal identities, sessions and sender
+// keys share a 1024-entry and 16 MiB key/value-data budget. Each address is at
+// most 512 bytes. Excess writes fail without evicting existing state. These
+// are local guest resource policies.
 func NewDevice(log waLog.Logger) *store.Device {
 	if log == nil {
 		log = waLog.Noop
@@ -73,11 +76,15 @@ const (
 	guestPreKeyUploadPeriod     = time.Second
 	guestPreKeyGenerationPeriod = time.Minute
 	maxGuestPreKeyID            = 0xffffff
+	maxGuestSignalAddressBytes  = 512
+	maxGuestSignalEntries       = 1024
+	maxGuestSignalBytes         = 16 << 20
 )
 
 var (
 	errGuestPreKeyLimit = errors.New("guest: prekey retention or ID limit reached")
 	errGuestPreKeyRate  = errors.New("guest: prekey upload rate limit reached")
+	errGuestSignalLimit = errors.New("guest: Signal store resource limit reached")
 )
 
 type memoryPreKey struct {
@@ -90,6 +97,7 @@ type memoryStore struct {
 	*store.NoopStore
 
 	mu                   sync.Mutex
+	signalBytes          int64
 	identities           map[string][32]byte
 	identityDeleteGen    uint64
 	sessions             map[string][]byte
@@ -122,13 +130,34 @@ func addressUser(address string) string {
 	return user
 }
 
+func (m *memoryStore) reserveSignalLocked(entries int, size int64) error {
+	if entries > maxGuestSignalEntries-len(m.identities)-len(m.sessions)-len(m.senderKeys) ||
+		size > maxGuestSignalBytes-m.signalBytes {
+		return errGuestSignalLimit
+	}
+	m.signalBytes += size
+	return nil
+}
+
+func (m *memoryStore) putIdentityLocked(address string, key [32]byte) error {
+	if len(address) > maxGuestSignalAddressBytes {
+		return errGuestSignalLimit
+	}
+	if _, exists := m.identities[address]; !exists {
+		if err := m.reserveSignalLocked(1, int64(len(address)+len(key))); err != nil {
+			return err
+		}
+	}
+	m.identities[strings.Clone(address)] = key
+	return nil
+}
+
 // IdentityStore
 
 func (m *memoryStore) PutIdentity(_ context.Context, address string, key [32]byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.identities[address] = key
-	return nil
+	return m.putIdentityLocked(address, key)
 }
 
 func (m *memoryStore) DeleteAllIdentities(_ context.Context, phone string) error {
@@ -137,6 +166,7 @@ func (m *memoryStore) DeleteAllIdentities(_ context.Context, phone string) error
 	m.identityDeleteGen++
 	for address := range m.identities {
 		if addressUser(address) == phone {
+			m.signalBytes -= int64(len(address) + 32)
 			delete(m.identities, address)
 		}
 	}
@@ -147,11 +177,17 @@ func (m *memoryStore) DeleteIdentity(_ context.Context, address string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.identityDeleteGen++
+	if _, exists := m.identities[address]; exists {
+		m.signalBytes -= int64(len(address) + 32)
+	}
 	delete(m.identities, address)
 	return nil
 }
 
 func (m *memoryStore) IsTrustedIdentity(_ context.Context, address string, key [32]byte) (bool, error) {
+	if len(address) > maxGuestSignalAddressBytes {
+		return false, errGuestSignalLimit
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	known, ok := m.identities[address]
@@ -161,7 +197,7 @@ func (m *memoryStore) IsTrustedIdentity(_ context.Context, address string, key [
 func (m *memoryStore) GetManyIdentities(_ context.Context, addresses []string) (map[string][32]byte, uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make(map[string][32]byte, len(addresses))
+	out := make(map[string][32]byte, min(len(addresses), len(m.identities)))
 	for _, address := range addresses {
 		if key, ok := m.identities[address]; ok {
 			out[address] = key
@@ -176,10 +212,15 @@ func (m *memoryStore) EnsureIdentity(_ context.Context, address string, key [32]
 	if deleteGeneration != m.identityDeleteGen {
 		return false, nil
 	}
+	if len(address) > maxGuestSignalAddressBytes {
+		return false, errGuestSignalLimit
+	}
 	if known, ok := m.identities[address]; ok {
 		return known == key, nil
 	}
-	m.identities[address] = key
+	if err := m.putIdentityLocked(address, key); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -201,7 +242,7 @@ func (m *memoryStore) HasSession(_ context.Context, address string) (bool, error
 func (m *memoryStore) GetManySessions(_ context.Context, addresses []string) (map[string][]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make(map[string][]byte, len(addresses))
+	out := make(map[string][]byte, min(len(addresses), len(m.sessions)))
 	for _, address := range addresses {
 		if session, ok := m.sessions[address]; ok {
 			out[address] = append([]byte(nil), session...)
@@ -211,17 +252,46 @@ func (m *memoryStore) GetManySessions(_ context.Context, addresses []string) (ma
 }
 
 func (m *memoryStore) PutSession(_ context.Context, address string, session []byte) error {
+	if len(address) > maxGuestSignalAddressBytes || len(session) > maxGuestSignalBytes {
+		return errGuestSignalLimit
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sessions[address] = append([]byte(nil), session...)
+	previous, exists := m.sessions[address]
+	entries, size := 0, int64(len(session))-int64(len(previous))
+	if !exists {
+		entries, size = 1, size+int64(len(address))
+	}
+	if err := m.reserveSignalLocked(entries, size); err != nil {
+		return err
+	}
+	m.sessions[strings.Clone(address)] = append([]byte(nil), session...)
 	return nil
 }
 
 func (m *memoryStore) PutManySessions(_ context.Context, sessions map[string][]byte) error {
+	if len(sessions) > maxGuestSignalEntries {
+		return errGuestSignalLimit
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	entries, size := 0, int64(0)
 	for address, session := range sessions {
-		m.sessions[address] = append([]byte(nil), session...)
+		if len(address) > maxGuestSignalAddressBytes || len(session) > maxGuestSignalBytes {
+			return errGuestSignalLimit
+		}
+		previous, exists := m.sessions[address]
+		size += int64(len(session)) - int64(len(previous))
+		if !exists {
+			entries++
+			size += int64(len(address))
+		}
+	}
+	if err := m.reserveSignalLocked(entries, size); err != nil {
+		return err
+	}
+	for address, session := range sessions {
+		m.sessions[strings.Clone(address)] = append([]byte(nil), session...)
 	}
 	return nil
 }
@@ -229,8 +299,9 @@ func (m *memoryStore) PutManySessions(_ context.Context, sessions map[string][]b
 func (m *memoryStore) DeleteAllSessions(_ context.Context, phone string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for address := range m.sessions {
+	for address, session := range m.sessions {
 		if addressUser(address) == phone {
+			m.signalBytes -= int64(len(address)) + int64(len(session))
 			delete(m.sessions, address)
 		}
 	}
@@ -240,6 +311,9 @@ func (m *memoryStore) DeleteAllSessions(_ context.Context, phone string) error {
 func (m *memoryStore) DeleteSession(_ context.Context, address string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if previous, exists := m.sessions[address]; exists {
+		m.signalBytes -= int64(len(address)) + int64(len(previous))
+	}
 	delete(m.sessions, address)
 	return nil
 }
@@ -362,9 +436,21 @@ func (m *memoryStore) UploadedPreKeyCount(_ context.Context) (int, error) {
 // SenderKeyStore
 
 func (m *memoryStore) PutSenderKey(_ context.Context, group, user string, session []byte) error {
+	if len(group) > maxGuestSignalAddressBytes || len(user) > maxGuestSignalAddressBytes || len(session) > maxGuestSignalBytes {
+		return errGuestSignalLimit
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.senderKeys[group+"\x00"+user] = append([]byte(nil), session...)
+	address := group + "\x00" + user
+	previous, exists := m.senderKeys[address]
+	entries, size := 0, int64(len(session))-int64(len(previous))
+	if !exists {
+		entries, size = 1, size+int64(len(address))
+	}
+	if err := m.reserveSignalLocked(entries, size); err != nil {
+		return err
+	}
+	m.senderKeys[address] = append([]byte(nil), session...)
 	return nil
 }
 

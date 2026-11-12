@@ -22,6 +22,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Fixed
 
+- Bound guest Signal identities, sessions and sender keys before retaining peer data.
+
 - Redact malformed call-link and registration URLs from returned errors.
 
 - Reject guest registration redirects and bound guest prekey uploads and retained keys.
