@@ -80,8 +80,15 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 		data     []byte
 		writeErr error
 	)
+	admitCtx, cancel := context.WithTimeout(ctx, nativeAdmitTimeout)
+	defer cancel()
 	write := func(sendCtx context.Context) error {
 		mu.Lock()
+		// Check the deadline under the same lock that closes the callback, so an Admit that
+		// wakes at or after the deadline cannot win the race and write.
+		if state == nativeWriteOpen && admitCtx.Err() != nil {
+			state = nativeWriteClosed
+		}
 		if state != nativeWriteOpen {
 			mu.Unlock()
 			return ErrNativeSendRefused
@@ -104,8 +111,6 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 
 	// Admit runs in its own goroutine so the deadline is enforced even if Admit ignores its
 	// context. A late Admit can no longer write: the callback is closed below.
-	admitCtx, cancel := context.WithTimeout(ctx, nativeAdmitTimeout)
-	defer cancel()
 	admitDone := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -125,7 +130,9 @@ func (cli *Client) sendNativeMessageNode(ctx context.Context, node waBinary.Node
 	// Close the callback. A write that already started is waited for, so no write can begin
 	// or still be in flight after this function returns.
 	mu.Lock()
-	wrote := state != nativeWriteOpen
+	// Only a write that actually started counts; write itself may have closed the callback at
+	// the deadline without starting.
+	wrote := state == nativeWriteWriting || state == nativeWriteDone
 	if !wrote {
 		state = nativeWriteClosed
 	}
