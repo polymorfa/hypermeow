@@ -82,6 +82,27 @@ go get github.com/polymorfa/hypermeow@main
 go mod tidy
 ```
 
+## Receiving statuses
+
+Personal and group `<status>` publications use encrypted message processing;
+channel statuses keep their plaintext processing path. The original transport tag
+is preserved for acknowledgments. `MessageInfo.StatusKind()` distinguishes
+`personal`, `group` and `channel` publications from ordinary messages, status
+mentions and replies. Group-status-v2 content is unwrapped while `RawMessage`
+retains the original protobuf.
+
+Pairwise status sessions are stored separately from chat sessions. Explicit
+`meta session_scope="status"` is honored by default. Applications that consume
+served AB props can install `Client.GetStatusSessionMode` before connecting to
+supply `status_infra_1_1_session_split` (0 disabled, 1 receiver enabled, 2 sender
+enabled, 3 forced). This receive change does not enable status publishing.
+
+Custom `RemoteSignal` receivers must use `RemoteReceive.StatusSession` to select
+the pairwise session and carry `StatusKind` into their application event. Sender
+keys remain scoped to the group and sender, and private keys and plaintext stay
+in the remote store. Upgrading this library alone does not upgrade a remote
+receiver's protocol or storage.
+
 ## Newsletter observations
 
 `NewsletterMessage.ViewCounts` preserves the reported view definitions, including

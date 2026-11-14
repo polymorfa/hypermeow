@@ -241,6 +241,12 @@ type Client struct {
 	// If false, decrypting a message from untrusted devices will fail.
 	AutoTrustIdentity bool
 
+	// GetStatusSessionMode supplies the served status_infra_1_1_session_split
+	// value. Install before Connect; the callback may read a synchronized cache.
+	// Without a callback, explicit status session metadata is honored, but a
+	// separate session is never forced on an unmarked status.
+	GetStatusSessionMode func() types.StatusSessionMode
+
 	// RawNodeHandler, if non-nil, is called for every inbound node
 	// after decoding but before standard dispatch. See [RawNodeHandler].
 	RawNodeHandler RawNodeHandler
@@ -1164,7 +1170,7 @@ func (cli *Client) defaultNodeHandlers() map[string]nodeHandler {
 	return map[string]nodeHandler{
 		"message":      cli.handleEncryptedMessage,
 		"appdata":      cli.handleEncryptedMessage,
-		"status":       cli.handleUnencryptedMessage,
+		"status":       cli.handleStatusMessage,
 		"receipt":      cli.handleReceipt,
 		"call":         cli.handleCallEvent,
 		"chatstate":    cli.handleChatState,
