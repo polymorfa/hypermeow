@@ -273,6 +273,9 @@ func buildBaseReceipt(id string, node *waBinary.Node) waBinary.Attrs {
 		"id": id,
 		"to": node.Attrs["from"],
 	}
+	if node.Tag == "status" {
+		attrs["class"] = "status"
+	}
 	if recipient, ok := node.Attrs["recipient"]; ok {
 		attrs["recipient"] = recipient
 	}
@@ -284,6 +287,9 @@ func buildBaseReceipt(id string, node *waBinary.Node) waBinary.Attrs {
 
 func (cli *Client) sendMessageReceipt(ctx context.Context, info *types.MessageInfo, node *waBinary.Node) {
 	attrs := buildBaseReceipt(info.ID, node)
+	if info.Chat == types.StatusBroadcastJID || info.IsGroupStatus {
+		attrs["class"] = "status"
+	}
 	if info.IsFromMe {
 		attrs["type"] = string(types.ReceiptTypeSender)
 		if info.Type == "peer_msg" {
