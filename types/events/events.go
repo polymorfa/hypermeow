@@ -428,6 +428,10 @@ func (evt *Message) UnwrapRaw() *Message {
 		evt.Message = evt.Message.GetBotInvokeMessage().GetMessage()
 		evt.IsBotInvoke = true
 	}
+	if child := evt.Message.GetGroupStatusMessageV2().GetMessage(); child != nil {
+		evt.Info.IsGroupStatus = true
+		evt.Message = child
+	}
 	if evt.Message.GetEphemeralMessage().GetMessage() != nil {
 		evt.Message = evt.Message.GetEphemeralMessage().GetMessage()
 		evt.IsEphemeral = true

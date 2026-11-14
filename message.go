@@ -92,6 +92,21 @@ func (cli *Client) updateMessageContactNames(ctx context.Context, info *types.Me
 	}
 }
 
+// Status publications share encrypted receive processing with messages, but keep
+// their original tag for acknowledgements and their group-status provenance.
+func (cli *Client) handleStatusMessage(ctx context.Context, node *waBinary.Node) {
+	from, ok := node.Attrs["from"].(types.JID)
+	if !ok || (from != types.StatusBroadcastJID && from.Server != types.GroupServer && from.Server != types.NewsletterServer) {
+		cli.sendAck(ctx, node, NackParsingError)
+		return
+	}
+	if from.Server == types.NewsletterServer {
+		cli.handleUnencryptedMessage(ctx, node)
+	} else {
+		cli.handleEncryptedMessage(ctx, node)
+	}
+}
+
 func (cli *Client) handleUnencryptedMessage(ctx context.Context, node *waBinary.Node) {
 	info, err := cli.parseMessageInfo(node)
 	if err != nil {
@@ -232,6 +247,7 @@ func (cli *Client) parseMsgMetaInfo(node waBinary.Node) (metaInfo types.MsgMetaI
 	metaNode := node.GetChildByTag("meta")
 
 	ag := metaNode.AttrGetter()
+	metaInfo.SessionScope = ag.OptionalString("session_scope")
 	metaInfo.TargetID = types.MessageID(ag.OptionalString("target_id"))
 	metaInfo.TargetSender = ag.OptionalJIDOrEmpty("target_sender_jid")
 	metaInfo.TargetChat = ag.OptionalJIDOrEmpty("target_chat_jid")
@@ -253,6 +269,8 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 		return nil, err
 	}
 	ag := node.AttrGetter()
+	info.IsStatusStanza = node.Tag == "status"
+	info.IsGroupStatus = info.IsStatusStanza && info.Chat.Server == types.GroupServer
 	info.ID = types.MessageID(ag.String("id"))
 	info.ServerID = types.MessageServerID(ag.OptionalInt("server_id"))
 	info.Timestamp = ag.UnixTime("t")
@@ -426,7 +444,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		var ciphertextHash *[32]byte
 		var err error
 		if encType == "pkmsg" || encType == "msg" {
-			decrypted, ciphertextHash, err = cli.decryptDM(ctx, &child, senderEncryptionJID, encType == "pkmsg", info.Timestamp)
+			decrypted, ciphertextHash, err = cli.decryptDM(cli.statusSessionContext(ctx, info), &child, senderEncryptionJID, encType == "pkmsg", info.Timestamp)
 			containsDirectMsg = true
 		} else if info.IsGroup && encType == "skmsg" {
 			decrypted, ciphertextHash, err = cli.decryptGroupMsg(ctx, &child, senderEncryptionJID, info.Chat, info.Timestamp)
@@ -576,7 +594,7 @@ func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID)
 	if err != nil {
 		return fmt.Errorf("failed to delete identity: %w", err)
 	}
-	err = cli.Store.Sessions.DeleteSession(ctx, target.SignalAddress().String())
+	err = cli.Store.DeleteSession(ctx, target.SignalAddress())
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
@@ -692,7 +710,7 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 				pt, innerErr = cipher.DecryptMessage(decryptCtx, preKeyMsg)
 			}
 			return pt, innerErr
-		}, "prekey", from.String())
+		}, "prekey", store.SignalSessionAddress(ctx, from.String()))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt prekey message: %w", err)
 		}
@@ -703,7 +721,7 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		}
 		plaintext, ciphertextHash, err = cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
 			return cipher.Decrypt(decryptCtx, msg)
-		}, "normal", from.String())
+		}, "normal", store.SignalSessionAddress(ctx, from.String()))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt normal message: %w", err)
 		}

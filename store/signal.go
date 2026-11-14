@@ -97,7 +97,7 @@ func (device *Device) ContainsPreKey(ctx context.Context, preKeyID uint32) (bool
 }
 
 func (device *Device) LoadSession(ctx context.Context, address *protocol.SignalAddress) (*record.Session, error) {
-	addrString := address.String()
+	addrString := SignalSessionAddress(ctx, address.String())
 	if sess := getCachedSession(ctx, addrString); sess != nil {
 		return sess, nil
 	}
@@ -136,7 +136,7 @@ func (device *Device) GetSubDeviceSessions(ctx context.Context, name string) ([]
 }
 
 func (device *Device) StoreSession(ctx context.Context, address *protocol.SignalAddress, record *record.Session) error {
-	addrString := address.String()
+	addrString := SignalSessionAddress(ctx, address.String())
 	if putCachedSession(ctx, addrString, record) {
 		return nil
 	}
@@ -149,7 +149,7 @@ func (device *Device) StoreSession(ctx context.Context, address *protocol.Signal
 }
 
 func (device *Device) ContainsSession(ctx context.Context, remoteAddress *protocol.SignalAddress) (bool, error) {
-	addrString := remoteAddress.String()
+	addrString := SignalSessionAddress(ctx, remoteAddress.String())
 	if found, cached := hasCachedSession(ctx, addrString); cached {
 		return found, nil
 	}
@@ -161,7 +161,7 @@ func (device *Device) ContainsSession(ctx context.Context, remoteAddress *protoc
 }
 
 func (device *Device) DeleteSession(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
-	addrString := remoteAddress.String()
+	addrString := SignalSessionAddress(ctx, remoteAddress.String())
 	if err := device.Sessions.DeleteSession(ctx, addrString); err != nil {
 		return fmt.Errorf("failed to delete session with %s: %w", addrString, err)
 	}

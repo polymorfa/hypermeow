@@ -97,7 +97,10 @@ type RemoteIdentity struct {
 // RemoteReceive is one `<enc>` payload of a received message.
 type RemoteReceive struct {
 	// Timestamp is the provider message time; a missing value remains zero.
-	Timestamp time.Time
+	Timestamp  time.Time
+	StatusKind types.StatusKind
+	// StatusSession selects a separate pairwise session, not a sender-key scope.
+	StatusSession bool
 	// SenderAlt is the other provider address when Sender is normalized for
 	// Signal encryption (for example, PN when Sender is a LID).
 	SenderAlt      types.JID
@@ -396,6 +399,8 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 		}
 		result, err := cli.remoteSignal.Receive(ctx, RemoteReceive{
 			Timestamp:      info.Timestamp,
+			StatusKind:     info.StatusKind(),
+			StatusSession:  encType != "skmsg" && cli.usesStatusSession(info),
 			SenderAlt:      senderAlt,
 			Chat:           info.Chat,
 			Sender:         senderEncryptionJID,

@@ -89,11 +89,32 @@ type MsgMetaInfo struct {
 	TargetSender JID
 	TargetChat   JID
 
+	SessionScope string // Explicit meta session_scope, when present.
+
 	DeprecatedLIDSession *bool
 
 	ThreadMessageID        MessageID
 	ThreadMessageSenderJID JID
 }
+
+// StatusKind identifies a status publication, not a reply or mention notification.
+type StatusKind string
+
+const (
+	StatusKindPersonal StatusKind = "personal"
+	StatusKindGroup    StatusKind = "group"
+	StatusKindChannel  StatusKind = "channel"
+)
+
+// StatusSessionMode matches the served status_infra_1_1_session_split states.
+type StatusSessionMode int
+
+const (
+	StatusSessionDisabled StatusSessionMode = iota
+	StatusSessionReceiverEnabled
+	StatusSessionSenderEnabled
+	StatusSessionForced
+)
 
 // MessageInfo contains metadata about an incoming message.
 type MessageInfo struct {
@@ -111,6 +132,8 @@ type MessageInfo struct {
 	MsgBotInfo  MsgBotInfo
 	MsgMetaInfo MsgMetaInfo
 
+	IsStatusStanza     bool // The original transport tag was status, not message.
+	IsGroupStatus      bool
 	IsNewsletterStatus bool
 
 	VerifiedName *VerifiedName
@@ -128,4 +151,19 @@ func (ms *MessageSource) SourceString() string {
 	} else {
 		return ms.Chat.String()
 	}
+}
+
+// StatusKind returns the publication audience, or empty for an ordinary message.
+// Quoted status content and status mention notifications do not change the audience.
+func (info *MessageInfo) StatusKind() StatusKind {
+	if info.IsNewsletterStatus {
+		return StatusKindChannel
+	}
+	if info.IsGroupStatus {
+		return StatusKindGroup
+	}
+	if info.Chat == StatusBroadcastJID {
+		return StatusKindPersonal
+	}
+	return ""
 }
