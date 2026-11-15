@@ -101,7 +101,9 @@ Custom `RemoteSignal` receivers must use `RemoteReceive.StatusSession` to select
 the pairwise session and carry `StatusKind` into their application event. Sender
 keys remain scoped to the group and sender, and private keys and plaintext stay
 in the remote store. Upgrading this library alone does not upgrade a remote
-receiver's protocol or storage.
+receiver's protocol or storage. Legacy encrypted group publications also need
+`RemoteReceiveResult.StatusKind` returned after decrypt and on duplicate delivery,
+so the client can select the status receipt class without seeing plaintext.
 
 ## Newsletter observations
 

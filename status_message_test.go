@@ -240,7 +240,7 @@ func TestGroupStatusWrapperIsNotAMentionOrReply(t *testing.T) {
 		{GroupStatusMentionMessage: &waE2E.FutureProofMessage{Message: content}},
 		{StatusMentionMessage: &waE2E.FutureProofMessage{Message: content}},
 	} {
-		evt := (&events.Message{RawMessage: raw}).UnwrapRaw()
+		evt := (&events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: types.NewJID("120363000000001", types.GroupServer), IsGroup: true}}, RawMessage: raw}).UnwrapRaw()
 		isPublication := raw.GetGroupStatusMessageV2() != nil
 		if (evt.Info.StatusKind() == types.StatusKindGroup) != isPublication {
 			t.Fatal("mention classified as a publication")
@@ -264,5 +264,39 @@ func TestStatusReceiptPreservesClass(t *testing.T) {
 		if receipt.Class != class {
 			t.Fatalf("class = %q, want %q", receipt.Class, class)
 		}
+	}
+}
+
+func TestLegacyGroupStatusReceiptUsesPublicationClass(t *testing.T) {
+	cli, _, sent := newTestRemote(t)
+	own := types.NewJID("100000000001", types.HiddenUserServer)
+	cli.Store.ID = &own
+	group := types.NewJID("120363000000001", types.GroupServer)
+	info := types.MessageInfo{MessageSource: types.MessageSource{Chat: group, Sender: own, IsGroup: true}, ID: "authored-legacy-group"}
+	msg := &waE2E.Message{GroupStatusMessageV2: &waE2E.FutureProofMessage{Message: &waE2E.Message{Conversation: proto.String("authored publication")}}}
+	cli.handleDecryptedMessage(context.Background(), &info, msg, 0)
+	if info.StatusKind() != types.StatusKindGroup {
+		t.Fatal("receipt lost group publication context")
+	}
+	cli.sendMessageReceipt(context.Background(), &info, &waBinary.Node{Tag: "message", Attrs: waBinary.Attrs{"from": group, "participant": own, "id": string(info.ID)}})
+	if len(sent.nodes) != 1 || sent.nodes[0].Attrs["class"] != "status" {
+		t.Fatal("legacy group publication sent a chat receipt")
+	}
+	info.Chat, info.IsGroup = own, false
+	if info.StatusKind() != "" {
+		t.Fatal("group marker reclassified a direct chat")
+	}
+}
+
+func TestRemoteLegacyGroupClassificationReachesDuplicateReceipt(t *testing.T) {
+	cli, remote, sent := newTestRemote(t)
+	own := types.NewJID("100000000001", types.HiddenUserServer)
+	cli.Store.ID = &own
+	remote.result = RemoteReceiveResult{StatusKind: types.StatusKindGroup, AlreadyDelivered: true}
+	_, node := encMessage("skmsg")
+	node.Attrs["from"], node.Attrs["participant"] = types.NewJID("120363000000001", types.GroupServer), own
+	cli.handleEncryptedMessage(context.Background(), node)
+	if len(sent.nodes) != 1 || sent.nodes[0].Attrs["class"] != "status" {
+		t.Fatal("remote duplicate group publication sent a chat receipt")
 	}
 }
