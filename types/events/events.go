@@ -518,6 +518,8 @@ const (
 // N.B. WhatsApp on Android sends message IDs from newest message to oldest, but WhatsApp on iOS sends them in the opposite order (oldest first).
 type Receipt struct {
 	types.MessageSource
+	// Class preserves the wire receipt class, including status publications.
+	Class      string
 	MessageIDs []types.MessageID
 	Timestamp  time.Time
 	Type       types.ReceiptType
