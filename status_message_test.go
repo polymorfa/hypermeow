@@ -124,6 +124,23 @@ func TestStatusSessionsKeepChatRatchetsSeparate(t *testing.T) {
 			t.Fatalf("response %d class = %v", i, got)
 		}
 	}
+	keys := []string{sender.SignalAddress().String(), sender.SignalAddress().String() + "_status"}
+	_, cached, err := companion.WithCachedSessions(ctx, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.clearUntrustedIdentity(store.WithStatusSession(cached), sender); err != nil {
+		t.Fatal(err)
+	}
+	if err := companion.PutCachedSessions(cached); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if _, ok := mem.sessions[key]; ok {
+			t.Fatalf("identity reset retained session %s", key)
+		}
+	}
+
 }
 
 func TestStatusSessionModeAndPublicationContext(t *testing.T) {

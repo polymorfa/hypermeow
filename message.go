@@ -594,7 +594,7 @@ func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID)
 	if err != nil {
 		return fmt.Errorf("failed to delete identity: %w", err)
 	}
-	err = cli.Store.DeleteSession(ctx, target.SignalAddress())
+	err = cli.Store.DeleteSessionsForIdentity(ctx, target.SignalAddress())
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
