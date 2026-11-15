@@ -72,6 +72,7 @@ func (cli *Client) parseReceipt(node *waBinary.Node) (*events.Receipt, []waBinar
 	}
 	receipt := events.Receipt{
 		MessageSource: source,
+		Class:         ag.OptionalString("class"),
 		Timestamp:     ag.UnixTime("t"),
 		Type:          types.ReceiptType(ag.OptionalString("type")),
 		MessageSender: ag.OptionalJIDOrEmpty("recipient"),
