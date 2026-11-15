@@ -233,3 +233,19 @@ func TestGroupStatusWrapperIsNotAMentionOrReply(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusReceiptPreservesClass(t *testing.T) {
+	cli, _, _ := newTestRemote(t)
+	own := types.NewJID("100000000001", types.HiddenUserServer)
+	cli.Store.ID = &own
+	for _, class := range []string{"", "status"} {
+		node := waBinary.Node{Tag: "receipt", Attrs: waBinary.Attrs{"from": types.NewJID("123456789", types.HiddenUserServer), "id": "authored-receipt", "t": "1700000000", "class": class}}
+		receipt, _, err := cli.parseReceipt(&node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if receipt.Class != class {
+			t.Fatalf("class = %q, want %q", receipt.Class, class)
+		}
+	}
+}
