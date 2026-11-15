@@ -168,6 +168,20 @@ func (device *Device) DeleteSession(ctx context.Context, remoteAddress *protocol
 	return nil
 }
 
+// DeleteSessionsForIdentity removes both pairwise scopes after a shared identity
+// change. Evict cached records too so a later flush cannot restore an old ratchet.
+func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
+	for _, key := range []string{remoteAddress.String(), remoteAddress.String() + "_status"} {
+		if err := device.Sessions.DeleteSession(ctx, key); err != nil {
+			return fmt.Errorf("failed to delete session with %s: %w", key, err)
+		}
+		if cache := getSessionCache(ctx); cache != nil {
+			cache.Delete(key)
+		}
+	}
+	return nil
+}
+
 func (device *Device) DeleteAllSessions(ctx context.Context) error {
 	return fmt.Errorf("DeleteAllSessions: %w", ErrUnsupportedSignalStoreOperation)
 }
