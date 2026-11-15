@@ -114,6 +114,8 @@ type RemoteReceive struct {
 
 // RemoteReceiveResult is what the client learns about a received payload.
 type RemoteReceiveResult struct {
+	// StatusKind preserves decrypted publication classification for legacy envelopes and duplicate receipts.
+	StatusKind types.StatusKind
 	// AlreadyDelivered means the application has had this payload before;
 	// the client only needs to acknowledge it again.
 	AlreadyDelivered bool
@@ -453,6 +455,10 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 		if result.AppStateKeyShare != nil {
 			cli.handleAppStateSyncKeyShare(ctx, result.AppStateKeyShare)
 		}
+		if result.StatusKind == types.StatusKindGroup && info.Chat.Server == types.GroupServer {
+			info.IsGroupStatus = true
+		}
+
 		if !result.AlreadyDelivered {
 			cli.dispatchEvent(&events.RemoteMessage{
 				Info:              *info,

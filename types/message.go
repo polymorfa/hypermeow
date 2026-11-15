@@ -159,7 +159,7 @@ func (info *MessageInfo) StatusKind() StatusKind {
 	if info.IsNewsletterStatus {
 		return StatusKindChannel
 	}
-	if info.IsGroupStatus {
+	if info.IsGroupStatus && info.Chat.Server == GroupServer {
 		return StatusKindGroup
 	}
 	if info.Chat == StatusBroadcastJID {
