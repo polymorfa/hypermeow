@@ -375,3 +375,41 @@ func TestLocalLegacyGroupDuplicateKeepsStatusReceipt(t *testing.T) {
 		}
 	}
 }
+
+func TestSignalDisabledStatusHandoffKeepsWireOrder(t *testing.T) {
+	for _, chat := range []types.JID{types.StatusBroadcastJID, types.NewJID("120363000000001", types.GroupServer)} {
+		t.Run(chat.Server, func(t *testing.T) {
+			cli := NewClient(&store.Device{}, waLog.Noop)
+			own := types.NewJID("100000000001", types.HiddenUserServer)
+			cli.Store.ID, cli.Store.LID = &own, own
+			cli.DisabledFeatures.Signal = true
+			queue := make(chan *waBinary.Node, 4) // Deliberately unconsumed.
+			var order []string
+			cli.RawNodeHandler = func(_ context.Context, node *waBinary.Node) (*waBinary.Node, bool) {
+				order = append(order, "raw:"+node.Attrs["id"].(string))
+				return node, false
+			}
+			cli.AddEventHandler(func(event any) {
+				if e, ok := event.(*events.UndecryptedMessage); ok {
+					order = append(order, "event:"+e.Info.ID)
+				}
+			})
+			for _, tag := range []string{"status", "message"} {
+				_, node := encMessage("pkmsg")
+				node.Tag = tag
+				node.Attrs["id"], node.Attrs["from"], node.Attrs["participant"] = tag, chat, types.JID{User: "200000000002", Server: types.HiddenUserServer, Device: 2}
+				frame, err := waBinary.Marshal(*node)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cli.handleFrame(context.Background(), frame, queue)
+			}
+			if fmt.Sprint(order) != "[raw:status event:status raw:message event:message]" {
+				t.Fatalf("handoff order = %v", order)
+			}
+			if len(queue) != 0 {
+				t.Fatalf("encrypted envelopes queued = %d", len(queue))
+			}
+		})
+	}
+}
