@@ -1050,7 +1050,9 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waB
 	// [handleEncryptedMessage]'s own DisabledFeatures.Signal branch
 	// stays as a fallback for direct callers (DangerousInternals,
 	// `<appdata>`).
-	if node.Tag == "message" && cli.DisabledFeatures.Signal {
+	from, hasFrom := node.Attrs["from"].(types.JID)
+	encryptedStatus := node.Tag == "status" && hasFrom && (from == types.StatusBroadcastJID || from.Server == types.GroupServer)
+	if cli.DisabledFeatures.Signal && (node.Tag == "message" || encryptedStatus) {
 		info, err := cli.parseMessageInfo(node)
 		if err != nil {
 			cli.Log.Warnf("Failed to parse message for Signal-disabled handoff: %v", err)
