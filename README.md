@@ -287,3 +287,5 @@ Disconnect and wait for owned work to settle before accepting replacement
 connection authority. `FrameSocket.SetOnDisconnect` replaces the callback under the socket lock; assign
 the legacy field only before connecting.
 These additions are unreleased until their reviewed main commit is adopted.
+
+Custom decrypted-event buffers should implement `store.EventBufferPublicationStore` to retain the group-publication flag while atomically deleting plaintext. The SQL store implements this with migration 21. Old processed rows and custom stores without this extension have unknown legacy classification; no status is inferred from a group chat alone.

@@ -1585,7 +1585,7 @@ func (s *SQLStore) DeleteExpiredPrivacyTokens(ctx context.Context, cutoff time.T
 
 const (
 	getBufferedEventQuery = `
-		SELECT plaintext, server_timestamp, insert_timestamp FROM whatsmeow_event_buffer WHERE our_jid = $1 AND ciphertext_hash = $2
+		SELECT plaintext, server_timestamp, insert_timestamp, group_status FROM whatsmeow_event_buffer WHERE our_jid = $1 AND ciphertext_hash = $2
 	`
 	putBufferedEventQuery = `
 		INSERT INTO whatsmeow_event_buffer (our_jid, ciphertext_hash, plaintext, server_timestamp, insert_timestamp)
@@ -1602,7 +1602,7 @@ const (
 func (s *SQLStore) GetBufferedEvent(ctx context.Context, ciphertextHash [32]byte) (*store.BufferedEvent, error) {
 	var insertTimeMS, serverTimeSeconds int64
 	var buf store.BufferedEvent
-	err := s.db.QueryRow(ctx, getBufferedEventQuery, s.JID, ciphertextHash[:]).Scan(&buf.Plaintext, &serverTimeSeconds, &insertTimeMS)
+	err := s.db.QueryRow(ctx, getBufferedEventQuery, s.JID, ciphertextHash[:]).Scan(&buf.Plaintext, &serverTimeSeconds, &insertTimeMS, &buf.GroupStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	} else if err != nil {
@@ -1625,6 +1625,11 @@ func (s *SQLStore) DoDecryptionTxn(ctx context.Context, fn func(context.Context)
 
 func (s *SQLStore) ClearBufferedEventPlaintext(ctx context.Context, ciphertextHash [32]byte) error {
 	_, err := s.db.Exec(ctx, clearBufferedEventPlaintextQuery, s.JID, ciphertextHash[:])
+	return err
+}
+
+func (s *SQLStore) ClearBufferedEventWithPublication(ctx context.Context, ciphertextHash [32]byte, groupStatus bool) error {
+	_, err := s.db.Exec(ctx, `UPDATE whatsmeow_event_buffer SET plaintext = NULL, group_status = $3 WHERE our_jid = $1 AND ciphertext_hash = $2`, s.JID, ciphertextHash[:], groupStatus)
 	return err
 }
 
