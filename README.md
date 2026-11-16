@@ -264,3 +264,52 @@ Disconnect and wait for owned work to settle before accepting replacement
 connection authority. `FrameSocket.SetOnDisconnect` replaces the callback under the socket lock; assign
 the legacy field only before connecting.
 These additions are unreleased until their reviewed main commit is adopted.
+
+## Call-link guests
+
+The `guest` package registers a one-time guest identity for a WhatsApp call
+link and logs it in without pairing a phone. The identity lives only in
+memory and only for one call:
+
+```go
+import "github.com/polymorfa/hypermeow/guest"
+
+device := guest.NewDevice(nil) // fresh keys, in-memory stores
+reg, err := guest.Register(ctx, device, guest.Request{
+    InviteCode: "https://call.whatsapp.com/voice/TOKEN",
+    Name:       "Ada",
+})
+if err != nil {
+    return err
+}
+client, err := guest.NewClient(device, reg, nil)
+if err != nil {
+    return err
+}
+err = client.Connect()
+```
+
+`NewClient` applies the guest identity before creating the client, sets the
+guest login payload, turns off the post-connect passive IQ and uses the
+registered browser's User-Agent. `Request.BaseURL` points registration at
+another host, such as a simulator. A guest can only join the
+call link it registered for. Messaging, groups and app state don't apply.
+
+Guest registration never follows HTTP redirects, including with a supplied
+HTTP client. Point `BaseURL` directly at the intended registration service.
+The in-memory guest store retains at most 1024 unconsumed prekeys, including
+at most 64 retry keys. Upload attempts are at least one second apart; new
+upload batches are generated at most once per minute. A failed upload can
+retry its pending keys after the shorter interval. These local resource limits
+return an error when reached and never evict an unconsumed key.
+
+Signal identities, sessions and sender keys share a limit of 1024 entries and
+16 MiB of stored key/value data, in addition to the prekey limit. Each address
+is limited to 512 bytes. Writes beyond those limits return an error without
+evicting trusted identities. Replacing existing state or deleting identities
+and sessions releases the corresponding capacity. These are local policies
+for one-call guests, not WhatsApp server limits.
+
+Registration error strings omit provider response text. Typed `guest.Error`
+fields and unwrapped causes remain available for explicit diagnostics and may
+contain reflected request data; avoid logging them without redaction.
