@@ -488,6 +488,10 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		}
 
 		if errors.Is(err, ErrEventAlreadyProcessed) {
+			var processed *processedEventError
+			if errors.As(err, &processed) && processed.groupStatus && info.Chat.Server == types.GroupServer {
+				info.IsGroupStatus = true
+			}
 			cli.Log.Debugf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
 		} else if errors.Is(err, signalerror.ErrOldCounter) {
@@ -568,7 +572,11 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		}
 		if ciphertextHash != nil && cli.EnableDecryptedEventBuffer {
 			// Use the context passed to decryptMessages
-			err = cli.Store.EventBuffer.ClearBufferedEventPlaintext(ctx, *ciphertextHash)
+			if publications, ok := cli.Store.EventBuffer.(store.EventBufferPublicationStore); ok {
+				err = publications.ClearBufferedEventWithPublication(ctx, *ciphertextHash, info.StatusKind() == types.StatusKindGroup)
+			} else {
+				err = cli.Store.EventBuffer.ClearBufferedEventPlaintext(ctx, *ciphertextHash)
+			}
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).
 					Hex("ciphertext_hash", ciphertextHash[:]).
@@ -616,6 +624,16 @@ func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID)
 	return nil
 }
 
+type processedEventError struct {
+	inserted    time.Time
+	groupStatus bool
+}
+
+func (e *processedEventError) Error() string {
+	return fmt.Sprintf("%s at %s", ErrEventAlreadyProcessed, e.inserted)
+}
+func (e *processedEventError) Unwrap() error { return ErrEventAlreadyProcessed }
+
 var ErrEventAlreadyProcessed = errors.New("event was already processed")
 
 // Deprecated: use ErrEventAlreadyProcessed.
@@ -652,7 +670,7 @@ func (cli *Client) bufferedDecrypt(
 				Hex("ciphertext_hash", ciphertextHash[:]).
 				Time("insertion_time", buf.InsertTime).
 				Msg("Returning event already processed error")
-			err = fmt.Errorf("%w at %s", ErrEventAlreadyProcessed, buf.InsertTime.String())
+			err = &processedEventError{inserted: buf.InsertTime, groupStatus: buf.GroupStatus != nil && *buf.GroupStatus}
 			return
 		}
 		zerolog.Ctx(ctx).Debug().

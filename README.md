@@ -336,3 +336,4 @@ for one-call guests, not WhatsApp server limits.
 Registration error strings omit provider response text. Typed `guest.Error`
 fields and unwrapped causes remain available for explicit diagnostics and may
 contain reflected request data; avoid logging them without redaction.
+Custom decrypted-event buffers should implement `store.EventBufferPublicationStore` to retain the group-publication flag while atomically deleting plaintext. The SQL store implements this with migration 21. Old processed rows and custom stores without this extension have unknown legacy classification; no status is inferred from a group chat alone.
