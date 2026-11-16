@@ -209,17 +209,7 @@ func (cli *Client) SendFBMessage(
 	expectedPHash := ag.OptionalString("phash")
 	if setParticipantHashMismatch(&resp, phash, expectedPHash) {
 		cli.Log.Warnf("Server returned different participant list hash when sending to %s. Some devices may not have received the message.", to)
-		switch to.Server {
-		case types.GroupServer:
-			// TODO also invalidate device list caches
-			cli.groupCacheLock.Lock()
-			delete(cli.groupCache, to)
-			cli.groupCacheLock.Unlock()
-		case types.DefaultUserServer, types.MessengerServer:
-			cli.userDevicesCacheLock.Lock()
-			delete(cli.userDevicesCache, to)
-			cli.userDevicesCacheLock.Unlock()
-		}
+		cli.invalidateParticipantHashCaches(to)
 	}
 	return
 }
