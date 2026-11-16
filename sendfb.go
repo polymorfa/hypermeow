@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -208,10 +209,7 @@ func (cli *Client) SendFBMessage(
 	expectedPHash := ag.OptionalString("phash")
 	if setParticipantHashMismatch(&resp, phash, expectedPHash) {
 		cli.Log.Warnf("Server returned different participant list hash when sending to %s. Some devices may not have received the message.", to)
-		// TODO also invalidate device list caches
-		cli.groupCacheLock.Lock()
-		delete(cli.groupCache, to)
-		cli.groupCacheLock.Unlock()
+		cli.invalidateParticipantHashCaches(to)
 	}
 	return
 }
@@ -248,7 +246,7 @@ func (cli *Client) sendGroupV3(
 		return "", nil, fmt.Errorf("failed to create sender key distribution message to send %s to %s: %w", id, to, err)
 	}
 	skdm := &waMsgTransport.MessageTransport_Protocol_Ancillary_SenderKeyDistributionMessage{
-		GroupID:                             proto.String(to.String()),
+		GroupID:                             new(to.String()),
 		AxolotlSenderKeyDistributionMessage: signalSKDMessage.Serialize(),
 	}
 
@@ -477,8 +475,8 @@ func (cli *Client) prepareMessageNodeV3(
 	}
 
 	dsm := &waMsgTransport.MessageTransport_Protocol_Integral_DeviceSentMessage{
-		DestinationJID: proto.String(to.String()),
-		Phash:          proto.String(""),
+		DestinationJID: new(to.String()),
+		Phash:          new(""),
 	}
 
 	start = time.Now()
@@ -669,7 +667,7 @@ func (cli *Client) encryptMessageForDeviceV3(
 	if ciphertext.Type() == protocol.PREKEY_TYPE {
 		encAttrs["type"] = "pkmsg"
 	}
-	copyAttrs(extraAttrs, encAttrs)
+	maps.Copy(encAttrs, extraAttrs)
 
 	return &waBinary.Node{
 		Tag:     "enc",

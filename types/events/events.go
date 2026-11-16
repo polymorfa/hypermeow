@@ -57,6 +57,10 @@ type PairSuccess struct {
 	BusinessName string
 	Platform     string
 	Props        *waCompanionReg.ClientPairingProps
+	// IsHosted is true when the account is hosted (Cloud API coexistence) and
+	// the ADV identity was signed with the hosted prefix. Also persisted as
+	// store.Device.IsHosted.
+	IsHosted bool
 }
 
 // PairError is emitted when a pair-success event is received from the server, but finishing the pairing locally fails.
@@ -322,6 +326,11 @@ type UndecryptableMessage struct {
 	IsUnavailable bool
 	// Some message types are intentionally unavailable. Such types usually have a type specified here.
 	UnavailableType UnavailableType
+	// IsHostedUnavailable is true for <unavailable hosted="true"/>: the hosted
+	// (Cloud API) side of a coexistence business sent the message, and this
+	// companion cannot decrypt it. WhatsApp Web shows a "hosted unavailable"
+	// placeholder for these.
+	IsHostedUnavailable bool
 
 	DecryptFailMode DecryptFailMode
 }
@@ -719,6 +728,15 @@ type NewsletterMuteChange struct {
 	Mute types.NewsletterMuteState `json:"mute"`
 }
 
+type NewsletterMilestone struct {
+	Mex             MexNotificationData   `json:"-"`
+	ID              types.JID             `json:"newsletter_id"`
+	MessageServerID types.MessageServerID `json:"message_server_id,string"`
+	Type            string                `json:"type"`
+	Value           int                   `json:"value"`
+	ReactionCode    string                `json:"reaction_code"`
+}
+
 type NewsletterLiveUpdate struct {
 	JID      types.JID
 	Time     time.Time
@@ -728,6 +746,6 @@ type NewsletterLiveUpdate struct {
 type NotifyAccountReachoutTimelock struct {
 	Mex                 MexNotificationData `json:"-"`
 	EnforcementType     string              `json:"enforcement_type,omitempty"`
-	IsActive            bool                `json:"is_active,omitempty"`
+	IsActive            bool                `json:"is_active,omitzero"`
 	TimeEnforcementEnds jsontime.UnixString `json:"time_enforcement_ends,omitzero"`
 }

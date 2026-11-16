@@ -15,26 +15,107 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waVnameCert"
 )
 
+// AEAAccountType is the end-to-end encryption mode of a business account, as
+// reported in <aea_account_type value="..."/> by business profile and usync
+// business queries (WAWebAeaAccountState).
+type AEAAccountType string
+
+const (
+	AEAAccountTypeUnknown    AEAAccountType = ""            // Not reported by the server.
+	AEAAccountTypeNotSet     AEAAccountType = "not_set"     // The server reported no AEA mode.
+	AEAAccountTypeE2EE       AEAAccountType = "e2ee"        // Messages are end-to-end encrypted.
+	AEAAccountTypeHybridE2EE AEAAccountType = "hybrid_e2ee" // Hybrid: some messages are handled outside end-to-end encryption.
+	AEAAccountTypeNonE2EE    AEAAccountType = "non_e2ee"    // Messages are not end-to-end encrypted.
+)
+
+// IsAEA reports whether the business uses an account-level encryption mode
+// other than plain end-to-end encryption (hybrid_e2ee or non_e2ee), matching
+// WhatsApp Web's isAeaAccount check.
+func (t AEAAccountType) IsAEA() bool {
+	return t == AEAAccountTypeHybridE2EE || t == AEAAccountTypeNonE2EE
+}
+
 // VerifiedName contains verified WhatsApp business details.
 type VerifiedName struct {
 	Certificate *waVnameCert.VerifiedNameCertificate
 	Details     *waVnameCert.VerifiedNameCertificate_Details
 
-	VerifiedLevel string
+	VerifiedLevel string // One of the VerifiedLevel* constants, or empty when not reported.
 	Version       int
 	HostStorage   int
 	ActualActors  int
 	PrivacyModeTS time.Time
+
+	// Serial is the verified_name serial attribute, or the certificate serial when the attribute is absent.
+	Serial string
+	// Issuer is the certificate issuer: smb:wa for the Business app or ent:wa for the API.
+	Issuer VerifiedNameIssuer
+	// PrivacyMode is set only when actual_actors, host_storage and
+	// privacy_mode_ts are all present with known values, as in WhatsApp Web.
+	PrivacyMode *BusinessPrivacyMode
+}
+
+// IsAPI reports whether the certificate was issued to a WhatsApp Business API (Cloud API or on-premises) account.
+func (vn *VerifiedName) IsAPI() bool {
+	return vn != nil && vn.Issuer == VerifiedNameIssuerAPI
+}
+
+// IsBusinessApp reports whether the certificate was issued to a WhatsApp Business app account.
+func (vn *VerifiedName) IsBusinessApp() bool {
+	return vn != nil && vn.Issuer == VerifiedNameIssuerBusinessApp
+}
+
+// Verified name levels reported in the verified_level attribute (WAWebHandleMsgCommon MSG_VERIFIED_LEVEL).
+const (
+	VerifiedLevelUnknown = "unknown"
+	VerifiedLevelLow     = "low"
+	VerifiedLevelHigh    = "high"
+)
+
+// VerifiedNameIssuer is the issuer field of a verified name certificate (WAWebValidateBusinessCertificate).
+type VerifiedNameIssuer string
+
+const (
+	VerifiedNameIssuerBusinessApp VerifiedNameIssuer = "smb:wa" // WhatsApp Business app
+	VerifiedNameIssuerAPI         VerifiedNameIssuer = "ent:wa" // WhatsApp Business API
+)
+
+// BusinessActualActors says who handles a business's messages (WAWebHandleMsgTypes ActualActorsEnumType).
+type BusinessActualActors int
+
+const (
+	BusinessActualActorsSelf BusinessActualActors = 1 // The business itself.
+	BusinessActualActorsBSP  BusinessActualActors = 2 // A business solution provider.
+	BusinessActualActorsCAPI BusinessActualActors = 3 // Meta's Cloud API.
+)
+
+// BusinessHostStorage says where a business's messages are stored (WAWebHandleMsgTypes HostStorageEnumType).
+type BusinessHostStorage int
+
+const (
+	BusinessHostStorageOnPremise BusinessHostStorage = 1
+	BusinessHostStorageFacebook  BusinessHostStorage = 2
+)
+
+// BusinessPrivacyMode is the privacy mode a business reports on its verified
+// name or on <biz actual_actors host_storage privacy_mode_ts/> in messages.
+type BusinessPrivacyMode struct {
+	ActualActors BusinessActualActors
+	HostStorage  BusinessHostStorage
+	Timestamp    time.Time
 }
 
 // UserInfo contains info about a WhatsApp user.
 type UserInfo struct {
 	VerifiedName *VerifiedName
-	Status       string
-	PictureID    string
-	Devices      []JID
-	LID          JID
-	Username     string
+	// AEAAccountType is set when the usync <business> result includes
+	// <profile><aea_account_type value="..."/></profile>.
+	AEAAccountType AEAAccountType
+	Status         string
+	PictureID      string
+	Devices        []JID
+	LID            JID
+	Username       string
 }
 
 type BotListInfo struct {
@@ -103,6 +184,8 @@ type IsOnWhatsAppResponse struct {
 	Username    string
 
 	VerifiedName *VerifiedName // If the phone is a business, the verified business details.
+
+	AEAAccountType AEAAccountType // Set when the usync business result includes an AEA account type.
 }
 
 type UsernameResolution struct {
@@ -273,6 +356,7 @@ type Category struct {
 // BusinessProfile contains the profile information of a WhatsApp business.
 type BusinessProfile struct {
 	JID                   JID
+	AEAAccountType        AEAAccountType // The business's end-to-end encryption mode, if the server reported one.
 	Address               string
 	Email                 string
 	Description           string
