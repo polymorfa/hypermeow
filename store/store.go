@@ -183,9 +183,17 @@ type NCTSaltStore interface {
 }
 
 type BufferedEvent struct {
-	Plaintext  []byte
-	InsertTime time.Time
-	ServerTime time.Time
+	// GroupStatus is retained after plaintext deletion; nil means older or unsupported storage.
+	GroupStatus *bool
+	Plaintext   []byte
+	InsertTime  time.Time
+	ServerTime  time.Time
+}
+
+// EventBufferPublicationStore atomically clears plaintext and retains only publication
+// classification. Custom buffers should implement it to classify legacy duplicates.
+type EventBufferPublicationStore interface {
+	ClearBufferedEventWithPublication(ctx context.Context, ciphertextHash [32]byte, groupStatus bool) error
 }
 
 type EventBuffer interface {

@@ -4,15 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"testing"
+	"time"
+
+	"github.com/polymorfa/libsignal-protocol-go/protocol"
+	"github.com/polymorfa/libsignal-protocol-go/session"
+	"google.golang.org/protobuf/proto"
+
 	waBinary "github.com/polymorfa/hypermeow/binary"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types/events"
 	waLog "github.com/polymorfa/hypermeow/util/log"
-	"github.com/polymorfa/libsignal-protocol-go/protocol"
-	"github.com/polymorfa/libsignal-protocol-go/session"
-	"google.golang.org/protobuf/proto"
-	"testing"
 
 	"github.com/polymorfa/hypermeow/types"
 )
@@ -298,5 +301,77 @@ func TestRemoteLegacyGroupClassificationReachesDuplicateReceipt(t *testing.T) {
 	cli.handleEncryptedMessage(context.Background(), node)
 	if len(sent.nodes) != 1 || sent.nodes[0].Attrs["class"] != "status" {
 		t.Fatal("remote duplicate group publication sent a chat receipt")
+	}
+}
+
+// The local receive path must retain only classification after plaintext is cleared.
+type publicationTestBuffer struct {
+	store.NoopStore
+	entries map[[32]byte]*store.BufferedEvent
+}
+
+func (b *publicationTestBuffer) GetBufferedEvent(_ context.Context, hash [32]byte) (*store.BufferedEvent, error) {
+	return b.entries[hash], nil
+}
+func (b *publicationTestBuffer) PutBufferedEvent(_ context.Context, hash [32]byte, plaintext []byte, ts time.Time) error {
+	b.entries[hash] = &store.BufferedEvent{Plaintext: plaintext, InsertTime: time.Now(), ServerTime: ts}
+	return nil
+}
+func (b *publicationTestBuffer) DoDecryptionTxn(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+func (b *publicationTestBuffer) ClearBufferedEventWithPublication(_ context.Context, hash [32]byte, groupStatus bool) error {
+	b.entries[hash].Plaintext = nil
+	b.entries[hash].GroupStatus = &groupStatus
+	return nil
+}
+func TestLocalLegacyGroupDuplicateKeepsStatusReceipt(t *testing.T) {
+	ctx := context.Background()
+	own := types.JID{User: "100000000001", Server: types.HiddenUserServer, Device: 1}
+	sender := types.JID{User: "200000000002", Server: types.HiddenUserServer, Device: 2}
+	device, _ := newSignalTestDevice(own, &store.NoopStore{})
+	device.LID = own
+	buffer := &publicationTestBuffer{entries: make(map[[32]byte]*store.BufferedEvent)}
+	device.EventBuffer = buffer
+	cli := NewClient(device, waLog.Noop)
+	cli.EnableDecryptedEventBuffer = true
+	cli.SynchronousAck = true
+	sent := &sentNodes{}
+	cli.testSendHook = sent.hook
+	delivered := 0
+	cli.AddEventHandler(func(evt any) {
+		if _, ok := evt.(*events.Message); ok {
+			delivered++
+		}
+	})
+	peer := newSignalTestPeer(t, device, sender)
+	plaintext, err := proto.Marshal(&waE2E.Message{GroupStatusMessageV2: &waE2E.FutureProofMessage{Message: &waE2E.Message{Conversation: proto.String("authored legacy publication")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := peer.cipher.Encrypt(ctx, padMessage(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := types.NewJID("120363000000001", types.GroupServer)
+	node := &waBinary.Node{Tag: "message", Attrs: waBinary.Attrs{"from": group, "participant": sender, "id": "authored-duplicate", "t": "1700000000"}, Content: []waBinary.Node{{Tag: "enc", Attrs: waBinary.Attrs{"type": "pkmsg", "v": "2"}, Content: encrypted.Serialize()}}}
+	for i := 0; i < 2; i++ {
+		cli.handleEncryptedMessage(ctx, node)
+	}
+	if delivered != 1 {
+		t.Fatalf("delivered %d times, want 1", delivered)
+	}
+	if len(sent.nodes) != 2 {
+		t.Fatalf("sent %d nodes, want 2 receipts", len(sent.nodes))
+	}
+	for _, receipt := range sent.nodes {
+		if receipt.Tag != "receipt" || receipt.Attrs["class"] != "status" {
+			t.Fatalf("wrong receipt: %+v", receipt)
+		}
+	}
+	for _, entry := range buffer.entries {
+		if entry.Plaintext != nil || entry.GroupStatus == nil || !*entry.GroupStatus {
+			t.Fatal("processed metadata did not replace plaintext")
+		}
 	}
 }

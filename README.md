@@ -340,3 +340,5 @@ at most 64 retry keys. Upload attempts are at least one second apart; new
 upload batches are generated at most once per minute. A failed upload can
 retry its pending keys after the shorter interval. These local resource limits
 return an error when reached and never evict an unconsumed key.
+
+Custom decrypted-event buffers should implement `store.EventBufferPublicationStore` to retain the group-publication flag while atomically deleting plaintext. The SQL store implements this with migration 21. Old processed rows and custom stores without this extension have unknown legacy classification; no status is inferred from a group chat alone.
