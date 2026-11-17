@@ -289,3 +289,25 @@ the legacy field only before connecting.
 These additions are unreleased until their reviewed main commit is adopted.
 
 Custom decrypted-event buffers should implement `store.EventBufferPublicationStore` to retain the group-publication flag while atomically deleting plaintext. The SQL store implements this with migration 21. Old processed rows and custom stores without this extension have unknown legacy classification; no status is inferred from a group chat alone.
+
+## Recovering an interrupted identity reset
+
+The local adapter deletes both chat and status session rows before removing their
+shared identity. A failed session deletion therefore leaves the old identity in
+place. Use `Device.DeleteIdentityAndSessions` when removing both; custom callers
+must preserve that order and serialize other writers to the same backend.
+
+Failed rows stay unavailable on the current Device until deletion succeeds.
+`Device.ReconcileSessionResets(ctx)` retries the tracked failures after storage
+recovers. A reset that cannot retain all possible failures is refused before it
+starts; it does not permanently disable the Device or discard unknown failures.
+Admission retries at most two existing failures, while explicit reconciliation
+can retry the full bounded set. Both reset history and tracked failures retain at
+most 1,024 address entries. Pruning history invalidates older prefetched caches,
+which must be loaded again.
+
+These guards are per Device and are not cross-process fencing. A fresh adapter
+retains the original identity for surviving rows after a failed library-managed
+reset; this relies on backend deletion completion and ordering. Custom-store,
+transaction, process-crash and previous-release state acceptance still need their
+own evidence. Restarting is not a substitute for repairing a failed backend.

@@ -612,13 +612,8 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 }
 
 func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID) error {
-	err := cli.Store.Identities.DeleteIdentity(ctx, target.SignalAddress().String())
-	if err != nil {
-		return fmt.Errorf("failed to delete identity: %w", err)
-	}
-	err = cli.Store.DeleteSessionsForIdentity(ctx, target.SignalAddress())
-	if err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+	if err := cli.Store.DeleteIdentityAndSessions(ctx, target.SignalAddress()); err != nil {
+		return fmt.Errorf("failed to clear identity and sessions: %w", err)
 	}
 	go cli.dispatchEvent(&events.IdentityChange{JID: target, Timestamp: time.Now(), Implicit: true})
 	return nil

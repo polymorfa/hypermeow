@@ -196,63 +196,166 @@ func (device *Device) containsSession(ctx context.Context, remoteAddress *protoc
 func (device *Device) DeleteSession(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
 	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
 		addrString := SignalSessionAddress(ctx, remoteAddress.String())
+		if _, pending := device.sessionResetPending[addrString]; pending {
+			if err := device.retrySessionResetDeletion(ctx, addrString); err != nil {
+				return errors.Join(ErrSessionCacheInvalidated, err)
+			}
+			return nil
+		}
 		if err := device.Sessions.DeleteSession(ctx, addrString); err != nil {
 			return fmt.Errorf("failed to delete session with %s: %w", addrString, err)
 		}
-		delete(device.sessionResetPending, addrString)
 		return nil
 	})
 }
 
-// DeleteSessionsForIdentity removes both pairwise scopes after a shared identity change.
+type pendingSessionReset struct {
+	active int
+	failed bool
+}
+
+func (device *Device) finishSessionResetDeletion(key string, err error) {
+	state := device.sessionResetPending[key]
+	state.active--
+	state.failed = err != nil
+	if state.active == 0 && !state.failed {
+		delete(device.sessionResetPending, key)
+	} else {
+		device.sessionResetPending[key] = state
+	}
+}
+
+// Retries also reserve their key: a nested callback must not reconcile the
+// backend operation that is currently producing its result.
+func (device *Device) retrySessionResetDeletion(ctx context.Context, key string) error {
+	state, found := device.sessionResetPending[key]
+	if !found {
+		return nil
+	}
+	if state.active > 0 {
+		return ErrSessionCacheInvalidated
+	}
+	state.active++
+	device.sessionResetPending[key] = state
+	err := device.Sessions.DeleteSession(ctx, key)
+	device.finishSessionResetDeletion(key, err)
+	return err
+}
+
+// DeleteIdentityAndSessions removes both session scopes before their identity.
+// If session deletion fails, retaining the identity keeps surviving rows bound
+// to the same key even when this Device's in-memory pending set is lost.
+func (device *Device) DeleteIdentityAndSessions(ctx context.Context, address *protocol.SignalAddress) error {
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		if err := device.DeleteSessionsForIdentity(ctx, address); err != nil {
+			return err
+		}
+		if err := device.Identities.DeleteIdentity(ctx, address.String()); err != nil {
+			return fmt.Errorf("%w: failed to delete identity: %w", ErrSessionCacheInvalidated, err)
+		}
+		return nil
+	})
+}
+
+// ReconcileSessionResets retries every tracked failed deletion. A key becomes
+// usable only after its backend confirms deletion; failures remain pending.
+func (device *Device) ReconcileSessionResets(ctx context.Context) error {
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		var retryErr error
+		activeReset := false
+		for key, state := range device.sessionResetPending {
+			if state.active > 0 {
+				activeReset = true
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return errors.Join(ErrSessionCacheInvalidated, retryErr, err)
+			}
+			if err := device.retrySessionResetDeletion(ctx, key); err != nil {
+				retryErr = errors.Join(retryErr, fmt.Errorf("failed to reconcile session with %s: %w", key, err))
+			}
+		}
+		if retryErr != nil || activeReset {
+			return errors.Join(ErrSessionCacheInvalidated, retryErr)
+		}
+		return nil
+	})
+}
+
+// makeRoomForSessionReset runs under the guard. Retry at most one deletion per
+// requested key here; the explicit reconciliation method can retry the full set.
+func (device *Device) makeRoomForSessionReset(ctx context.Context, keys []string) error {
+	fits := func() bool {
+		needed := len(device.sessionResetPending)
+		for _, key := range keys {
+			if _, pending := device.sessionResetPending[key]; !pending {
+				needed++
+			}
+		}
+		return needed <= maxSessionResetAddresses
+	}
+	if fits() {
+		return nil
+	}
+	var retryErr error
+	attempts := 0
+	for key, state := range device.sessionResetPending {
+		if state.active > 0 {
+			continue
+		}
+		if key == keys[0] || key == keys[1] {
+			continue
+		}
+		if attempts >= len(keys) {
+			break
+		}
+		attempts++
+		if err := device.retrySessionResetDeletion(ctx, key); err != nil {
+			retryErr = errors.Join(retryErr, err)
+		}
+		if fits() {
+			return nil
+		}
+	}
+	return errors.Join(ErrSessionCacheInvalidated, retryErr)
+}
+
+// DeleteSessionsForIdentity removes both scopes before replacing an identity.
+// Prefer DeleteIdentityAndSessions when the shared identity must also be removed.
 func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
 	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
 		keys := []string{remoteAddress.String(), remoteAddress.String() + "_status"}
+		// Never begin a reset whose possible failures cannot all be retained.
+		if err := device.makeRoomForSessionReset(ctx, keys); err != nil {
+			return err
+		}
 		device.sessionResetEpoch++
 		if device.sessionResetAddresses == nil {
 			device.sessionResetAddresses = make(map[string]uint64)
 		}
 		if len(device.sessionResetAddresses)+len(keys) > maxSessionResetAddresses {
-			// Forgetting a reset must never make an outstanding cache valid.
-			// Caches older than this floor must be prefetched again.
 			device.sessionResetFloor = device.sessionResetEpoch
 			clear(device.sessionResetAddresses)
 		}
 		if device.sessionResetPending == nil {
-			device.sessionResetPending = make(map[string]struct{})
+			device.sessionResetPending = make(map[string]pendingSessionReset)
 		}
 		for _, key := range keys {
 			device.sessionResetAddresses[key] = device.sessionResetEpoch
+			state := device.sessionResetPending[key]
+			state.active++
+			device.sessionResetPending[key] = state
 		}
 		var deleteErr error
-		var failedKeys []string
 		for _, key := range keys {
-			if err := device.Sessions.DeleteSession(ctx, key); err != nil {
+			err := device.Sessions.DeleteSession(ctx, key)
+			device.finishSessionResetDeletion(key, err)
+			if err != nil {
 				deleteErr = errors.Join(deleteErr, fmt.Errorf("failed to delete session with %s: %w", key, err))
-				failedKeys = append(failedKeys, key)
-			} else {
-				delete(device.sessionResetPending, key)
-			}
-		}
-		// The guard prevents reads during deletion. Reserve only actual
-		// failures, after successful deletions have freed their slots.
-		for _, key := range failedKeys {
-			if _, pending := device.sessionResetPending[key]; pending {
-				continue
-			}
-			if len(device.sessionResetPending) >= maxSessionResetAddresses {
-				// Unknown failed keys cannot be forgotten safely. Refuse
-				// this Device until its backend state is reconciled.
-				device.sessionResetBlocked = true
-			} else {
-				device.sessionResetPending[key] = struct{}{}
 			}
 		}
 		if deleteErr != nil {
 			return errors.Join(ErrSessionCacheInvalidated, deleteErr)
-		}
-		if device.sessionResetBlocked {
-			return ErrSessionCacheInvalidated
 		}
 		if cache := getSessionCache(ctx, device); cache != nil {
 			for _, key := range keys {

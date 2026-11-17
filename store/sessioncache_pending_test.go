@@ -32,7 +32,7 @@ func TestFailedIdentityResetAbortsTheCurrentSend(t *testing.T) {
 	}
 }
 
-func TestFailedIdentityResetBudgetNeverForgetsUnsafeRows(t *testing.T) {
+func TestFailedIdentityResetBudgetRetainsAndRecoversUnsafeRows(t *testing.T) {
 	backend := &resetSessionStore{rows: make(map[string][]byte)}
 	device := &Device{Sessions: backend}
 	for i := range maxSessionResetAddresses + 1 {
@@ -41,19 +41,22 @@ func TestFailedIdentityResetBudgetNeverForgetsUnsafeRows(t *testing.T) {
 		if err := device.DeleteSessionsForIdentity(context.Background(), address); !errors.Is(err, ErrSessionCacheInvalidated) {
 			t.Fatalf("failed reset %d was not refused: %v", i, err)
 		}
+		if _, pending := device.sessionResetPending[backend.failDelete]; !pending {
+			t.Fatal("actual failed deletion was forgotten")
+		}
 	}
 	if len(device.sessionResetPending) > maxSessionResetAddresses || len(device.sessionResetAddresses) > maxSessionResetAddresses {
 		t.Fatal("failed reset tracking exceeded its budgets")
 	}
-	if !device.sessionResetBlocked {
-		t.Fatal("exhausted failure budget did not refuse unknown state")
-	}
 	backend.failDelete = ""
-	if err := device.DeleteSessionsForIdentity(context.Background(), protocol.NewSignalAddress("authored-0", 1)); !errors.Is(err, ErrSessionCacheInvalidated) {
-		t.Fatalf("an unrelated successful retry cleared unknown failures: %v", err)
+	if err := device.ReconcileSessionResets(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if _, _, err := device.WithCachedSessions(context.Background(), []string{"fresh:1"}); !errors.Is(err, ErrSessionCacheInvalidated) {
-		t.Fatalf("failure budget overflow allowed a fresh cache: %v", err)
+	if len(device.sessionResetPending) != 0 {
+		t.Fatal("successful reconciliation retained failed keys")
+	}
+	if _, _, err := device.WithCachedSessions(context.Background(), []string{"fresh:1"}); err != nil {
+		t.Fatalf("recovered Device remains blocked: %v", err)
 	}
 }
 
