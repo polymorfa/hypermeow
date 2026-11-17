@@ -648,7 +648,10 @@ func (cli *Client) bufferedDecrypt(
 	extraHashData ...string,
 ) (plaintext []byte, ciphertextHash [32]byte, err error) {
 	if !cli.EnableDecryptedEventBuffer {
-		plaintext, err = decrypt(ctx)
+		err = cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) error {
+			plaintext, err = decrypt(ctx)
+			return err
+		})
 		return
 	}
 	hasher := sha256.New()
@@ -681,16 +684,18 @@ func (cli *Client) bufferedDecrypt(
 		return
 	}
 
-	err = cli.Store.EventBuffer.DoDecryptionTxn(ctx, func(ctx context.Context) (innerErr error) {
-		plaintext, innerErr = decrypt(ctx)
-		if innerErr != nil {
+	err = cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		return cli.Store.EventBuffer.DoDecryptionTxn(ctx, func(ctx context.Context) (innerErr error) {
+			plaintext, innerErr = decrypt(ctx)
+			if innerErr != nil {
+				return
+			}
+			innerErr = cli.Store.EventBuffer.PutBufferedEvent(ctx, ciphertextHash, plaintext, serverTimestamp)
+			if innerErr != nil {
+				innerErr = fmt.Errorf("%w: failed to save decrypted event to buffer: %w", ErrEventBufferDB, innerErr)
+			}
 			return
-		}
-		innerErr = cli.Store.EventBuffer.PutBufferedEvent(ctx, ciphertextHash, plaintext, serverTimestamp)
-		if innerErr != nil {
-			innerErr = fmt.Errorf("%w: failed to save decrypted event to buffer: %w", ErrEventBufferDB, innerErr)
-		}
-		return
+		})
 	})
 	if err == nil {
 		zerolog.Ctx(ctx).Debug().

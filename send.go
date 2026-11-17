@@ -34,6 +34,7 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waAICommon"
 	"github.com/polymorfa/hypermeow/proto/waCommon"
 	"github.com/polymorfa/hypermeow/proto/waE2E"
+	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
 )
@@ -1526,6 +1527,22 @@ func (cli *Client) encryptMessageForDevice(
 		// per-device encryption to the relay oracle.
 		return cli.shadowRelay.EncryptForDevice(ctx, plaintext, to, bundle, extraAttrs)
 	}
+	var node *waBinary.Node
+	var includeIdentity bool
+	err := cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) (err error) {
+		if err = cli.Store.CheckCachedSession(ctx, store.SignalSessionAddress(ctx, to.SignalAddress().String())); err != nil {
+			return err
+		}
+		node, includeIdentity, err = encryptMessageForDeviceLocked(cli, ctx, plaintext, to, bundle, extraAttrs, existingSessions)
+		return
+	})
+	return node, includeIdentity, err
+}
+
+func encryptMessageForDeviceLocked(
+	cli *Client, ctx context.Context, plaintext []byte, to types.JID, bundle *prekey.Bundle,
+	extraAttrs waBinary.Attrs, existingSessions map[string]bool,
+) (*waBinary.Node, bool, error) {
 	builder := session.NewBuilderFromSignal(cli.Store, to.SignalAddress(), pbSerializer)
 	if bundle != nil {
 		cli.Log.Debugf("Processing prekey bundle for %s", to)

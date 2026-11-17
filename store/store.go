@@ -301,6 +301,10 @@ type Device struct {
 	LIDs          LIDStore
 	Container     DeviceContainer
 
+	sessionStateLock      sync.Mutex
+	sessionResetEpoch     uint64
+	sessionResetAddresses map[string]uint64
+
 	saveDeleteLockInit sync.Once
 	saveDeleteLock     chan struct{}
 }
