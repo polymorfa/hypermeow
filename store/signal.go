@@ -242,6 +242,18 @@ func (device *Device) retrySessionResetDeletion(ctx context.Context, key string)
 	return err
 }
 
+// The caller holds the guard; known failed keys may recover without a worker
+// or an operator command, but no row is accepted before confirmed deletion.
+func (device *Device) reconcilePendingSession(ctx context.Context, key string) error {
+	if _, pending := device.sessionResetPending[key]; !pending {
+		return nil
+	}
+	if err := device.retrySessionResetDeletion(ctx, key); err != nil {
+		return errors.Join(ErrSessionCacheInvalidated, fmt.Errorf("failed to reconcile session with %s: %w", key, err))
+	}
+	return nil
+}
+
 // DeleteIdentityAndSessions removes both session scopes before their identity.
 // If session deletion fails, retaining the identity keeps surviving rows bound
 // to the same key even when this Device's in-memory pending set is lost.

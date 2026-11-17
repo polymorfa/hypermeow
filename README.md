@@ -298,8 +298,9 @@ place. Use `Device.DeleteIdentityAndSessions` when removing both; custom callers
 must preserve that order and serialize other writers to the same backend.
 
 Failed rows stay unavailable on the current Device until deletion succeeds.
-`Device.ReconcileSessionResets(ctx)` retries the tracked failures after storage
-recovers. A reset that cannot retain all possible failures is refused before it
+Guarded session access retries deletion of its known pending key before using
+any stored row. `Device.ReconcileSessionResets(ctx)` can also retry all tracked
+failures after storage recovers. A reset that cannot retain all possible failures is refused before it
 starts; it does not permanently disable the Device or discard unknown failures.
 Admission retries at most two existing failures, while explicit reconciliation
 can retry the full bounded set. Both reset history and tracked failures retain at

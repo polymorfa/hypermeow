@@ -132,9 +132,6 @@ func (device *Device) CheckCachedSession(ctx context.Context, address string) er
 
 // The caller holds sessionStateLock across validation and local state use.
 func (device *Device) checkCachedSession(ctx context.Context, address string) error {
-	if _, pending := device.sessionResetPending[address]; pending {
-		return ErrSessionCacheInvalidated
-	}
 	if cache := getSessionCache(ctx, device); cache != nil {
 		generation := cache.epoch
 		if item, ok := cache.Get(address); ok {
@@ -144,7 +141,7 @@ func (device *Device) checkCachedSession(ctx context.Context, address string) er
 			return ErrSessionCacheInvalidated
 		}
 	}
-	return nil
+	return device.reconcilePendingSession(ctx, address)
 }
 
 func (device *Device) WithCachedSessions(ctx context.Context, addresses []string) (map[string]bool, context.Context, error) {
@@ -171,8 +168,8 @@ func (device *Device) withCachedSessions(ctx context.Context, addresses []string
 	for _, address := range addresses {
 		// A new prefetch must not bless a row whose deletion failed. The
 		// previous context may be stale, so validate pending state alone.
-		if _, pending := device.sessionResetPending[address]; pending {
-			return nil, ctx, ErrSessionCacheInvalidated
+		if err := device.reconcilePendingSession(ctx, address); err != nil {
+			return nil, ctx, err
 		}
 	}
 
