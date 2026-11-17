@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/polymorfa/libsignal-protocol-go/state/record"
@@ -20,15 +21,33 @@ type contextKey int
 
 const (
 	contextKeySessionCache contextKey = iota
+	contextKeySessionStateLock
 )
 
+var ErrSessionCacheInvalidated = errors.New("session cache was invalidated by an identity reset")
+
 type sessionCacheEntry struct {
-	Dirty  bool
-	Found  bool
-	Record *record.Session
+	Generation uint64
+	Dirty      bool
+	Found      bool
+	Record     *record.Session
 }
 
-type sessionCache = exsync.Map[string, sessionCacheEntry]
+type sessionCache struct {
+	*exsync.Map[string, sessionCacheEntry]
+	epoch uint64
+}
+
+// WithSessionStateLock orders local session mutations before database transactions.
+// The callback context permits nested operations on this device and must not escape it.
+func (device *Device) WithSessionStateLock(ctx context.Context, fn func(context.Context) error) error {
+	if ctx.Value(contextKeySessionStateLock) == device {
+		return fn(ctx)
+	}
+	device.sessionStateLock.Lock()
+	defer device.sessionStateLock.Unlock()
+	return fn(context.WithValue(ctx, contextKeySessionStateLock, device))
+}
 
 type sessionIterator interface {
 	IterateSessions(context.Context, []string, func(string, []byte) error) error
@@ -78,15 +97,52 @@ func putCachedSession(ctx context.Context, addr string, record *record.Session) 
 	if cache == nil {
 		return false
 	}
+	generation := cache.epoch
+	if previous, ok := cache.Get(addr); ok {
+		generation = previous.Generation
+	}
 	cache.Set(addr, sessionCacheEntry{
-		Dirty:  true,
-		Found:  true,
-		Record: record,
+		Generation: generation,
+		Dirty:      true,
+		Found:      true,
+		Record:     record,
 	})
 	return true
 }
 
+// CheckCachedSession rejects a stale cached address before local crypto can mutate identity state.
+func (device *Device) CheckCachedSession(ctx context.Context, address string) error {
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		if cache := getSessionCache(ctx); cache != nil {
+			generation := cache.epoch
+			if item, ok := cache.Get(address); ok {
+				generation = item.Generation
+			}
+			if device.sessionResetAddresses[address] > generation {
+				return ErrSessionCacheInvalidated
+			}
+		}
+		return nil
+	})
+}
+
 func (device *Device) WithCachedSessions(ctx context.Context, addresses []string) (map[string]bool, context.Context, error) {
+	if len(addresses) == 0 {
+		return nil, ctx, nil
+	}
+	var found map[string]bool
+	var cached context.Context
+	err := device.WithSessionStateLock(ctx, func(locked context.Context) (err error) {
+		found, cached, err = device.withCachedSessions(locked, addresses)
+		return
+	})
+	if err != nil {
+		return nil, ctx, err
+	}
+	return found, context.WithValue(ctx, contextKeySessionCache, getSessionCache(cached)), nil
+}
+
+func (device *Device) withCachedSessions(ctx context.Context, addresses []string) (map[string]bool, context.Context, error) {
 	if len(addresses) == 0 {
 		return nil, ctx, nil
 	}
@@ -94,7 +150,7 @@ func (device *Device) WithCachedSessions(ctx context.Context, addresses []string
 	wrapped := make(map[string]sessionCacheEntry, len(addresses))
 	existingSessions := make(map[string]bool, len(addresses))
 	for _, addr := range addresses {
-		wrapped[addr] = sessionCacheEntry{Record: record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State)}
+		wrapped[addr] = sessionCacheEntry{Generation: device.sessionResetEpoch, Record: record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State)}
 		existingSessions[addr] = false
 	}
 	loadSession := func(addr string, rawSess []byte) error {
@@ -108,7 +164,7 @@ func (device *Device) WithCachedSessions(ctx context.Context, addresses []string
 			return nil
 		}
 		existingSessions[addr] = true
-		wrapped[addr] = sessionCacheEntry{Record: sessionRecord, Found: true}
+		wrapped[addr] = sessionCacheEntry{Generation: device.sessionResetEpoch, Record: sessionRecord, Found: true}
 		return nil
 	}
 	if iterator, ok := device.Sessions.(sessionIterator); ok {
@@ -127,20 +183,33 @@ func (device *Device) WithCachedSessions(ctx context.Context, addresses []string
 		}
 	}
 
-	ctx = context.WithValue(ctx, contextKeySessionCache, (*sessionCache)(exsync.NewMapWithData(wrapped)))
+	ctx = context.WithValue(ctx, contextKeySessionCache, &sessionCache{Map: exsync.NewMapWithData(wrapped), epoch: device.sessionResetEpoch})
 	return existingSessions, ctx, nil
 }
 
 func (device *Device) PutCachedSessions(ctx context.Context) error {
+	return device.WithSessionStateLock(ctx, device.putCachedSessions)
+}
+
+func (device *Device) putCachedSessions(ctx context.Context) error {
 	cache := getSessionCache(ctx)
 	if cache == nil {
 		return nil
 	}
 	dirtySessions := make(map[string][]byte)
+	invalid := false
 	for addr, item := range cache.Iter() {
 		if item.Dirty {
+			if device.sessionResetAddresses[addr] > item.Generation {
+				invalid = true
+				break
+			}
 			dirtySessions[addr] = item.Record.Serialize()
 		}
+	}
+	if invalid {
+		cache.Clear()
+		return ErrSessionCacheInvalidated
 	}
 	if len(dirtySessions) > 0 {
 		err := device.Sessions.PutManySessions(ctx, dirtySessions)

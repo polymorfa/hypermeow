@@ -168,18 +168,29 @@ func (device *Device) DeleteSession(ctx context.Context, remoteAddress *protocol
 	return nil
 }
 
-// DeleteSessionsForIdentity removes both pairwise scopes after a shared identity
-// change. Evict cached records too so a later flush cannot restore an old ratchet.
+// DeleteSessionsForIdentity removes both pairwise scopes after a shared identity change.
 func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
-	for _, key := range []string{remoteAddress.String(), remoteAddress.String() + "_status"} {
-		if err := device.Sessions.DeleteSession(ctx, key); err != nil {
-			return fmt.Errorf("failed to delete session with %s: %w", key, err)
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		keys := []string{remoteAddress.String(), remoteAddress.String() + "_status"}
+		device.sessionResetEpoch++
+		if device.sessionResetAddresses == nil {
+			device.sessionResetAddresses = make(map[string]uint64)
+		}
+		for _, key := range keys {
+			device.sessionResetAddresses[key] = device.sessionResetEpoch
+		}
+		for _, key := range keys {
+			if err := device.Sessions.DeleteSession(ctx, key); err != nil {
+				return fmt.Errorf("failed to delete session with %s: %w", key, err)
+			}
 		}
 		if cache := getSessionCache(ctx); cache != nil {
-			cache.Delete(key)
+			for _, key := range keys {
+				cache.Set(key, sessionCacheEntry{Generation: device.sessionResetEpoch, Record: record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State)})
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func (device *Device) DeleteAllSessions(ctx context.Context) error {
