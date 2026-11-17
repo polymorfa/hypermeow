@@ -96,7 +96,10 @@ type RemoteIdentity struct {
 // RemoteReceive is one `<enc>` payload of a received message.
 type RemoteReceive struct {
 	// Timestamp is the provider message time; a missing value remains zero.
-	Timestamp time.Time
+	Timestamp  time.Time
+	StatusKind types.StatusKind
+	// StatusSession selects a separate pairwise session, not a sender-key scope.
+	StatusSession bool
 	// SenderAlt is the other provider address when Sender is normalized for
 	// Signal encryption (for example, PN when Sender is a LID).
 	SenderAlt      types.JID
@@ -107,10 +110,16 @@ type RemoteReceive struct {
 	Ciphertext     []byte
 	PaddingVersion int
 	IsFromMe       bool
+	// DeviceIdentity is the stanza's <device-identity> (a serialized
+	// ADVSignedDeviceIdentity), which a pkmsg from a companion device
+	// carries. Nil for other payloads.
+	DeviceIdentity []byte
 }
 
 // RemoteReceiveResult is what the client learns about a received payload.
 type RemoteReceiveResult struct {
+	// StatusKind preserves decrypted publication classification for legacy envelopes and duplicate receipts.
+	StatusKind types.StatusKind
 	// AlreadyDelivered means the application has had this payload before;
 	// the client only needs to acknowledge it again.
 	AlreadyDelivered bool
@@ -153,10 +162,12 @@ func (e *RemoteDecryptError) Unwrap() error { return e.Err }
 
 // RemoteResend asks the remote store to re-encrypt a sent message.
 type RemoteResend struct {
-	Chat          types.JID
-	MessageID     types.MessageID
-	Requester     types.JID
-	EncryptionJID types.JID
+	// DeviceIdentity accompanies the public bundle in a retry receipt.
+	DeviceIdentity []byte
+	Chat           types.JID
+	MessageID      types.MessageID
+	Requester      types.JID
+	EncryptionJID  types.JID
 	// Recipient is the original chat user when the requester is one of this
 	// account's own devices on a direct message.
 	Recipient types.JID
@@ -351,6 +362,20 @@ func (s *remotePreKeyStore) UploadedPreKeyCount(ctx context.Context) (int, error
 	return s.remote.UploadedPreKeyCount(ctx)
 }
 
+// messageDeviceIdentity returns the <device-identity> a message stanza
+// carries beside its <enc> payloads, or nil.
+func messageDeviceIdentity(node *waBinary.Node) []byte {
+	child, ok := node.GetOptionalChildByTag("device-identity")
+	if !ok {
+		return nil
+	}
+	content, ok := child.Content.([]byte)
+	if !ok || len(content) == 0 {
+		return nil
+	}
+	return content
+}
+
 // decryptMessagesRemote is decryptMessages for a remote-keyed client: each
 // `<enc>` payload goes to the remote store, and only delivery metadata comes
 // back. Receipts, retry receipts and acks follow the local path.
@@ -393,8 +418,14 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 		if senderEncryptionJID == info.SenderAlt && senderEncryptionJID != info.Sender {
 			senderAlt = info.Sender
 		}
+		var deviceIdentity []byte
+		if encType == "pkmsg" {
+			deviceIdentity = messageDeviceIdentity(node)
+		}
 		result, err := cli.remoteSignal.Receive(ctx, RemoteReceive{
 			Timestamp:      info.Timestamp,
+			StatusKind:     info.StatusKind(),
+			StatusSession:  encType != "skmsg" && cli.usesStatusSession(info),
 			SenderAlt:      senderAlt,
 			Chat:           info.Chat,
 			Sender:         senderEncryptionJID,
@@ -403,6 +434,7 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 			Ciphertext:     ciphertext,
 			PaddingVersion: ag.OptionalInt("v"),
 			IsFromMe:       info.IsFromMe,
+			DeviceIdentity: deviceIdentity,
 		})
 		var decryptErr *RemoteDecryptError
 		isDecryptErr := errors.As(err, &decryptErr)
@@ -448,6 +480,10 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 		if result.AppStateKeyShare != nil {
 			cli.handleAppStateSyncKeyShare(ctx, result.AppStateKeyShare)
 		}
+		if result.StatusKind == types.StatusKindGroup && info.Chat.Server == types.GroupServer {
+			info.IsGroupStatus = true
+		}
+
 		if !result.AlreadyDelivered {
 			cli.dispatchEvent(&events.RemoteMessage{
 				Info:              *info,
@@ -520,6 +556,7 @@ func (cli *Client) handleRetryReceiptRemote(ctx context.Context, receipt *events
 			return fmt.Errorf("failed to read prekey bundle in retry receipt: %w", err)
 		}
 		req.Bundle = bundle
+		req.DeviceIdentity = append([]byte(nil), preKeyDeviceIdentity(*node)...)
 	}
 	if hostedSender, ok := rawHostedSender(node); ok {
 		req.EncryptionJID = cli.hostedSignalJID(ctx, hostedSender)

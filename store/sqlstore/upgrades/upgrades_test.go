@@ -157,8 +157,8 @@ func TestUpgradeFromCurrentDevSchemaAddsUsername(t *testing.T) {
 	if err = db.Upgrade(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if state.version != 20 || state.compatVersion != 8 {
-		t.Fatalf("schema version = %d/%d, want 20/8", state.version, state.compatVersion)
+	if state.version != 21 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 21/8", state.version, state.compatVersion)
 	}
 	want := "ALTER TABLE whatsmeow_contacts ADD COLUMN username TEXT;"
 	for _, query := range state.executed {
@@ -182,8 +182,8 @@ func TestUpgradeFromPublishedSchemaAddsWASARootSecret(t *testing.T) {
 	if err = db.Upgrade(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if state.version != 20 || state.compatVersion != 8 {
-		t.Fatalf("schema version = %d/%d, want 20/8", state.version, state.compatVersion)
+	if state.version != 21 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 21/8", state.version, state.compatVersion)
 	}
 	for _, query := range state.executed {
 		if strings.Contains(query, "ALTER TABLE whatsmeow_chat_settings ADD COLUMN wasa_root_secret_id TEXT NOT NULL DEFAULT '';") {
@@ -206,8 +206,8 @@ func TestUpgradeFromV19AddsHostedAccountFlag(t *testing.T) {
 	if err = db.Upgrade(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if state.version != 20 || state.compatVersion != 8 {
-		t.Fatalf("schema version = %d/%d, want 20/8", state.version, state.compatVersion)
+	if state.version != 21 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 21/8", state.version, state.compatVersion)
 	}
 	for _, query := range state.executed {
 		if strings.Contains(query, "ALTER TABLE whatsmeow_device ADD COLUMN is_hosted BOOLEAN NOT NULL DEFAULT false;") {
@@ -215,4 +215,28 @@ func TestUpgradeFromV19AddsHostedAccountFlag(t *testing.T) {
 		}
 	}
 	t.Fatalf("hosted account migration was not executed: %q", state.executed)
+}
+
+func TestUpgradeFromV20AddsPublicationMetadata(t *testing.T) {
+	state := &upgradeTestState{version: 20, compatVersion: 8}
+	rawDB := sql.OpenDB(&upgradeTestConnector{state: state})
+	t.Cleanup(func() { _ = rawDB.Close() })
+	db, err := dbutil.NewWithDB(rawDB, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.VersionTable = "whatsmeow_version"
+	db.UpgradeTable = Table
+	if err = db.Upgrade(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if state.version != 21 || state.compatVersion != 8 {
+		t.Fatalf("schema version = %d/%d, want 21/8", state.version, state.compatVersion)
+	}
+	for _, query := range state.executed {
+		if strings.Contains(query, "ALTER TABLE whatsmeow_event_buffer ADD COLUMN group_status BOOLEAN;") {
+			return
+		}
+	}
+	t.Fatalf("publication migration was not executed: %q", state.executed)
 }

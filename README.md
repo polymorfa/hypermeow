@@ -82,6 +82,29 @@ go get github.com/polymorfa/hypermeow@main
 go mod tidy
 ```
 
+## Receiving statuses
+
+Personal and group `<status>` publications use encrypted message processing;
+channel statuses keep their plaintext processing path. The original transport tag
+is preserved for acknowledgments. `MessageInfo.StatusKind()` distinguishes
+`personal`, `group` and `channel` publications from ordinary messages, status
+mentions and replies. Group-status-v2 content is unwrapped while `RawMessage`
+retains the original protobuf.
+
+Pairwise status sessions are stored separately from chat sessions. Explicit
+`meta session_scope="status"` is honored by default. Applications that consume
+served AB props can install `Client.GetStatusSessionMode` before connecting to
+supply `status_infra_1_1_session_split` (0 disabled, 1 receiver enabled, 2 sender
+enabled, 3 forced). This receive change does not enable status publishing.
+
+Custom `RemoteSignal` receivers must use `RemoteReceive.StatusSession` to select
+the pairwise session and carry `StatusKind` into their application event. Sender
+keys remain scoped to the group and sender, and private keys and plaintext stay
+in the remote store. Upgrading this library alone does not upgrade a remote
+receiver's protocol or storage. Legacy encrypted group publications also need
+`RemoteReceiveResult.StatusKind` returned after decrypt and on duplicate delivery,
+so the client can select the status receipt class without seeing plaintext.
+
 ## Newsletter observations
 
 `NewsletterMessage.ViewCounts` preserves the reported view definitions, including
@@ -264,3 +287,57 @@ Disconnect and wait for owned work to settle before accepting replacement
 connection authority. `FrameSocket.SetOnDisconnect` replaces the callback under the socket lock; assign
 the legacy field only before connecting.
 These additions are unreleased until their reviewed main commit is adopted.
+
+Custom decrypted-event buffers should implement `store.EventBufferPublicationStore` to retain the group-publication flag while atomically deleting plaintext. The SQL store implements this with migration 21. Old processed rows and custom stores without this extension have unknown legacy classification; no status is inferred from a group chat alone.
+
+## Recovering an interrupted identity reset
+
+The local adapter deletes both chat and status session rows before removing their
+shared identity. A failed session deletion therefore leaves the old identity in
+place. Use `Device.DeleteIdentityAndSessions` when removing both; custom callers
+must preserve that order and serialize other writers to the same backend.
+
+Failed rows stay unavailable on the current Device until deletion succeeds.
+Guarded session access retries deletion of its known pending key before using
+any stored row. `Device.ReconcileSessionResets(ctx)` can also retry all tracked
+failures after storage recovers. A reset that cannot retain all possible failures is refused before it
+starts; it does not permanently disable the Device or discard unknown failures.
+Admission retries at most two existing failures, while explicit reconciliation
+can retry the full bounded set. Both reset history and tracked failures retain at
+most 1,024 address entries. Pruning history invalidates older prefetched caches,
+which must be loaded again.
+
+These guards are per Device and are not cross-process fencing. A fresh adapter
+retains the original identity for surviving rows after a failed library-managed
+reset; this relies on backend deletion completion and ordering. Custom-store,
+transaction, process-crash and previous-release state acceptance still need their
+own evidence. Restarting is not a substitute for repairing a failed backend.
+
+Pending recovery runs before buffered decryption opens its transaction. A previously failed
+deletion is not reconciled by a write that can still roll back. SQLStore marks its
+transaction callbacks and also detects transactions opened directly on its
+underlying database. Custom transactional SessionStores must expose
+`SessionTransactionState` or mark their contexts with `WithSessionTransaction`;
+callbacks must forward that context. Saved buffered plaintext bypasses new
+preparation and decryption. These are source contracts, not database/crash or
+previous-release acceptance evidence.
+
+SQL identity cache and transactions: use `SQLStore.DoDecryptionTxn` for identity
+reads or writes inside a database transaction. It owns the commit/rollback boundary,
+serializes identity-cache access for that device until completion, clears the
+transaction's cache entries afterward and invalidates earlier identity-fetch tokens.
+Nested calls with its callback context share that boundary. An externally opened
+transaction cannot supply its eventual outcome, so identity operations and nested
+`DoDecryptionTxn` calls in that context return `ErrUnmanagedIdentityTransaction`
+before accessing the cache or running the callback. Phone-number to LID migration
+also owns its transaction boundary and refuses to run inside an outer transaction.
+Escaped callback contexts are
+also rejected. This does not coordinate other SQLStore instances or processes that
+write the same device rows; those require separate store ownership and admission.
+
+The SQL rollback/replay regression uses a local SQLite database and authored opaque
+session bytes, not real account traffic or decrypted Signal sessions. Run it with
+CGO enabled: `CGO_ENABLED=1 go test ./store/sqlstore -run TestSQLIdentityRollbackReplay`.
+The SQLite driver is a test-only import; the library still does not register a driver
+for applications. Cache serialization and guest-session throughput need acceptance
+on the composed native candidate before merge.

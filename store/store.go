@@ -44,6 +44,13 @@ type SessionStore interface {
 	MigratePNToLID(ctx context.Context, pn, lid types.JID) error
 }
 
+// SessionTransactionState is an optional backend capability for transactions
+// opened outside the event-buffer wrapper. Custom stores may instead mark
+// transaction contexts with WithSessionTransaction.
+type SessionTransactionState interface {
+	SessionTransactionActive(context.Context) bool
+}
+
 type PreKeyStore interface {
 	GetOrGenPreKeys(ctx context.Context, count uint32) ([]*keys.PreKey, error)
 	GenOnePreKey(ctx context.Context) (*keys.PreKey, error)
@@ -183,9 +190,17 @@ type NCTSaltStore interface {
 }
 
 type BufferedEvent struct {
-	Plaintext  []byte
-	InsertTime time.Time
-	ServerTime time.Time
+	// GroupStatus is retained after plaintext deletion; nil means older or unsupported storage.
+	GroupStatus *bool
+	Plaintext   []byte
+	InsertTime  time.Time
+	ServerTime  time.Time
+}
+
+// EventBufferPublicationStore atomically clears plaintext and retains only publication
+// classification. Custom buffers should implement it to classify legacy duplicates.
+type EventBufferPublicationStore interface {
+	ClearBufferedEventWithPublication(ctx context.Context, ciphertextHash [32]byte, groupStatus bool) error
 }
 
 type EventBuffer interface {
@@ -292,6 +307,12 @@ type Device struct {
 	EventBuffer   EventBuffer
 	LIDs          LIDStore
 	Container     DeviceContainer
+
+	sessionStateLock      sync.Mutex
+	sessionResetEpoch     uint64
+	sessionResetAddresses map[string]uint64
+	sessionResetFloor     uint64
+	sessionResetPending   map[string]pendingSessionReset
 
 	saveDeleteLockInit sync.Once
 	saveDeleteLock     chan struct{}

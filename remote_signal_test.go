@@ -4,6 +4,7 @@
 package whatsmeow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -287,6 +288,30 @@ func TestRemoteReceiveDeliversMetadataAndAcknowledges(t *testing.T) {
 	}
 	if tags := sent.tags(); len(tags) != 1 || !strings.HasPrefix(tags[0], "receipt:") {
 		t.Fatalf("sent %v, want one delivery receipt", tags)
+	}
+}
+
+func TestRemoteReceiveForwardsPreKeyDeviceIdentity(t *testing.T) {
+	identity := []byte{0x0a, 0x01, 0x02}
+	for _, tc := range []struct {
+		encType string
+		want    []byte
+	}{
+		{"pkmsg", identity},
+		{"msg", nil},
+	} {
+		t.Run(tc.encType, func(t *testing.T) {
+			cli, remote, _ := newTestRemote(t)
+			info, node := encMessage(tc.encType)
+			node.Content = append(node.GetChildren(), waBinary.Node{Tag: "device-identity", Content: identity})
+			cli.decryptMessages(context.Background(), info, node)
+			if len(remote.receives) != 1 {
+				t.Fatalf("Receive calls = %d, want 1", len(remote.receives))
+			}
+			if got := remote.receives[0].DeviceIdentity; !bytes.Equal(got, tc.want) {
+				t.Fatalf("DeviceIdentity = %x, want %x", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -428,6 +428,10 @@ func (evt *Message) UnwrapRaw() *Message {
 		evt.Message = evt.Message.GetBotInvokeMessage().GetMessage()
 		evt.IsBotInvoke = true
 	}
+	if child := evt.Message.GetGroupStatusMessageV2().GetMessage(); child != nil {
+		evt.Info.IsGroupStatus = evt.Info.Chat.Server == types.GroupServer
+		evt.Message = child
+	}
 	if evt.Message.GetEphemeralMessage().GetMessage() != nil {
 		evt.Message = evt.Message.GetEphemeralMessage().GetMessage()
 		evt.IsEphemeral = true
@@ -514,6 +518,8 @@ const (
 // N.B. WhatsApp on Android sends message IDs from newest message to oldest, but WhatsApp on iOS sends them in the opposite order (oldest first).
 type Receipt struct {
 	types.MessageSource
+	// Class preserves the wire receipt class, including status publications.
+	Class      string
 	MessageIDs []types.MessageID
 	Timestamp  time.Time
 	Type       types.ReceiptType

@@ -92,6 +92,21 @@ func (cli *Client) updateMessageContactNames(ctx context.Context, info *types.Me
 	}
 }
 
+// Status publications share encrypted receive processing with messages, but keep
+// their original tag for acknowledgements and their group-status provenance.
+func (cli *Client) handleStatusMessage(ctx context.Context, node *waBinary.Node) {
+	from, ok := node.Attrs["from"].(types.JID)
+	if !ok || (from != types.StatusBroadcastJID && from.Server != types.GroupServer && from.Server != types.NewsletterServer) {
+		cli.sendAck(ctx, node, NackParsingError)
+		return
+	}
+	if from.Server == types.NewsletterServer {
+		cli.handleUnencryptedMessage(ctx, node)
+	} else {
+		cli.handleEncryptedMessage(ctx, node)
+	}
+}
+
 func (cli *Client) handleUnencryptedMessage(ctx context.Context, node *waBinary.Node) {
 	info, err := cli.parseMessageInfo(node)
 	if err != nil {
@@ -232,6 +247,7 @@ func (cli *Client) parseMsgMetaInfo(node waBinary.Node) (metaInfo types.MsgMetaI
 	metaNode := node.GetChildByTag("meta")
 
 	ag := metaNode.AttrGetter()
+	metaInfo.SessionScope = ag.OptionalString("session_scope")
 	metaInfo.TargetID = types.MessageID(ag.OptionalString("target_id"))
 	metaInfo.TargetSender = ag.OptionalJIDOrEmpty("target_sender_jid")
 	metaInfo.TargetChat = ag.OptionalJIDOrEmpty("target_chat_jid")
@@ -253,6 +269,8 @@ func (cli *Client) parseMessageInfo(node *waBinary.Node) (*types.MessageInfo, er
 		return nil, err
 	}
 	ag := node.AttrGetter()
+	info.IsStatusStanza = node.Tag == "status"
+	info.IsGroupStatus = info.IsStatusStanza && info.Chat.Server == types.GroupServer
 	info.ID = types.MessageID(ag.String("id"))
 	info.ServerID = types.MessageServerID(ag.OptionalInt("server_id"))
 	info.Timestamp = ag.UnixTime("t")
@@ -430,7 +448,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		var ciphertextHash *[32]byte
 		var err error
 		if encType == "pkmsg" || encType == "msg" {
-			decrypted, ciphertextHash, err = cli.decryptDM(ctx, &child, senderEncryptionJID, encType == "pkmsg", info.Timestamp)
+			decrypted, ciphertextHash, err = cli.decryptDM(cli.statusSessionContext(ctx, info), &child, senderEncryptionJID, encType == "pkmsg", info.Timestamp)
 			containsDirectMsg = true
 		} else if info.IsGroup && encType == "skmsg" {
 			decrypted, ciphertextHash, err = cli.decryptGroupMsg(ctx, &child, senderEncryptionJID, info.Chat, info.Timestamp)
@@ -470,6 +488,10 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		}
 
 		if errors.Is(err, ErrEventAlreadyProcessed) {
+			var processed *processedEventError
+			if errors.As(err, &processed) && processed.groupStatus && info.Chat.Server == types.GroupServer {
+				info.IsGroupStatus = true
+			}
 			cli.Log.Debugf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
 		} else if errors.Is(err, signalerror.ErrOldCounter) {
@@ -550,7 +572,11 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		}
 		if ciphertextHash != nil && cli.EnableDecryptedEventBuffer {
 			// Use the context passed to decryptMessages
-			err = cli.Store.EventBuffer.ClearBufferedEventPlaintext(ctx, *ciphertextHash)
+			if publications, ok := cli.Store.EventBuffer.(store.EventBufferPublicationStore); ok {
+				err = publications.ClearBufferedEventWithPublication(ctx, *ciphertextHash, info.StatusKind() == types.StatusKindGroup)
+			} else {
+				err = cli.Store.EventBuffer.ClearBufferedEventPlaintext(ctx, *ciphertextHash)
+			}
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).
 					Hex("ciphertext_hash", ciphertextHash[:]).
@@ -586,17 +612,22 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 }
 
 func (cli *Client) clearUntrustedIdentity(ctx context.Context, target types.JID) error {
-	err := cli.Store.Identities.DeleteIdentity(ctx, target.SignalAddress().String())
-	if err != nil {
-		return fmt.Errorf("failed to delete identity: %w", err)
-	}
-	err = cli.Store.Sessions.DeleteSession(ctx, target.SignalAddress().String())
-	if err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+	if err := cli.Store.DeleteIdentityAndSessions(ctx, target.SignalAddress()); err != nil {
+		return fmt.Errorf("failed to clear identity and sessions: %w", err)
 	}
 	go cli.dispatchEvent(&events.IdentityChange{JID: target, Timestamp: time.Now(), Implicit: true})
 	return nil
 }
+
+type processedEventError struct {
+	inserted    time.Time
+	groupStatus bool
+}
+
+func (e *processedEventError) Error() string {
+	return fmt.Sprintf("%s at %s", ErrEventAlreadyProcessed, e.inserted)
+}
+func (e *processedEventError) Unwrap() error { return ErrEventAlreadyProcessed }
 
 var ErrEventAlreadyProcessed = errors.New("event was already processed")
 
@@ -610,9 +641,28 @@ func (cli *Client) bufferedDecrypt(
 	serverTimestamp time.Time,
 	decrypt func(context.Context) ([]byte, error),
 	extraHashData ...string,
+) ([]byte, [32]byte, error) {
+	return cli.bufferedDecryptPrepared(ctx, ciphertext, serverTimestamp, nil, decrypt, extraHashData...)
+}
+
+func (cli *Client) bufferedDecryptPrepared(
+	ctx context.Context,
+	ciphertext []byte,
+	serverTimestamp time.Time,
+	prepare func(context.Context) error,
+	decrypt func(context.Context) ([]byte, error),
+	extraHashData ...string,
 ) (plaintext []byte, ciphertextHash [32]byte, err error) {
 	if !cli.EnableDecryptedEventBuffer {
-		plaintext, err = decrypt(ctx)
+		err = cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) error {
+			if prepare != nil {
+				if prepareErr := prepare(ctx); prepareErr != nil {
+					return prepareErr
+				}
+			}
+			plaintext, err = decrypt(ctx)
+			return err
+		})
 		return
 	}
 	hasher := sha256.New()
@@ -634,7 +684,7 @@ func (cli *Client) bufferedDecrypt(
 				Hex("ciphertext_hash", ciphertextHash[:]).
 				Time("insertion_time", buf.InsertTime).
 				Msg("Returning event already processed error")
-			err = fmt.Errorf("%w at %s", ErrEventAlreadyProcessed, buf.InsertTime.String())
+			err = &processedEventError{inserted: buf.InsertTime, groupStatus: buf.GroupStatus != nil && *buf.GroupStatus}
 			return
 		}
 		zerolog.Ctx(ctx).Debug().
@@ -645,16 +695,24 @@ func (cli *Client) bufferedDecrypt(
 		return
 	}
 
-	err = cli.Store.EventBuffer.DoDecryptionTxn(ctx, func(ctx context.Context) (innerErr error) {
-		plaintext, innerErr = decrypt(ctx)
-		if innerErr != nil {
+	err = cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		if prepare != nil {
+			if prepareErr := prepare(ctx); prepareErr != nil {
+				return prepareErr
+			}
+		}
+		return cli.Store.EventBuffer.DoDecryptionTxn(ctx, func(ctx context.Context) (innerErr error) {
+			ctx = store.WithSessionTransaction(ctx)
+			plaintext, innerErr = decrypt(ctx)
+			if innerErr != nil {
+				return
+			}
+			innerErr = cli.Store.EventBuffer.PutBufferedEvent(ctx, ciphertextHash, plaintext, serverTimestamp)
+			if innerErr != nil {
+				innerErr = fmt.Errorf("%w: failed to save decrypted event to buffer: %w", ErrEventBufferDB, innerErr)
+			}
 			return
-		}
-		innerErr = cli.Store.EventBuffer.PutBufferedEvent(ctx, ciphertextHash, plaintext, serverTimestamp)
-		if innerErr != nil {
-			innerErr = fmt.Errorf("%w: failed to save decrypted event to buffer: %w", ErrEventBufferDB, innerErr)
-		}
-		return
+		})
 	})
 	if err == nil {
 		zerolog.Ctx(ctx).Debug().
@@ -689,6 +747,9 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		builder = session.NewBuilderFromSignal(sessionlessSignalStore{cli.Store}, from.SignalAddress(), pbSerializer)
 	}
 	cipher := session.NewCipher(builder, from.SignalAddress())
+	prepare := func(prepareCtx context.Context) error {
+		return cli.Store.PrepareIdentitySessions(prepareCtx, from.SignalAddress())
+	}
 	var plaintext []byte
 	var ciphertextHash [32]byte
 	if isPreKey {
@@ -696,7 +757,7 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse prekey message: %w", err)
 		}
-		plaintext, ciphertextHash, err = cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
+		plaintext, ciphertextHash, err = cli.bufferedDecryptPrepared(ctx, content, serverTS, prepare, func(decryptCtx context.Context) ([]byte, error) {
 			pt, innerErr := cipher.DecryptMessage(decryptCtx, preKeyMsg)
 			if cli.AutoTrustIdentity && errors.Is(innerErr, signalerror.ErrUntrustedIdentity) {
 				cli.Log.Warnf("Got %v error while trying to decrypt prekey message from %s, clearing stored identity and retrying", innerErr, from)
@@ -707,7 +768,7 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 				pt, innerErr = cipher.DecryptMessage(decryptCtx, preKeyMsg)
 			}
 			return pt, innerErr
-		}, "prekey", from.String())
+		}, "prekey", store.SignalSessionAddress(ctx, from.String()))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt prekey message: %w", err)
 		}
@@ -716,9 +777,9 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse normal message: %w", err)
 		}
-		plaintext, ciphertextHash, err = cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
+		plaintext, ciphertextHash, err = cli.bufferedDecryptPrepared(ctx, content, serverTS, prepare, func(decryptCtx context.Context) ([]byte, error) {
 			return cipher.Decrypt(decryptCtx, msg)
-		}, "normal", from.String())
+		}, "normal", store.SignalSessionAddress(ctx, from.String()))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt normal message: %w", err)
 		}
@@ -1407,7 +1468,11 @@ func (cli *Client) handleDecryptedMessage(ctx context.Context, info *types.Messa
 		return false
 	}
 	evt := &events.Message{Info: *info, RawMessage: msg, RetryCount: retryCount}
-	return cli.dispatchEvent(evt.UnwrapRaw())
+	evt.UnwrapRaw()
+	if evt.Info.StatusKind() == types.StatusKindGroup {
+		info.IsGroupStatus = true
+	}
+	return cli.dispatchEvent(evt)
 }
 
 // SendProtocolMessageReceipt sends a receipt for a protocol message back to the phone.
