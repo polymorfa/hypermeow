@@ -223,22 +223,29 @@ func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddre
 		}
 		for _, key := range keys {
 			device.sessionResetAddresses[key] = device.sessionResetEpoch
-			if _, pending := device.sessionResetPending[key]; !pending {
-				if len(device.sessionResetPending) >= maxSessionResetAddresses {
-					// Unknown failed keys cannot be forgotten safely. Refuse
-					// this Device until its backend state is reconciled.
-					device.sessionResetBlocked = true
-				} else {
-					device.sessionResetPending[key] = struct{}{}
-				}
-			}
 		}
 		var deleteErr error
+		var failedKeys []string
 		for _, key := range keys {
 			if err := device.Sessions.DeleteSession(ctx, key); err != nil {
 				deleteErr = errors.Join(deleteErr, fmt.Errorf("failed to delete session with %s: %w", key, err))
+				failedKeys = append(failedKeys, key)
 			} else {
 				delete(device.sessionResetPending, key)
+			}
+		}
+		// The guard prevents reads during deletion. Reserve only actual
+		// failures, after successful deletions have freed their slots.
+		for _, key := range failedKeys {
+			if _, pending := device.sessionResetPending[key]; pending {
+				continue
+			}
+			if len(device.sessionResetPending) >= maxSessionResetAddresses {
+				// Unknown failed keys cannot be forgotten safely. Refuse
+				// this Device until its backend state is reconciled.
+				device.sessionResetBlocked = true
+			} else {
+				device.sessionResetPending[key] = struct{}{}
 			}
 		}
 		if deleteErr != nil {

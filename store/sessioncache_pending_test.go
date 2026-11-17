@@ -56,3 +56,27 @@ func TestFailedIdentityResetBudgetNeverForgetsUnsafeRows(t *testing.T) {
 		t.Fatalf("failure budget overflow allowed a fresh cache: %v", err)
 	}
 }
+
+func TestSuccessfulIdentityResetDoesNotSpendFailureBudget(t *testing.T) {
+	backend := &resetSessionStore{rows: make(map[string][]byte)}
+	device := &Device{Sessions: backend}
+	for i := range maxSessionResetAddresses - 1 {
+		address := protocol.NewSignalAddress(fmt.Sprintf("authored-%d", i), 1)
+		backend.failDelete = address.String() + "_status"
+		if err := device.DeleteSessionsForIdentity(context.Background(), address); !errors.Is(err, ErrSessionCacheInvalidated) {
+			t.Fatal(err)
+		}
+	}
+	backend.failDelete = ""
+	if err := device.DeleteSessionsForIdentity(context.Background(), protocol.NewSignalAddress("fresh", 1)); err != nil {
+		t.Errorf("successful reset exhausted the failure budget: %v", err)
+	}
+	for i := range maxSessionResetAddresses - 1 {
+		if err := device.DeleteSession(WithStatusSession(context.Background()), protocol.NewSignalAddress(fmt.Sprintf("authored-%d", i), 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := device.CheckCachedSession(context.Background(), "unrelated:1"); err != nil {
+		t.Errorf("tracked failures left the recovered Device blocked: %v", err)
+	}
+}
