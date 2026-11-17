@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -266,5 +267,95 @@ func TestAnotherDeviceCannotInvalidateTheContextOwnersCache(t *testing.T) {
 	}
 	if !bytes.Equal(firstBackend.rows[address.String()], fresh.Serialize()) {
 		t.Fatal("other device erased the owning device's pending session")
+	}
+}
+
+func TestFailedIdentityResetRefusesReloadUntilDeletionSucceeds(t *testing.T) {
+	for _, suffix := range []string{"", "_status"} {
+		t.Run("failed"+suffix, func(t *testing.T) {
+			address := protocol.NewSignalAddress("123", 1)
+			key := address.String() + suffix
+			backend := &resetSessionStore{rows: map[string][]byte{key: cacheTestSession().Serialize()}, failDelete: key}
+			device := &Device{Sessions: backend}
+			if err := device.DeleteSessionsForIdentity(context.Background(), address); err == nil {
+				t.Fatal("authored deletion failure was not returned")
+			}
+			ctx := context.Background()
+			if suffix != "" {
+				ctx = WithStatusSession(ctx)
+			}
+			if _, _, err := device.WithCachedSessions(ctx, []string{key}); !errors.Is(err, ErrSessionCacheInvalidated) {
+				t.Errorf("failed reset allowed prefetch: %v", err)
+			}
+			if _, err := device.LoadSession(ctx, address); !errors.Is(err, ErrSessionCacheInvalidated) {
+				t.Errorf("failed reset allowed direct load: %v", err)
+			}
+			if _, err := device.ContainsSession(ctx, address); !errors.Is(err, ErrSessionCacheInvalidated) {
+				t.Errorf("failed reset allowed direct lookup: %v", err)
+			}
+			if err := device.StoreSession(ctx, address, cacheTestSession()); !errors.Is(err, ErrSessionCacheInvalidated) {
+				t.Errorf("failed reset allowed direct write: %v", err)
+			}
+			if err := device.CheckCachedSession(ctx, key); !errors.Is(err, ErrSessionCacheInvalidated) {
+				t.Errorf("failed reset allowed crypto check: %v", err)
+			}
+			backend.failDelete = ""
+			if err := device.DeleteSessionsForIdentity(context.Background(), address); err != nil {
+				t.Fatal(err)
+			}
+			_, fresh, err := device.WithCachedSessions(ctx, []string{key})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = device.StoreSession(fresh, address, cacheTestSession()); err != nil {
+				t.Fatal(err)
+			}
+			if err = device.PutCachedSessions(fresh); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := backend.rows[key]; !ok {
+				t.Fatal("successful retry did not permit a fresh session")
+			}
+		})
+	}
+}
+
+func TestIdentityResetRetentionIsBoundedWithoutAcceptingOldCaches(t *testing.T) {
+	address := protocol.NewSignalAddress("123", 1)
+	backend := &resetSessionStore{rows: make(map[string][]byte)}
+	device := &Device{Sessions: backend}
+	_, stale, err := device.WithCachedSessions(context.Background(), []string{address.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = device.StoreSession(stale, address, cacheTestSession()); err != nil {
+		t.Fatal(err)
+	}
+	if err = device.DeleteSessionsForIdentity(context.Background(), address); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10_000 {
+		if err = device.DeleteSessionsForIdentity(context.Background(), protocol.NewSignalAddress(fmt.Sprintf("authored-%d", i), 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if retained := len(device.sessionResetAddresses); retained > 1024 {
+		t.Errorf("reset history retained %d entries for completed resets", retained)
+	}
+	if err = device.CheckCachedSession(stale, address.String()); !errors.Is(err, ErrSessionCacheInvalidated) {
+		t.Errorf("history pruning accepted old crypto context: %v", err)
+	}
+	if err = device.PutCachedSessions(stale); !errors.Is(err, ErrSessionCacheInvalidated) {
+		t.Errorf("history pruning accepted old dirty cache: %v", err)
+	}
+	_, fresh, err := device.WithCachedSessions(context.Background(), []string{address.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = device.StoreSession(fresh, address, cacheTestSession()); err != nil {
+		t.Fatal(err)
+	}
+	if err = device.PutCachedSessions(fresh); err != nil {
+		t.Fatal(err)
 	}
 }

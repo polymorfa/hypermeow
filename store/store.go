@@ -304,6 +304,9 @@ type Device struct {
 	sessionStateLock      sync.Mutex
 	sessionResetEpoch     uint64
 	sessionResetAddresses map[string]uint64
+	sessionResetFloor     uint64
+	sessionResetPending   map[string]struct{}
+	sessionResetBlocked   bool
 
 	saveDeleteLockInit sync.Once
 	saveDeleteLock     chan struct{}

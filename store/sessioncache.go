@@ -24,6 +24,9 @@ const (
 	contextKeySessionStateLock
 )
 
+// Bound completed reset history and outstanding deletion failures separately.
+const maxSessionResetAddresses = 1024
+
 var ErrSessionCacheInvalidated = errors.New("session cache was invalidated by an identity reset")
 
 type sessionCacheEntry struct {
@@ -120,20 +123,31 @@ func putCachedSession(ctx context.Context, device *Device, addr string, record *
 	return true
 }
 
-// CheckCachedSession rejects a stale cached address before local crypto can mutate identity state.
+// CheckCachedSession rejects stale or incompletely reset state before local crypto.
 func (device *Device) CheckCachedSession(ctx context.Context, address string) error {
 	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
-		if cache := getSessionCache(ctx, device); cache != nil {
-			generation := cache.epoch
-			if item, ok := cache.Get(address); ok {
-				generation = item.Generation
-			}
-			if device.sessionResetAddresses[address] > generation {
-				return ErrSessionCacheInvalidated
-			}
-		}
-		return nil
+		return device.checkCachedSession(ctx, address)
 	})
+}
+
+// The caller holds sessionStateLock across validation and local state use.
+func (device *Device) checkCachedSession(ctx context.Context, address string) error {
+	if device.sessionResetBlocked {
+		return ErrSessionCacheInvalidated
+	}
+	if _, pending := device.sessionResetPending[address]; pending {
+		return ErrSessionCacheInvalidated
+	}
+	if cache := getSessionCache(ctx, device); cache != nil {
+		generation := cache.epoch
+		if item, ok := cache.Get(address); ok {
+			generation = item.Generation
+		}
+		if generation < device.sessionResetFloor || device.sessionResetAddresses[address] > generation {
+			return ErrSessionCacheInvalidated
+		}
+	}
+	return nil
 }
 
 func (device *Device) WithCachedSessions(ctx context.Context, addresses []string) (map[string]bool, context.Context, error) {
@@ -155,6 +169,17 @@ func (device *Device) WithCachedSessions(ctx context.Context, addresses []string
 func (device *Device) withCachedSessions(ctx context.Context, addresses []string) (map[string]bool, context.Context, error) {
 	if len(addresses) == 0 {
 		return nil, ctx, nil
+	}
+
+	for _, address := range addresses {
+		// A new prefetch must not bless a row whose deletion failed. The
+		// previous context may be stale, so validate pending state alone.
+		if device.sessionResetBlocked {
+			return nil, ctx, ErrSessionCacheInvalidated
+		}
+		if _, pending := device.sessionResetPending[address]; pending {
+			return nil, ctx, ErrSessionCacheInvalidated
+		}
 	}
 
 	wrapped := make(map[string]sessionCacheEntry, len(addresses))
@@ -210,7 +235,7 @@ func (device *Device) putCachedSessions(ctx context.Context) error {
 	invalid := false
 	for addr, item := range cache.Iter() {
 		if item.Dirty {
-			if device.sessionResetAddresses[addr] > item.Generation {
+			if device.checkCachedSession(ctx, addr) != nil {
 				invalid = true
 				break
 			}

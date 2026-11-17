@@ -97,7 +97,19 @@ func (device *Device) ContainsPreKey(ctx context.Context, preKeyID uint32) (bool
 }
 
 func (device *Device) LoadSession(ctx context.Context, address *protocol.SignalAddress) (*record.Session, error) {
+	var sess *record.Session
+	err := device.WithSessionStateLock(ctx, func(ctx context.Context) (err error) {
+		sess, err = device.loadSession(ctx, address)
+		return
+	})
+	return sess, err
+}
+
+func (device *Device) loadSession(ctx context.Context, address *protocol.SignalAddress) (*record.Session, error) {
 	addrString := SignalSessionAddress(ctx, address.String())
+	if err := device.checkCachedSession(ctx, addrString); err != nil {
+		return nil, err
+	}
 	if sess := getCachedSession(ctx, device, addrString); sess != nil {
 		return sess, nil
 	}
@@ -136,7 +148,16 @@ func (device *Device) GetSubDeviceSessions(ctx context.Context, name string) ([]
 }
 
 func (device *Device) StoreSession(ctx context.Context, address *protocol.SignalAddress, record *record.Session) error {
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		return device.storeSession(ctx, address, record)
+	})
+}
+
+func (device *Device) storeSession(ctx context.Context, address *protocol.SignalAddress, record *record.Session) error {
 	addrString := SignalSessionAddress(ctx, address.String())
+	if err := device.checkCachedSession(ctx, addrString); err != nil {
+		return err
+	}
 	if putCachedSession(ctx, device, addrString, record) {
 		return nil
 	}
@@ -149,7 +170,19 @@ func (device *Device) StoreSession(ctx context.Context, address *protocol.Signal
 }
 
 func (device *Device) ContainsSession(ctx context.Context, remoteAddress *protocol.SignalAddress) (bool, error) {
+	var found bool
+	err := device.WithSessionStateLock(ctx, func(ctx context.Context) (err error) {
+		found, err = device.containsSession(ctx, remoteAddress)
+		return
+	})
+	return found, err
+}
+
+func (device *Device) containsSession(ctx context.Context, remoteAddress *protocol.SignalAddress) (bool, error) {
 	addrString := SignalSessionAddress(ctx, remoteAddress.String())
+	if err := device.checkCachedSession(ctx, addrString); err != nil {
+		return false, err
+	}
 	if found, cached := hasCachedSession(ctx, device, addrString); cached {
 		return found, nil
 	}
@@ -161,11 +194,14 @@ func (device *Device) ContainsSession(ctx context.Context, remoteAddress *protoc
 }
 
 func (device *Device) DeleteSession(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
-	addrString := SignalSessionAddress(ctx, remoteAddress.String())
-	if err := device.Sessions.DeleteSession(ctx, addrString); err != nil {
-		return fmt.Errorf("failed to delete session with %s: %w", addrString, err)
-	}
-	return nil
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		addrString := SignalSessionAddress(ctx, remoteAddress.String())
+		if err := device.Sessions.DeleteSession(ctx, addrString); err != nil {
+			return fmt.Errorf("failed to delete session with %s: %w", addrString, err)
+		}
+		delete(device.sessionResetPending, addrString)
+		return nil
+	})
 }
 
 // DeleteSessionsForIdentity removes both pairwise scopes after a shared identity change.
@@ -176,13 +212,40 @@ func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddre
 		if device.sessionResetAddresses == nil {
 			device.sessionResetAddresses = make(map[string]uint64)
 		}
-		for _, key := range keys {
-			device.sessionResetAddresses[key] = device.sessionResetEpoch
+		if len(device.sessionResetAddresses)+len(keys) > maxSessionResetAddresses {
+			// Forgetting a reset must never make an outstanding cache valid.
+			// Caches older than this floor must be prefetched again.
+			device.sessionResetFloor = device.sessionResetEpoch
+			clear(device.sessionResetAddresses)
+		}
+		if device.sessionResetPending == nil {
+			device.sessionResetPending = make(map[string]struct{})
 		}
 		for _, key := range keys {
-			if err := device.Sessions.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("failed to delete session with %s: %w", key, err)
+			device.sessionResetAddresses[key] = device.sessionResetEpoch
+			if _, pending := device.sessionResetPending[key]; !pending {
+				if len(device.sessionResetPending) >= maxSessionResetAddresses {
+					// Unknown failed keys cannot be forgotten safely. Refuse
+					// this Device until its backend state is reconciled.
+					device.sessionResetBlocked = true
+				} else {
+					device.sessionResetPending[key] = struct{}{}
+				}
 			}
+		}
+		var deleteErr error
+		for _, key := range keys {
+			if err := device.Sessions.DeleteSession(ctx, key); err != nil {
+				deleteErr = errors.Join(deleteErr, fmt.Errorf("failed to delete session with %s: %w", key, err))
+			} else {
+				delete(device.sessionResetPending, key)
+			}
+		}
+		if deleteErr != nil {
+			return errors.Join(ErrSessionCacheInvalidated, deleteErr)
+		}
+		if device.sessionResetBlocked {
+			return ErrSessionCacheInvalidated
 		}
 		if cache := getSessionCache(ctx, device); cache != nil {
 			for _, key := range keys {
