@@ -22,10 +22,38 @@ type contextKey int
 const (
 	contextKeySessionCache contextKey = iota
 	contextKeySessionStateLock
+	contextKeySessionTransaction
 )
 
 // Bound completed reset history and outstanding deletion failures separately.
 const maxSessionResetAddresses = 1024
+
+// WithSessionTransaction marks work whose writes are not yet committed.
+// Reconcile pending session deletions before entering this context. Custom
+// transactional stores must mark their callbacks as well.
+func WithSessionTransaction(ctx context.Context) context.Context {
+	if SessionTransactionActive(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, contextKeySessionTransaction, true)
+}
+
+// SessionTransactionActive reports the session-state transaction marker.
+func SessionTransactionActive(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	active, _ := ctx.Value(contextKeySessionTransaction).(bool)
+	return active
+}
+
+func (device *Device) sessionTransactionActive(ctx context.Context) bool {
+	if SessionTransactionActive(ctx) {
+		return true
+	}
+	backend, ok := device.Sessions.(SessionTransactionState)
+	return ok && backend.SessionTransactionActive(ctx)
+}
 
 var ErrSessionCacheInvalidated = errors.New("session cache was invalidated by an identity reset")
 

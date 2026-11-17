@@ -44,6 +44,13 @@ type SessionStore interface {
 	MigratePNToLID(ctx context.Context, pn, lid types.JID) error
 }
 
+// SessionTransactionState is an optional backend capability for transactions
+// opened outside the event-buffer wrapper. Custom stores may instead mark
+// transaction contexts with WithSessionTransaction.
+type SessionTransactionState interface {
+	SessionTransactionActive(context.Context) bool
+}
+
 type PreKeyStore interface {
 	GetOrGenPreKeys(ctx context.Context, count uint32) ([]*keys.PreKey, error)
 	GenOnePreKey(ctx context.Context) (*keys.PreKey, error)
