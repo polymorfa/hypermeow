@@ -1618,9 +1618,18 @@ func (s *SQLStore) PutBufferedEvent(ctx context.Context, ciphertextHash [32]byte
 	return err
 }
 
+// SessionTransactionActive also detects transactions opened outside the event
+// buffer wrapper, so pending-reset recovery cannot treat them as durable writes.
+func (s *SQLStore) SessionTransactionActive(ctx context.Context) bool {
+	_, active := s.db.Execable(ctx).(dbutil.Transaction)
+	return active
+}
+
 func (s *SQLStore) DoDecryptionTxn(ctx context.Context, fn func(context.Context) error) error {
 	ctx = context.WithValue(ctx, dbutil.ContextKeyDoTxnCallerSkip, 2)
-	return s.db.DoTxn(ctx, nil, fn)
+	return s.db.DoTxn(ctx, nil, func(tx context.Context) error {
+		return fn(store.WithSessionTransaction(tx))
+	})
 }
 
 func (s *SQLStore) ClearBufferedEventPlaintext(ctx context.Context, ciphertextHash [32]byte) error {

@@ -360,3 +360,12 @@ retains the original identity for surviving rows after a failed library-managed
 reset; this relies on backend deletion completion and ordering. Custom-store,
 transaction, process-crash and previous-release state acceptance still need their
 own evidence. Restarting is not a substitute for repairing a failed backend.
+
+Pending recovery runs before buffered decryption opens its transaction. A previously failed
+deletion is not reconciled by a write that can still roll back. SQLStore marks its
+transaction callbacks and also detects transactions opened directly on its
+underlying database. Custom transactional SessionStores must expose
+`SessionTransactionState` or mark their contexts with `WithSessionTransaction`;
+callbacks must forward that context. Saved buffered plaintext bypasses new
+preparation and decryption. These are source contracts, not database/crash or
+previous-release acceptance evidence.

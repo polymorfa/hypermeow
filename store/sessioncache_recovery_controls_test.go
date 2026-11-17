@@ -109,3 +109,38 @@ func TestReconciliationCannotRetryItsOwnActiveDeletion(t *testing.T) {
 		t.Fatal("successful outer reconciliation kept pending state")
 	}
 }
+
+func TestPendingDeletionCannotBeClearedInsideKnownTransaction(t *testing.T) {
+	ctx := context.Background()
+	address := protocol.NewSignalAddress("123", 1)
+	key := address.String() + "_status"
+	backend := &resetSessionStore{rows: map[string][]byte{key: cacheTestSession().Serialize()}, failDelete: key}
+	device := &Device{Sessions: backend}
+	if err := device.DeleteSessionsForIdentity(ctx, address); !errors.Is(err, ErrSessionCacheInvalidated) {
+		t.Fatal(err)
+	}
+	backend.failDelete = ""
+	tx := WithSessionTransaction(WithStatusSession(ctx))
+	for _, attempt := range []func() error{
+		func() error { return device.ReconcileSessionResets(tx) },
+		func() error { return device.DeleteSession(tx, address) },
+		func() error { return device.DeleteSessionsForIdentity(tx, address) },
+		func() error { _, err := device.ContainsSession(tx, address); return err },
+	} {
+		if err := attempt(); !errors.Is(err, ErrSessionCacheInvalidated) {
+			t.Fatalf("transaction cleared pending state: %v", err)
+		}
+		if _, pending := device.sessionResetPending[key]; !pending {
+			t.Fatal("transaction forgot pending key")
+		}
+		if _, found := backend.rows[key]; !found {
+			t.Fatal("transaction attempted pending deletion")
+		}
+	}
+	if err := device.ReconcileSessionResets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(device.sessionResetPending) != 0 {
+		t.Fatal("nontransactional recovery did not complete")
+	}
+}

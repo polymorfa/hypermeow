@@ -232,7 +232,7 @@ func (device *Device) retrySessionResetDeletion(ctx context.Context, key string)
 	if !found {
 		return nil
 	}
-	if state.active > 0 {
+	if state.active > 0 || device.sessionTransactionActive(ctx) {
 		return ErrSessionCacheInvalidated
 	}
 	state.active++
@@ -252,6 +252,19 @@ func (device *Device) reconcilePendingSession(ctx context.Context, key string) e
 		return errors.Join(ErrSessionCacheInvalidated, fmt.Errorf("failed to reconcile session with %s: %w", key, err))
 	}
 	return nil
+}
+
+// PrepareIdentitySessions reconciles pending deletions for both pairwise scopes.
+// Keep the session guard held when entering a subsequent decryption transaction.
+func (device *Device) PrepareIdentitySessions(ctx context.Context, address *protocol.SignalAddress) error {
+	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		for _, key := range []string{address.String(), address.String() + "_status"} {
+			if err := device.checkCachedSession(ctx, key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // DeleteIdentityAndSessions removes both session scopes before their identity.
@@ -337,6 +350,13 @@ func (device *Device) makeRoomForSessionReset(ctx context.Context, keys []string
 func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddress *protocol.SignalAddress) error {
 	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
 		keys := []string{remoteAddress.String(), remoteAddress.String() + "_status"}
+		if device.sessionTransactionActive(ctx) {
+			for _, key := range keys {
+				if _, pending := device.sessionResetPending[key]; pending {
+					return ErrSessionCacheInvalidated
+				}
+			}
+		}
 		// Never begin a reset whose possible failures cannot all be retained.
 		if err := device.makeRoomForSessionReset(ctx, keys); err != nil {
 			return err

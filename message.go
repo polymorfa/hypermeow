@@ -641,9 +641,25 @@ func (cli *Client) bufferedDecrypt(
 	serverTimestamp time.Time,
 	decrypt func(context.Context) ([]byte, error),
 	extraHashData ...string,
+) ([]byte, [32]byte, error) {
+	return cli.bufferedDecryptPrepared(ctx, ciphertext, serverTimestamp, nil, decrypt, extraHashData...)
+}
+
+func (cli *Client) bufferedDecryptPrepared(
+	ctx context.Context,
+	ciphertext []byte,
+	serverTimestamp time.Time,
+	prepare func(context.Context) error,
+	decrypt func(context.Context) ([]byte, error),
+	extraHashData ...string,
 ) (plaintext []byte, ciphertextHash [32]byte, err error) {
 	if !cli.EnableDecryptedEventBuffer {
 		err = cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) error {
+			if prepare != nil {
+				if prepareErr := prepare(ctx); prepareErr != nil {
+					return prepareErr
+				}
+			}
 			plaintext, err = decrypt(ctx)
 			return err
 		})
@@ -680,7 +696,13 @@ func (cli *Client) bufferedDecrypt(
 	}
 
 	err = cli.Store.WithSessionStateLock(ctx, func(ctx context.Context) error {
+		if prepare != nil {
+			if prepareErr := prepare(ctx); prepareErr != nil {
+				return prepareErr
+			}
+		}
 		return cli.Store.EventBuffer.DoDecryptionTxn(ctx, func(ctx context.Context) (innerErr error) {
+			ctx = store.WithSessionTransaction(ctx)
 			plaintext, innerErr = decrypt(ctx)
 			if innerErr != nil {
 				return
@@ -725,6 +747,9 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		builder = session.NewBuilderFromSignal(sessionlessSignalStore{cli.Store}, from.SignalAddress(), pbSerializer)
 	}
 	cipher := session.NewCipher(builder, from.SignalAddress())
+	prepare := func(prepareCtx context.Context) error {
+		return cli.Store.PrepareIdentitySessions(prepareCtx, from.SignalAddress())
+	}
 	var plaintext []byte
 	var ciphertextHash [32]byte
 	if isPreKey {
@@ -732,7 +757,7 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse prekey message: %w", err)
 		}
-		plaintext, ciphertextHash, err = cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
+		plaintext, ciphertextHash, err = cli.bufferedDecryptPrepared(ctx, content, serverTS, prepare, func(decryptCtx context.Context) ([]byte, error) {
 			pt, innerErr := cipher.DecryptMessage(decryptCtx, preKeyMsg)
 			if cli.AutoTrustIdentity && errors.Is(innerErr, signalerror.ErrUntrustedIdentity) {
 				cli.Log.Warnf("Got %v error while trying to decrypt prekey message from %s, clearing stored identity and retrying", innerErr, from)
@@ -752,7 +777,7 @@ func (cli *Client) decryptDM(ctx context.Context, child *waBinary.Node, from typ
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse normal message: %w", err)
 		}
-		plaintext, ciphertextHash, err = cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
+		plaintext, ciphertextHash, err = cli.bufferedDecryptPrepared(ctx, content, serverTS, prepare, func(decryptCtx context.Context) ([]byte, error) {
 			return cipher.Decrypt(decryptCtx, msg)
 		}, "normal", store.SignalSessionAddress(ctx, from.String()))
 		if err != nil {
