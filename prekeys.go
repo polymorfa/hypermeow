@@ -134,8 +134,57 @@ func (cli *Client) fetchPreKeysNoError(ctx context.Context, retryDevices []types
 }
 
 type preKeyResp struct {
-	bundle *prekey.Bundle
-	err    error
+	bundle         *prekey.Bundle
+	deviceIdentity []byte
+	err            error
+}
+
+// FetchedPreKey is one device's prekey bundle together with the
+// <device-identity> (serialized ADVSignedDeviceIdentity) the server returned
+// with it. Companion devices carry one; a primary device has none, so
+// DeviceIdentity is nil.
+type FetchedPreKey struct {
+	Bundle         *prekey.Bundle
+	DeviceIdentity []byte
+}
+
+// fetchPreKeysWithIdentityNoError is fetchPreKeysNoError, keeping each
+// bundle's <device-identity>. A headless client fetches through its relay,
+// which returns bundles only, so DeviceIdentity is nil there.
+func (cli *Client) fetchPreKeysWithIdentityNoError(ctx context.Context, devices []types.JID) map[types.JID]FetchedPreKey {
+	if len(devices) == 0 {
+		return nil
+	}
+	if cli.isShadow() {
+		bundles, err := cli.shadowRelay.FetchPreKeys(ctx, devices)
+		if err != nil {
+			cli.Log.Warnf("Failed to fetch prekeys for %v via relay: %v", devices, err)
+			return nil
+		}
+		out := make(map[types.JID]FetchedPreKey, len(bundles))
+		for jid, bundle := range bundles {
+			out[jid] = FetchedPreKey{Bundle: bundle}
+		}
+		return out
+	}
+	resp, err := cli.fetchPreKeys(ctx, devices)
+	if err != nil {
+		cli.Log.Warnf("Failed to fetch prekeys for %v: %v", devices, err)
+		return nil
+	}
+	out := make(map[types.JID]FetchedPreKey, len(devices))
+	for _, jid := range devices {
+		r, ok := resp[jid]
+		if !ok {
+			continue
+		}
+		if r.err != nil {
+			cli.Log.Warnf("Failed to fetch prekey for %s: %v", jid, r.err)
+			continue
+		}
+		out[jid] = FetchedPreKey{Bundle: r.bundle, DeviceIdentity: r.deviceIdentity}
+	}
+	return out
 }
 
 func (cli *Client) fetchPreKeys(ctx context.Context, users []types.JID) (map[types.JID]preKeyResp, error) {
@@ -169,9 +218,23 @@ func (cli *Client) fetchPreKeys(ctx context.Context, users []types.JID) (map[typ
 		}
 		jid := child.AttrGetter().JID("jid")
 		bundle, err := nodeToPreKeyBundle(uint32(jid.Device), child)
-		respData[jid] = preKeyResp{bundle, err}
+		respData[jid] = preKeyResp{bundle: bundle, deviceIdentity: preKeyDeviceIdentity(child), err: err}
 	}
 	return respData, nil
+}
+
+// preKeyDeviceIdentity returns the <device-identity> bytes of one prekey
+// response entry. WhatsApp places it beside the identity key, which may sit
+// under a <keys> wrapper.
+func preKeyDeviceIdentity(node waBinary.Node) []byte {
+	for _, parent := range []waBinary.Node{node, node.GetChildByTag("keys")} {
+		if child, ok := parent.GetOptionalChildByTag("device-identity"); ok {
+			if content, ok := child.Content.([]byte); ok && len(content) > 0 {
+				return content
+			}
+		}
+	}
+	return nil
 }
 
 func preKeyToNode(key *keys.PreKey) waBinary.Node {

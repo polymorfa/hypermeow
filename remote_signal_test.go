@@ -4,6 +4,7 @@
 package whatsmeow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -290,6 +291,30 @@ func TestRemoteReceiveDeliversMetadataAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestRemoteReceiveForwardsPreKeyDeviceIdentity(t *testing.T) {
+	identity := []byte{0x0a, 0x01, 0x02}
+	for _, tc := range []struct {
+		encType string
+		want    []byte
+	}{
+		{"pkmsg", identity},
+		{"msg", nil},
+	} {
+		t.Run(tc.encType, func(t *testing.T) {
+			cli, remote, _ := newTestRemote(t)
+			info, node := encMessage(tc.encType)
+			node.Content = append(node.GetChildren(), waBinary.Node{Tag: "device-identity", Content: identity})
+			cli.decryptMessages(context.Background(), info, node)
+			if len(remote.receives) != 1 {
+				t.Fatalf("Receive calls = %d, want 1", len(remote.receives))
+			}
+			if got := remote.receives[0].DeviceIdentity; !bytes.Equal(got, tc.want) {
+				t.Fatalf("DeviceIdentity = %x, want %x", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRemoteReceivePreservesProviderTimeAndAlternateSender(t *testing.T) {
 	pn := types.NewJID("15551234567", types.DefaultUserServer)
 	lid := types.NewJID("123456789", types.HiddenUserServer)
@@ -557,6 +582,50 @@ func TestRemoteRetryReceiptAsksTheStoreToResend(t *testing.T) {
 	}
 	if tags := sent.tags(); len(tags) != 1 || tags[0] != "message:text" {
 		t.Fatalf("sent %v", tags)
+	}
+}
+
+func TestRemoteRetryReceiptForwardsItsKeysDeviceIdentity(t *testing.T) {
+	cli, remote, _ := newTestRemote(t)
+	requester := types.JID{User: "123", Server: types.HiddenUserServer, Device: 2}
+	remote.resendWith = marshalStanza(t, waBinary.Node{
+		Tag:   "message",
+		Attrs: waBinary.Attrs{"id": "MSG9", "to": requester, "type": "text"},
+	})
+	identity := keys.NewKeyPair()
+	signed := identity.CreateSignedPreKey(1)
+	deviceIdentity := []byte{0x0a, 0x01, 0x02}
+	receipt := &events.Receipt{
+		MessageSource: types.MessageSource{Chat: requester.ToNonAD(), Sender: requester},
+	}
+	node := &waBinary.Node{
+		Tag:   "receipt",
+		Attrs: waBinary.Attrs{"id": "MSG9", "from": requester, "type": "retry"},
+		Content: []waBinary.Node{
+			{Tag: "retry", Attrs: waBinary.Attrs{"id": "MSG9", "t": "1700000000", "count": "2"}},
+			{Tag: "registration", Content: []byte{0, 0, 0, 7}},
+			// The layout retry.go sends: the device identity sits in <keys>.
+			{Tag: "keys", Content: []waBinary.Node{
+				{Tag: "type", Content: []byte{5}},
+				{Tag: "identity", Content: identity.Pub[:]},
+				preKeyToNode(keys.NewPreKey(9)),
+				preKeyToNode(signed),
+				{Tag: "device-identity", Content: deviceIdentity},
+			}},
+		},
+	}
+	if err := cli.handleRetryReceipt(context.Background(), receipt, node); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.resends) != 1 {
+		t.Fatalf("resends = %+v", remote.resends)
+	}
+	got := remote.resends[0]
+	if got.Bundle == nil || got.Bundle.RegistrationID() != 7 {
+		t.Fatalf("retry bundle was not parsed: %+v", got.Bundle)
+	}
+	if !bytes.Equal(got.DeviceIdentity, deviceIdentity) {
+		t.Fatalf("DeviceIdentity = %x, want %x", got.DeviceIdentity, deviceIdentity)
 	}
 }
 

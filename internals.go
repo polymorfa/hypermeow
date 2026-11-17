@@ -655,6 +655,12 @@ func (int *DangerousInternalClient) FetchPreKeysNoError(ctx context.Context, ret
 	return int.c.fetchPreKeysNoError(ctx, retryDevices)
 }
 
+// FetchPreKeysWithIdentityNoError fetches prekey bundles and keeps the
+// <device-identity> each companion device's bundle carries.
+func (int *DangerousInternalClient) FetchPreKeysWithIdentityNoError(ctx context.Context, devices []types.JID) map[types.JID]FetchedPreKey {
+	return int.c.fetchPreKeysWithIdentityNoError(ctx, devices)
+}
+
 func (int *DangerousInternalClient) FetchPreKeys(ctx context.Context, users []types.JID) (map[types.JID]preKeyResp, error) {
 	return int.c.fetchPreKeys(ctx, users)
 }
