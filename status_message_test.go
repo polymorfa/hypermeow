@@ -1,6 +1,7 @@
 package whatsmeow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -172,12 +173,17 @@ func TestStatusRemoteMetadataAndOutage(t *testing.T) {
 		node.Attrs["from"] = types.NewJID("120363000000001", types.GroupServer)
 		node.Attrs["participant"] = types.NewJID("200000000002", types.HiddenUserServer)
 		node.Content = append(node.GetChildren(), waBinary.Node{Tag: "meta", Attrs: waBinary.Attrs{"session_scope": "status"}})
+		identity := []byte("authored status companion identity")
+		node.Content = append(node.GetChildren(), waBinary.Node{Tag: "device-identity", Content: identity})
 		if outage {
 			remote.receiveErr = errors.New("synthetic remote outage")
 		}
 		cli.handleStatusMessage(context.Background(), node)
 		if len(remote.receives) != 1 || remote.receives[0].StatusKind != types.StatusKindGroup || !remote.receives[0].StatusSession {
 			t.Fatalf("lost remote status metadata: %+v", remote.receives)
+		}
+		if !bytes.Equal(remote.receives[0].DeviceIdentity, identity) {
+			t.Fatal("lost status companion identity")
 		}
 		if outage && len(sent.nodes) != 0 {
 			t.Fatal("acknowledged status before remote receiver accepted it")
