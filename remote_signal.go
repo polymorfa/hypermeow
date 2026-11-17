@@ -173,6 +173,10 @@ type RemoteResend struct {
 	// Bundle carries keys from the retry receipt, used to start a fresh
 	// session. Nil when the receipt had none.
 	Bundle *prekey.Bundle
+	// DeviceIdentity is the <device-identity> (a serialized
+	// ADVSignedDeviceIdentity) the receipt's keys carry, so the remote store
+	// can verify a companion requester before using Bundle. Nil without one.
+	DeviceIdentity []byte
 }
 
 // ErrRemoteSignalUnsupported is returned for flows a remote-keyed client
@@ -544,6 +548,7 @@ func (cli *Client) handleRetryReceiptRemote(ctx context.Context, receipt *events
 			return fmt.Errorf("failed to read prekey bundle in retry receipt: %w", err)
 		}
 		req.Bundle = bundle
+		req.DeviceIdentity = preKeyDeviceIdentity(*node)
 	}
 	if hostedSender, ok := rawHostedSender(node); ok {
 		req.EncryptionJID = cli.hostedSignalJID(ctx, hostedSender)

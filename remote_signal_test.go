@@ -586,6 +586,50 @@ func TestRemoteRetryReceiptAsksTheStoreToResend(t *testing.T) {
 	}
 }
 
+func TestRemoteRetryReceiptForwardsItsKeysDeviceIdentity(t *testing.T) {
+	cli, remote, _ := newTestRemote(t)
+	requester := types.JID{User: "123", Server: types.HiddenUserServer, Device: 2}
+	remote.resendWith = marshalStanza(t, waBinary.Node{
+		Tag:   "message",
+		Attrs: waBinary.Attrs{"id": "MSG9", "to": requester, "type": "text"},
+	})
+	identity := keys.NewKeyPair()
+	signed := identity.CreateSignedPreKey(1)
+	deviceIdentity := []byte{0x0a, 0x01, 0x02}
+	receipt := &events.Receipt{
+		MessageSource: types.MessageSource{Chat: requester.ToNonAD(), Sender: requester},
+	}
+	node := &waBinary.Node{
+		Tag:   "receipt",
+		Attrs: waBinary.Attrs{"id": "MSG9", "from": requester, "type": "retry"},
+		Content: []waBinary.Node{
+			{Tag: "retry", Attrs: waBinary.Attrs{"id": "MSG9", "t": "1700000000", "count": "2"}},
+			{Tag: "registration", Content: []byte{0, 0, 0, 7}},
+			// The layout retry.go sends: the device identity sits in <keys>.
+			{Tag: "keys", Content: []waBinary.Node{
+				{Tag: "type", Content: []byte{5}},
+				{Tag: "identity", Content: identity.Pub[:]},
+				preKeyToNode(keys.NewPreKey(9)),
+				preKeyToNode(signed),
+				{Tag: "device-identity", Content: deviceIdentity},
+			}},
+		},
+	}
+	if err := cli.handleRetryReceipt(context.Background(), receipt, node); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.resends) != 1 {
+		t.Fatalf("resends = %+v", remote.resends)
+	}
+	got := remote.resends[0]
+	if got.Bundle == nil || got.Bundle.RegistrationID() != 7 {
+		t.Fatalf("retry bundle was not parsed: %+v", got.Bundle)
+	}
+	if !bytes.Equal(got.DeviceIdentity, deviceIdentity) {
+		t.Fatalf("DeviceIdentity = %x, want %x", got.DeviceIdentity, deviceIdentity)
+	}
+}
+
 func TestRemoteClientRefusesLocalSends(t *testing.T) {
 	cli, _, _ := newTestRemote(t)
 	_, err := cli.SendMessage(context.Background(), types.NewJID("123", types.DefaultUserServer), nil)
