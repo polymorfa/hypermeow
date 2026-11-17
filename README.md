@@ -369,3 +369,23 @@ underlying database. Custom transactional SessionStores must expose
 callbacks must forward that context. Saved buffered plaintext bypasses new
 preparation and decryption. These are source contracts, not database/crash or
 previous-release acceptance evidence.
+
+SQL identity cache and transactions: use `SQLStore.DoDecryptionTxn` for identity
+reads or writes inside a database transaction. It owns the commit/rollback boundary,
+serializes identity-cache access for that device until completion, clears the
+transaction's cache entries afterward and invalidates earlier identity-fetch tokens.
+Nested calls with its callback context share that boundary. An externally opened
+transaction cannot supply its eventual outcome, so identity operations and nested
+`DoDecryptionTxn` calls in that context return `ErrUnmanagedIdentityTransaction`
+before accessing the cache or running the callback. Phone-number to LID migration
+also owns its transaction boundary and refuses to run inside an outer transaction.
+Escaped callback contexts are
+also rejected. This does not coordinate other SQLStore instances or processes that
+write the same device rows; those require separate store ownership and admission.
+
+The SQL rollback/replay regression uses a local SQLite database and authored opaque
+session bytes, not real account traffic or decrypted Signal sessions. Run it with
+CGO enabled: `CGO_ENABLED=1 go test ./store/sqlstore -run TestSQLIdentityRollbackReplay`.
+The SQLite driver is a test-only import; the library still does not register a driver
+for applications. Cache serialization and guest-session throughput need acceptance
+on the composed native candidate before merge.

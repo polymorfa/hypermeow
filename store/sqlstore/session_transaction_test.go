@@ -75,3 +75,64 @@ func TestSessionTransactionStateUsesTheActualDatabaseContext(t *testing.T) {
 		t.Error("transaction state escaped its callback")
 	}
 }
+
+func TestIdentityAccessRejectsUnownedOuterTransaction(t *testing.T) {
+	probe := &sessionTxnProbe{}
+	db := sql.OpenDB(sessionTxnConnector{probe})
+	t.Cleanup(func() { _ = db.Close() })
+	container := NewWithDB(db, "sqlite3", nil)
+	backend := NewSQLStore(container, types.NewJID("100000000001", types.DefaultUserServer))
+	err := container.db.DoTxn(context.Background(), nil, func(tx context.Context) error {
+		callbacks := 0
+		if err := backend.DoDecryptionTxn(tx, func(context.Context) error { callbacks++; return nil }); !errors.Is(err, ErrUnmanagedIdentityTransaction) || callbacks != 0 {
+			t.Fatalf("outer transaction entered callback: %d, %v", callbacks, err)
+		}
+		key := [32]byte{1}
+		operations := []func() error{
+			func() error {
+				return backend.MigratePNToLID(tx, types.NewJID("100000000002", types.DefaultUserServer), types.NewJID("100000000003", types.HiddenUserServer))
+			},
+			func() error { return backend.PutIdentity(tx, "peer:1", key) },
+			func() error { return backend.DeleteIdentity(tx, "peer:1") },
+			func() error { return backend.DeleteAllIdentities(tx, "peer") },
+			func() error { _, e := backend.IsTrustedIdentity(tx, "peer:1", key); return e },
+			func() error { _, _, e := backend.GetManyIdentities(tx, []string{"peer:1"}); return e },
+			func() error { _, e := backend.EnsureIdentity(tx, "peer:1", key, 0); return e },
+		}
+		for i, operation := range operations {
+			if err := operation(); !errors.Is(err, ErrUnmanagedIdentityTransaction) {
+				t.Errorf("operation %d: %v", i, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdentityTransactionContextCannotEscape(t *testing.T) {
+	probe := &sessionTxnProbe{}
+	db := sql.OpenDB(sessionTxnConnector{probe})
+	t.Cleanup(func() { _ = db.Close() })
+	backend := NewSQLStore(NewWithDB(db, "sqlite3", nil), types.NewJID("100000000001", types.DefaultUserServer))
+	var escaped context.Context
+	if err := backend.DoDecryptionTxn(context.Background(), func(tx context.Context) error {
+		escaped = tx
+		return backend.DoDecryptionTxn(tx, func(nested context.Context) error {
+			_, _, err := backend.GetManyIdentities(nested, nil)
+			return err
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if probe.commits != 1 {
+		t.Fatalf("nested call opened another transaction: %+v", probe)
+	}
+	if _, _, err := backend.GetManyIdentities(escaped, nil); !errors.Is(err, ErrUnmanagedIdentityTransaction) {
+		t.Fatalf("escaped context was accepted: %v", err)
+	}
+	if err := backend.DoDecryptionTxn(escaped, func(context.Context) error { t.Fatal("escaped callback ran"); return nil }); !errors.Is(err, ErrUnmanagedIdentityTransaction) {
+		t.Fatal(err)
+	}
+}
