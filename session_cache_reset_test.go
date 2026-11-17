@@ -6,6 +6,7 @@ package whatsmeow
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -111,5 +112,33 @@ func TestBufferedDecryptOrdersTransactionAfterSessionMutation(t *testing.T) {
 	}
 	if early {
 		t.Fatal("database transaction entered before local mutation guard")
+	}
+}
+
+func TestFanoutAbortsWhenPrefetchedRecipientWasReset(t *testing.T) {
+	ctx := context.Background()
+	own := types.NewADJID("100000000001", 0, 1)
+	peerJID := types.JID{User: "200000000002", Server: types.HiddenUserServer, Device: 2}
+	coldJID := types.JID{User: "300000000003", Server: types.HiddenUserServer, Device: 3}
+	companion, _ := newSignalTestDevice(own, &store.NoopStore{})
+	peer, _ := newSignalTestDevice(peerJID, &store.NoopStore{})
+	cli := NewClient(companion, waLog.Noop)
+	if _, _, err := cli.encryptMessageForDevice(ctx, []byte("authored warm session"), peerJID, signalTestBundle(t, peer, 2), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	reset := false
+	cli.testSendHook = func(_ []byte) error {
+		reset = true
+		if err := companion.DeleteSessionsForIdentity(context.Background(), peerJID.SignalAddress()); err != nil {
+			return err
+		}
+		return errors.New("authored prekey lookup refusal")
+	}
+	_, _, err := cli.encryptMessageForDevices(ctx, []types.JID{peerJID, coldJID}, "authored-race", []byte("authored content"), nil, nil)
+	if !reset {
+		t.Fatal("authored lookup did not reach the prefetch/crypto boundary")
+	}
+	if err == nil {
+		t.Fatal("fan-out reported success after omitting a reset recipient")
 	}
 }

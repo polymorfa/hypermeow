@@ -36,17 +36,27 @@ type sessionCacheEntry struct {
 type sessionCache struct {
 	*exsync.Map[string, sessionCacheEntry]
 	epoch uint64
+	owner *Device
+}
+
+type sessionStateGuard struct {
+	device *Device
+	parent *sessionStateGuard
 }
 
 // WithSessionStateLock orders local session mutations before database transactions.
-// The callback context permits nested operations on this device and must not escape it.
+// The callback context permits nested operations and must not escape the callback.
+// Callers nesting different devices must use a consistent order across goroutines.
 func (device *Device) WithSessionStateLock(ctx context.Context, fn func(context.Context) error) error {
-	if ctx.Value(contextKeySessionStateLock) == device {
-		return fn(ctx)
+	held, _ := ctx.Value(contextKeySessionStateLock).(*sessionStateGuard)
+	for current := held; current != nil; current = current.parent {
+		if current.device == device {
+			return fn(ctx)
+		}
 	}
 	device.sessionStateLock.Lock()
 	defer device.sessionStateLock.Unlock()
-	return fn(context.WithValue(ctx, contextKeySessionStateLock, device))
+	return fn(context.WithValue(ctx, contextKeySessionStateLock, &sessionStateGuard{device: device, parent: held}))
 }
 
 type sessionIterator interface {
@@ -57,7 +67,7 @@ type sessionLoader interface {
 	IterateSession(context.Context, string, func([]byte) error) (bool, error)
 }
 
-func getSessionCache(ctx context.Context) *sessionCache {
+func getSessionCache(ctx context.Context, device *Device) *sessionCache {
 	if ctx == nil {
 		return nil
 	}
@@ -65,14 +75,14 @@ func getSessionCache(ctx context.Context) *sessionCache {
 	if val == nil {
 		return nil
 	}
-	if cache, ok := val.(*sessionCache); ok {
+	if cache, ok := val.(*sessionCache); ok && cache.owner == device {
 		return cache
 	}
 	return nil
 }
 
-func getCachedSession(ctx context.Context, addr string) *record.Session {
-	cache := getSessionCache(ctx)
+func getCachedSession(ctx context.Context, device *Device, addr string) *record.Session {
+	cache := getSessionCache(ctx, device)
 	if cache == nil {
 		return nil
 	}
@@ -83,8 +93,8 @@ func getCachedSession(ctx context.Context, addr string) *record.Session {
 	return sess.Record
 }
 
-func hasCachedSession(ctx context.Context, addr string) (found, cached bool) {
-	cache := getSessionCache(ctx)
+func hasCachedSession(ctx context.Context, device *Device, addr string) (found, cached bool) {
+	cache := getSessionCache(ctx, device)
 	if cache == nil {
 		return false, false
 	}
@@ -92,8 +102,8 @@ func hasCachedSession(ctx context.Context, addr string) (found, cached bool) {
 	return sess.Found, cached
 }
 
-func putCachedSession(ctx context.Context, addr string, record *record.Session) bool {
-	cache := getSessionCache(ctx)
+func putCachedSession(ctx context.Context, device *Device, addr string, record *record.Session) bool {
+	cache := getSessionCache(ctx, device)
 	if cache == nil {
 		return false
 	}
@@ -113,7 +123,7 @@ func putCachedSession(ctx context.Context, addr string, record *record.Session) 
 // CheckCachedSession rejects a stale cached address before local crypto can mutate identity state.
 func (device *Device) CheckCachedSession(ctx context.Context, address string) error {
 	return device.WithSessionStateLock(ctx, func(ctx context.Context) error {
-		if cache := getSessionCache(ctx); cache != nil {
+		if cache := getSessionCache(ctx, device); cache != nil {
 			generation := cache.epoch
 			if item, ok := cache.Get(address); ok {
 				generation = item.Generation
@@ -139,7 +149,7 @@ func (device *Device) WithCachedSessions(ctx context.Context, addresses []string
 	if err != nil {
 		return nil, ctx, err
 	}
-	return found, context.WithValue(ctx, contextKeySessionCache, getSessionCache(cached)), nil
+	return found, context.WithValue(ctx, contextKeySessionCache, getSessionCache(cached, device)), nil
 }
 
 func (device *Device) withCachedSessions(ctx context.Context, addresses []string) (map[string]bool, context.Context, error) {
@@ -183,7 +193,7 @@ func (device *Device) withCachedSessions(ctx context.Context, addresses []string
 		}
 	}
 
-	ctx = context.WithValue(ctx, contextKeySessionCache, &sessionCache{Map: exsync.NewMapWithData(wrapped), epoch: device.sessionResetEpoch})
+	ctx = context.WithValue(ctx, contextKeySessionCache, &sessionCache{Map: exsync.NewMapWithData(wrapped), epoch: device.sessionResetEpoch, owner: device})
 	return existingSessions, ctx, nil
 }
 
@@ -192,7 +202,7 @@ func (device *Device) PutCachedSessions(ctx context.Context) error {
 }
 
 func (device *Device) putCachedSessions(ctx context.Context) error {
-	cache := getSessionCache(ctx)
+	cache := getSessionCache(ctx, device)
 	if cache == nil {
 		return nil
 	}
