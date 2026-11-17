@@ -98,7 +98,7 @@ func (device *Device) ContainsPreKey(ctx context.Context, preKeyID uint32) (bool
 
 func (device *Device) LoadSession(ctx context.Context, address *protocol.SignalAddress) (*record.Session, error) {
 	addrString := SignalSessionAddress(ctx, address.String())
-	if sess := getCachedSession(ctx, addrString); sess != nil {
+	if sess := getCachedSession(ctx, device, addrString); sess != nil {
 		return sess, nil
 	}
 
@@ -137,7 +137,7 @@ func (device *Device) GetSubDeviceSessions(ctx context.Context, name string) ([]
 
 func (device *Device) StoreSession(ctx context.Context, address *protocol.SignalAddress, record *record.Session) error {
 	addrString := SignalSessionAddress(ctx, address.String())
-	if putCachedSession(ctx, addrString, record) {
+	if putCachedSession(ctx, device, addrString, record) {
 		return nil
 	}
 
@@ -150,7 +150,7 @@ func (device *Device) StoreSession(ctx context.Context, address *protocol.Signal
 
 func (device *Device) ContainsSession(ctx context.Context, remoteAddress *protocol.SignalAddress) (bool, error) {
 	addrString := SignalSessionAddress(ctx, remoteAddress.String())
-	if found, cached := hasCachedSession(ctx, addrString); cached {
+	if found, cached := hasCachedSession(ctx, device, addrString); cached {
 		return found, nil
 	}
 	hasSession, err := device.Sessions.HasSession(ctx, addrString)
@@ -184,7 +184,7 @@ func (device *Device) DeleteSessionsForIdentity(ctx context.Context, remoteAddre
 				return fmt.Errorf("failed to delete session with %s: %w", key, err)
 			}
 		}
-		if cache := getSessionCache(ctx); cache != nil {
+		if cache := getSessionCache(ctx, device); cache != nil {
 			for _, key := range keys {
 				cache.Set(key, sessionCacheEntry{Generation: device.sessionResetEpoch, Record: record.NewSession(SignalProtobufSerializer.Session, SignalProtobufSerializer.State)})
 			}

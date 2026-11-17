@@ -31,6 +31,7 @@ import (
 	"github.com/polymorfa/hypermeow/proto/waConsumerApplication"
 	"github.com/polymorfa/hypermeow/proto/waMsgApplication"
 	"github.com/polymorfa/hypermeow/proto/waMsgTransport"
+	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
 )
@@ -570,7 +571,7 @@ func (cli *Client) encryptMessageForDevicesV3(
 		if err != nil {
 			// TODO return these errors if it's a fatal one (like context cancellation or database)
 			cli.Log.Warnf("Failed to encrypt %s for %s: %v", id, jid, err)
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || errors.Is(err, store.ErrSessionCacheInvalidated) {
 				return nil, err
 			}
 			continue

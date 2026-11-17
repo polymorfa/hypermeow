@@ -212,3 +212,59 @@ func TestIdentityResetOrdersDeletionAfterAnActiveFlush(t *testing.T) {
 		t.Fatal("active flush restored a session after reset completed")
 	}
 }
+
+func TestNestedDeviceGuardsCanReturnToTheOuterDevice(t *testing.T) {
+	first := &Device{Sessions: &resetSessionStore{rows: make(map[string][]byte)}}
+	second := &Device{Sessions: &resetSessionStore{rows: make(map[string][]byte)}}
+	type guard interface {
+		WithSessionStateLock(context.Context, func(context.Context) error) error
+	}
+	outer, ok := any(first).(guard)
+	if !ok {
+		t.Fatal("session guard unavailable")
+	}
+	inner, ok := any(second).(guard)
+	if !ok {
+		t.Fatal("session guard unavailable")
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- outer.WithSessionStateLock(context.Background(), func(ctx context.Context) error {
+			return inner.WithSessionStateLock(ctx, func(ctx context.Context) error {
+				return first.DeleteSessionsForIdentity(ctx, protocol.NewSignalAddress("123", 1))
+			})
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("nested device guard deadlocked returning to the outer device")
+	}
+}
+
+func TestAnotherDeviceCannotInvalidateTheContextOwnersCache(t *testing.T) {
+	address := protocol.NewSignalAddress("123", 1)
+	firstBackend := &resetSessionStore{rows: make(map[string][]byte)}
+	first := &Device{Sessions: firstBackend}
+	second := &Device{Sessions: &resetSessionStore{rows: make(map[string][]byte)}}
+	_, cached, err := first.WithCachedSessions(context.Background(), []string{address.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := cacheTestSession()
+	if err = first.StoreSession(cached, address, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err = second.DeleteSessionsForIdentity(cached, address); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.PutCachedSessions(cached); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstBackend.rows[address.String()], fresh.Serialize()) {
+		t.Fatal("other device erased the owning device's pending session")
+	}
+}
