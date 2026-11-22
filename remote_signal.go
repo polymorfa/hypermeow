@@ -162,12 +162,10 @@ func (e *RemoteDecryptError) Unwrap() error { return e.Err }
 
 // RemoteResend asks the remote store to re-encrypt a sent message.
 type RemoteResend struct {
-	// DeviceIdentity accompanies the public bundle in a retry receipt.
-	DeviceIdentity []byte
-	Chat           types.JID
-	MessageID      types.MessageID
-	Requester      types.JID
-	EncryptionJID  types.JID
+	Chat          types.JID
+	MessageID     types.MessageID
+	Requester     types.JID
+	EncryptionJID types.JID
 	// Recipient is the original chat user when the requester is one of this
 	// account's own devices on a direct message.
 	Recipient types.JID
@@ -179,6 +177,10 @@ type RemoteResend struct {
 	// Bundle carries keys from the retry receipt, used to start a fresh
 	// session. Nil when the receipt had none.
 	Bundle *prekey.Bundle
+	// DeviceIdentity is the <device-identity> (a serialized
+	// ADVSignedDeviceIdentity) the receipt's keys carry, so the remote store
+	// can verify a companion requester before using Bundle. Nil without one.
+	DeviceIdentity []byte
 }
 
 // ErrRemoteSignalUnsupported is returned for flows a remote-keyed client
