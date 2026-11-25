@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 # Copyright (c) 2026 Rajeh Taher
+# Copyright (c) 2026 Polymorfa (Softium LLC)
 #
 # Licensed under the MIT License. See LICENSE-MIT for details.
 
