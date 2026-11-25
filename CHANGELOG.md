@@ -11,6 +11,8 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 
 ### Added
 
+- Add call-link guest registration and login with one-call in-memory Signal stores.
+
 - Opt-in concurrent WebSocket connections through `SocketConfig.RaceURLs`, with asynchronous loser cleanup and support for native and JS/WASM builds. See [connection options](README.md#connection-options).
 - `Client.DisablePostConnectPassiveIQ` to skip the post-connect passive/active IQ when the login payload already declares an active connection.
 - Persist hosted (coexistence) pairing as `store.Device.IsHosted` and report it on `events.PairSuccess.IsHosted`. SQL-backed stores upgrade to schema version 20, which adds `whatsmeow_device.is_hosted` (default `false`).
@@ -19,6 +21,16 @@ All notable HyperMeow changes are documented here. HyperMeow uses commit pseudo-
 - Add `UndecryptableMessage.IsHostedUnavailable` for `<unavailable hosted="true"/>`.
 
 ### Fixed
+
+- Keep provider response text out of displayed guest registration errors while retaining explicit diagnostics.
+
+- Bound guest Signal identities, sessions and sender keys before retaining peer data.
+
+- Redact malformed call-link and registration URLs from returned errors, including reflected redirect locations.
+
+- Reject guest registration redirects and bound guest prekey uploads and retained keys.
+
+- Preserve guest identity-reader trust and deletion fences during identity verification.
 
 - Migrate an established hosted PN session when the peer starts sending from its hosted LID. SQL-backed migration uses literal address-prefix ranges so hosted underscores cannot select or delete another account's keys.
 - Use one Signal address for a hosted device 99 when decrypting its messages, sending to it and answering its retry receipts: `<lid>:99@hosted.lid` when the account's LID is known, otherwise `<pn>:99@hosted`. Hosted sessions no longer collide with a regular device 99, and sessions stored under the PN hosted address move to the LID hosted address. `MessageInfo.Sender` still reports hosted senders on the regular servers.
