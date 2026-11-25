@@ -58,10 +58,23 @@ func (cli *Client) dispatchConnectionEvent(ctx context.Context, evt any) (handle
 		handlers := append([]wrappedConnectionEventHandler(nil), cli.connectionEventHandlers...)
 		cli.connectionEventHandlersLock.Unlock()
 		for _, handler := range handlers {
-			invokeConnectionEventHandler(cli, handler.fn, ctx, evt)
+			// Each lifecycle callback is admitted like a generic handler, so a
+			// final seal stops later callbacks and FinalClose joins running ones.
+			doneCallback, admitted := cli.enterNative()
+			if !admitted {
+				return true
+			}
+			func() { defer doneCallback(); invokeConnectionEventHandler(cli, handler.fn, ctx, evt) }()
 		}
 	}
 	return cli.dispatchEvent(evt)
+}
+
+// dispatchConnectionEventAsync is the owned replacement for
+// `go cli.dispatchConnectionEvent(ctx, evt)`. It keeps the producer's original
+// ctx for lifecycle handlers and returns false once final close sealed admission.
+func (cli *Client) dispatchConnectionEventAsync(ctx context.Context, evt any) bool {
+	return cli.startNative(func() { cli.dispatchConnectionEvent(ctx, evt) })
 }
 
 func invokeConnectionEventHandler(cli *Client, handler ConnectionEventHandler, ctx context.Context, evt any) {

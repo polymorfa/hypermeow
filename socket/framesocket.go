@@ -20,6 +20,8 @@ import (
 )
 
 type FrameSocket struct {
+	workerLauncher func(func()) bool
+
 	parentCtx context.Context
 	cancelCtx context.Context
 	cancel    context.CancelFunc
@@ -57,6 +59,22 @@ func NewFrameSocket(log waLog.Logger, client *http.Client) *FrameSocket {
 		},
 		HTTPClient: client,
 	}
+}
+
+// SetWorkerLauncher binds socket-owned goroutines to an owning lifetime. Set it
+// before Connect; do not change it while the socket is in use. The launcher
+// must register work before scheduling and return false after admission closes.
+// A nil launcher retains ordinary standalone socket behavior.
+func (fs *FrameSocket) SetWorkerLauncher(launcher func(func()) bool) {
+	fs.workerLauncher = launcher
+}
+
+func (fs *FrameSocket) startWorker(fn func()) bool {
+	if fs.workerLauncher != nil {
+		return fs.workerLauncher(fn)
+	}
+	go fn()
+	return true
 }
 
 func (fs *FrameSocket) IsConnected() bool {
@@ -110,7 +128,8 @@ func (fs *FrameSocket) CloseWithReason(code websocket.StatusCode, reason string)
 	fs.cancel()
 	fs.cancel = nil
 	if onDisconnect := fs.onDisconnect.Swap(nil); onDisconnect != nil {
-		go (*onDisconnect)(fs.parentCtx, code == 0)
+		callback, parent, remote := *onDisconnect, fs.parentCtx, code == 0
+		fs.startWorker(func() { callback(parent, remote) })
 	}
 }
 
@@ -143,18 +162,34 @@ func (fs *FrameSocket) dial(parentCtx, dialCtx context.Context, startPump bool) 
 	conn.SetReadLimit(FrameMaxSize)
 
 	fs.conn.Store(conn)
-	if startPump {
-		go fs.readPump(conn, fs.cancelCtx)
+	if startPump && !fs.startReadPumpLocked(conn) {
+		return ErrSocketClosed
 	}
 	return nil
 }
 
-func (fs *FrameSocket) startReadPump() {
+func (fs *FrameSocket) startReadPump() bool {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 	if conn := fs.conn.Load(); conn != nil {
-		go fs.readPump(conn, fs.cancelCtx)
+		return fs.startReadPumpLocked(conn)
 	}
+	return false
+}
+
+// startReadPumpLocked starts the read pump through the worker launcher. If the
+// owning lifetime refuses the worker, the socket is closed without a
+// disconnect callback and false is returned. The caller holds fs.lock.
+func (fs *FrameSocket) startReadPumpLocked(conn *websocket.Conn) bool {
+	ctx := fs.cancelCtx
+	if fs.startWorker(func() { fs.readPump(conn, ctx) }) {
+		return true
+	}
+	fs.conn.Store(nil)
+	fs.closed.Store(true)
+	fs.cancel()
+	_ = conn.CloseNow()
+	return false
 }
 
 func (fs *FrameSocket) Context() context.Context {
@@ -256,7 +291,10 @@ func (fs *FrameSocket) readPump(conn *websocket.Conn, ctx context.Context) {
 	fs.log.Debugf("Frame websocket read pump starting %p", fs)
 	defer func() {
 		fs.log.Debugf("Frame websocket read pump exiting %p", fs)
-		go fs.Close(0)
+		// An owner that refuses the cleanup worker still gets a closed socket.
+		if !fs.startWorker(func() { fs.Close(0) }) {
+			fs.Close(0)
+		}
 	}()
 	for {
 		msgType, data, err := conn.Read(ctx)

@@ -94,6 +94,8 @@ type deviceCache struct {
 
 // Client contains everything necessary to connect to and interact with the WhatsApp web API.
 type Client struct {
+	lifetime clientLifetime
+
 	Store   *store.Device
 	Log     waLog.Logger
 	recvLog waLog.Logger
@@ -120,6 +122,8 @@ type Client struct {
 	EnableDecryptedEventBuffer    bool
 	synchronousMessageNameUpdates atomic.Bool
 	lastDecryptedBufferClear      time.Time
+	decryptedBufferClearMu        sync.Mutex
+	decryptedBufferClearStarted   bool
 	unifiedSessionLock            sync.Mutex
 	lastUnifiedSessionSend        time.Time
 	UnifiedSessionInterval        time.Duration
@@ -139,7 +143,7 @@ type Client struct {
 	AppStateDebugLogs           bool
 
 	AutomaticMessageRerequestFromPhone bool
-	pendingPhoneRerequests             map[types.MessageID]context.CancelFunc
+	pendingPhoneRerequests             map[types.MessageID]*pendingPhoneRerequest
 	pendingPhoneRerequestsLock         sync.RWMutex
 
 	appStateProc     *appstate.Processor
@@ -148,6 +152,8 @@ type Client struct {
 
 	historySyncNotifications        chan historySyncNotification
 	historySyncHandlerStarted       atomic.Bool
+	historySyncHandlerMu            sync.Mutex
+	historySyncHandlerOwner         *historySyncLoopOwner
 	ManualHistorySyncDownload       bool
 	DisableManualHistorySyncReceipt bool
 	DisableHistorySyncReceipt       bool
@@ -638,20 +644,39 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 		return ErrClientIsNil
 	}
 
+	done, ok := cli.enterNative()
+	if !ok {
+		return ErrClientClosed
+	}
+	defer done()
+	ctx, releaseContext := cli.nativeContext(ctx)
+	defer releaseContext()
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
 
 	err := cli.unlockedConnect(ctx)
+	if cli.nativeClosed() {
+		return ErrClientClosed
+	}
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
-		go cli.dispatchConnectionEvent(ctx, &events.Disconnected{})
-		go cli.autoReconnect(ctx)
+		cli.dispatchConnectionEventAsync(ctx, &events.Disconnected{})
+		if !cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) }) {
+			return ErrClientClosed
+		}
 		return nil
 	}
 	return err
 }
 
 func (cli *Client) connect(ctx context.Context) error {
+	done, ok := cli.enterNative()
+	if !ok {
+		return ErrClientClosed
+	}
+	defer done()
+	ctx, releaseContext := cli.nativeContext(ctx)
+	defer releaseContext()
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
 
@@ -659,6 +684,9 @@ func (cli *Client) connect(ctx context.Context) error {
 }
 
 func (cli *Client) unlockedConnect(ctx context.Context) error {
+	if cli.nativeClosed() {
+		return ErrClientClosed
+	}
 	if cli.shadowRelay != nil {
 		// Guard: a shadow client must never open a socket. All Connect
 		// paths (Connect, ConnectContext, autoReconnect) funnel through
@@ -685,6 +713,8 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		client = cli.preLoginHTTP
 	}
 	fs := socket.NewFrameSocket(cli.Log.Sub("Socket"), client)
+	releaseSocket := cli.bindSocket(fs)
+	defer releaseSocket()
 	if userAgent := cli.getUserAgent(); userAgent != "" {
 		fs.HTTPHeaders.Set("User-Agent", userAgent)
 	}
@@ -705,10 +735,15 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		raceURLs = cli.SocketConfig.RaceURLs
 	}
 	if len(raceURLs) > 1 {
-		raced, err := socket.ConnectRace(ctx, cli.Log.Sub("Socket"), client, raceURLs, fs.HTTPHeaders)
+		// Bind every racer before it dials so its read pump, writes and
+		// disconnect callback stay under the client's lifetime admission.
+		raced, releaseRaced, err := socket.ConnectRaceWithOptions(ctx, cli.Log.Sub("Socket"), client, raceURLs, fs.HTTPHeaders, socket.RaceOptions{
+			Bind: cli.bindSocket,
+		})
 		if err != nil {
 			return err
 		}
+		defer releaseRaced()
 		fs = raced
 	} else if err := fs.Connect(ctx); err != nil {
 		fs.Close(0)
@@ -719,10 +754,17 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
 		fs.Close(0)
 		return fmt.Errorf("noise handshake failed: %w", err)
 	}
+	if !cli.pinNativeContext(ctx) {
+		return ErrClientClosed
+	}
 	closeWait := make(chan struct{})
 	cli.handlerQueueWait = closeWait
-	go cli.keepAliveLoop(ctx, fs.Context())
-	go cli.handlerQueueLoop(ctx, fs.Context(), queue, closeWait)
+	cli.startNative(func() { cli.keepAliveLoop(ctx, fs.Context()) })
+	if !cli.startNative(func() { cli.handlerQueueLoop(ctx, fs.Context(), queue, closeWait) }) {
+		// Final close won admission; release any finishDisconnect waiter.
+		close(closeWait)
+		return ErrClientClosed
+	}
 	return nil
 }
 
@@ -739,7 +781,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 		cli.socket = nil
 		cli.clearResponseWaiters(xmlStreamEndNode)
 		queueWait := cli.handlerQueueWait
-		go cli.finishDisconnect(ctx, remote, queueWait)
+		cli.startNativeContext(ctx, func() { cli.finishDisconnect(ctx, remote, queueWait) })
 	} else {
 		cli.Log.Debugf("Ignoring OnDisconnect on different socket")
 	}
@@ -762,8 +804,8 @@ func (cli *Client) finishDisconnect(ctx context.Context, remote bool, queueWait 
 	}
 	if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
 		cli.Log.Debugf("Emitting Disconnected event")
-		go cli.dispatchConnectionEvent(ctx, &events.Disconnected{})
-		go cli.autoReconnect(ctx)
+		cli.dispatchConnectionEventAsync(ctx, &events.Disconnected{})
+		cli.startNativeContext(ctx, func() { cli.autoReconnect(ctx) })
 	} else if remote {
 		cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")
 	} else {
@@ -786,6 +828,9 @@ func (cli *Client) isExpectedDisconnect() bool {
 }
 
 func (cli *Client) autoReconnect(ctx context.Context) {
+	if cli.nativeClosed() {
+		return
+	}
 	if !cli.EnableAutoReconnect || cli.Store.ID == nil {
 		return
 	}
@@ -801,6 +846,9 @@ func (cli *Client) autoReconnect(ctx context.Context) {
 			return
 		}
 		err := cli.connect(ctx)
+		if errors.Is(err, ErrClientClosed) || cli.nativeClosed() {
+			return
+		}
 		if errors.Is(err, ErrAlreadyConnected) {
 			cli.Log.Debugf("Connect() said we're already connected after autoreconnect sleep")
 			return
@@ -810,9 +858,16 @@ func (cli *Client) autoReconnect(ctx context.Context) {
 				return
 			}
 			cli.Log.Errorf("Error reconnecting after autoreconnect sleep: %v", err)
-			if cli.AutoReconnectHook != nil && !cli.AutoReconnectHook(err) {
-				cli.Log.Debugf("AutoReconnectHook returned false, not reconnecting")
-				return
+			if hook := cli.AutoReconnectHook; hook != nil {
+				doneCallback, admitted := cli.enterNative()
+				if !admitted {
+					return
+				}
+				retry := func() bool { defer doneCallback(); return hook(err) }()
+				if !retry {
+					cli.Log.Debugf("AutoReconnectHook returned false, not reconnecting")
+					return
+				}
 			}
 		} else {
 			return
@@ -850,7 +905,7 @@ func (cli *Client) Disconnect() {
 // ResetConnection disconnects from the WhatsApp web websocket and forces an automatic reconnection.
 // This will not do anything if the socket is already disconnected or if EnableAutoReconnect is false.
 func (cli *Client) ResetConnection() {
-	if cli == nil {
+	if cli == nil || cli.nativeClosed() {
 		return
 	}
 	cli.socketLock.Lock()
@@ -1011,6 +1066,11 @@ func (cli *Client) makeFrameHandler(queue chan *waBinary.Node) func(ctx context.
 }
 
 func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waBinary.Node) {
+	done, ok := cli.enterNative()
+	if !ok {
+		return
+	}
+	defer done()
 	decompressed, err := waBinary.Unpack(data)
 	if err != nil {
 		cli.Log.Warnf("Failed to decompress frame: %v", err)
@@ -1024,7 +1084,14 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waB
 		return
 	}
 	if h := cli.RawNodeHandler; h != nil {
-		modified, drop := h(ctx, node)
+		doneCallback, admitted := cli.enterNative()
+		if !admitted {
+			return
+		}
+		modified, drop := func() (*waBinary.Node, bool) {
+			defer doneCallback()
+			return h(ctx, node)
+		}()
 		if drop {
 			cli.recvLog.Debugf("RawNodeHandler dropped node: %s", node)
 			return
@@ -1081,13 +1148,15 @@ func (cli *Client) enqueueNode(ctx context.Context, queue chan *waBinary.Node, n
 	default:
 		if cli.forceAutoReconnect.CompareAndSwap(false, true) {
 			cli.Log.Errorf("Handler queue is full, resetting connection")
-			go cli.ResetConnection()
+			cli.startNative(func() { cli.ResetConnection() })
 		}
 	}
 }
 
 func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context, queue chan *waBinary.Node, closeWait chan struct{}) {
+	finalDone := cli.nativeDone()
 	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	ticker.Stop()
 	cli.Log.Debugf("Starting handler queue loop")
 	defer func() {
@@ -1120,24 +1189,32 @@ Loop:
 			}
 			doneChan := make(chan struct{})
 			start := time.Now()
-			go func() {
+			if !cli.startNative(func() {
 				cli.handleNode(evtCtx, node)
 				duration := time.Since(start)
 				close(doneChan)
 				if duration > 5*time.Second {
 					cli.Log.Warnf("Node handling took %s for %s", duration, node)
 				}
-			}()
+			}) {
+				return
+			}
 			ticker.Reset(30 * time.Second)
 			for range 10 {
 				select {
 				case <-doneChan:
 					ticker.Stop()
 					continue Loop
+				case <-finalDone:
+					return
 				case <-connCtx.Done():
 					ticker.Stop()
 					cli.Log.Warnf("Closing handler queue loop in the middle of handling %s", node)
-					<-doneChan
+					// Ordinary disconnect drains the in-flight node; final close does not wait.
+					select {
+					case <-doneChan:
+					case <-finalDone:
+					}
 					return
 				case <-ticker.C:
 					cli.Log.Warnf("Node handling is taking long for %s (started %s ago)", node, time.Since(start))
@@ -1145,6 +1222,8 @@ Loop:
 			}
 			cli.Log.Warnf("Continuing handling of %s in background as it's taking too long", node)
 			ticker.Stop()
+		case <-finalDone:
+			return
 		case <-connCtx.Done():
 			cli.Log.Debugf("Closing handler queue loop")
 			return
@@ -1229,6 +1308,11 @@ func (cli *Client) sendNode(ctx context.Context, node waBinary.Node) error {
 }
 
 func (cli *Client) dispatchEvent(evt any) (handlerFailed bool) {
+	done, ok := cli.enterNative()
+	if !ok {
+		return true
+	}
+	defer done()
 	cli.eventHandlersLock.RLock()
 	defer func() {
 		cli.eventHandlersLock.RUnlock()
@@ -1238,7 +1322,12 @@ func (cli *Client) dispatchEvent(evt any) (handlerFailed bool) {
 		}
 	}()
 	for _, handler := range cli.eventHandlers {
-		if !handler.fn(evt) {
+		doneCallback, admitted := cli.enterNative()
+		if !admitted {
+			return true
+		}
+		success := func() bool { defer doneCallback(); return handler.fn(evt) }()
+		if !success {
 			return true
 		}
 	}
@@ -1342,7 +1431,20 @@ func (cli *Client) getUnifiedSessionID() string {
 	return strconv.FormatInt(unifiedID, 10)
 }
 
+func (cli *Client) startUnifiedSession(checkLastSend bool) bool {
+	return cli.startConnectionTask(cli.BackgroundEventCtx, func(ctx context.Context) {
+		cli.sendUnifiedSessionContext(ctx, checkLastSend)
+	})
+}
+
 func (cli *Client) sendUnifiedSession(checkLastSend bool) {
+	if cli == nil {
+		return
+	}
+	cli.sendUnifiedSessionContext(cli.BackgroundEventCtx, checkLastSend)
+}
+
+func (cli *Client) sendUnifiedSessionContext(ctx context.Context, checkLastSend bool) {
 	if cli == nil {
 		return
 	}
@@ -1353,6 +1455,7 @@ func (cli *Client) sendUnifiedSession(checkLastSend bool) {
 	}
 	cli.lastUnifiedSessionSend = time.Now()
 	cli.unifiedSessionLock.Unlock()
+
 	node := waBinary.Node{
 		Tag:   "ib",
 		Attrs: waBinary.Attrs{},
@@ -1364,7 +1467,7 @@ func (cli *Client) sendUnifiedSession(checkLastSend bool) {
 		}},
 	}
 
-	err := cli.sendNode(cli.BackgroundEventCtx, node)
+	err := cli.sendNode(ctx, node)
 	if err != nil {
 		cli.Log.Debugf("Failed to send unified_session telemetry: %v", err)
 	}

@@ -112,7 +112,11 @@ func TestAppStateSyncErrorHandlerCanRetry(t *testing.T) {
 func TestQRChannelCoalescesSecretRotations(t *testing.T) {
 	cli := NewClient(&store.Device{}, waLog.Noop)
 	output := make(chan QRChannelItem, 8)
-	qrc := &qrChannel{cli: cli, log: waLog.Noop, ctx: t.Context(), output: output, stopQRs: make(chan struct{}), rotateAdv: make(chan struct{}, 1)}
+	qrc := &qrChannel{
+		cli: cli, log: waLog.Noop, ctx: t.Context(), output: output,
+		stopQRs: make(chan struct{}), sendsDone: make(chan struct{}), outputClosed: make(chan struct{}),
+		rotateAdv: make(chan struct{}, 1),
+	}
 	oldSecret := "secret-0"
 	for i := 1; i <= 10; i++ {
 		newSecret := fmt.Sprintf("secret-%d", i)
@@ -121,10 +125,10 @@ func TestQRChannelCoalescesSecretRotations(t *testing.T) {
 	}
 	finished := make(chan struct{})
 	go func() {
-		qrc.emitQRs([]string{"ref,noise,identity,secret-5,platform"})
+		qrc.emitQRs([]string{"ref,noise,identity,secret-5,platform"}, nil)
 		close(finished)
 	}()
-	defer func() { close(qrc.stopQRs); <-finished }()
+	defer func() { qrc.requestClose(nil, false, nil); <-finished }()
 	select {
 	case item := <-output:
 		if item.Code != "ref,noise,identity,secret-10,platform" {

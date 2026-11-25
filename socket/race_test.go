@@ -180,7 +180,7 @@ func TestConnectRaceLeavesOneSocket(t *testing.T) {
 		case <-ctx.Done():
 		}
 	}
-	fs, err := connectRace(ctx, waLog.Noop, http.DefaultClient, []string{a.wsURL(), b.wsURL()}, nil, afterConnect)
+	fs, _, err := connectRace(ctx, waLog.Noop, http.DefaultClient, []string{a.wsURL(), b.wsURL()}, nil, RaceOptions{}, afterConnect)
 	if err != nil {
 		t.Fatalf("race: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestConnectRaceReturnsBeforeLoserCloseAndStartsOnlyWinnerPump(t *testing.T)
 	returned := make(chan outcome, 1)
 	url := "ws" + server.URL[4:]
 	go func() {
-		fs, err := connectRace(ctx, logger, http.DefaultClient, []string{url, url}, nil, afterConnect)
+		fs, _, err := connectRace(ctx, logger, http.DefaultClient, []string{url, url}, nil, RaceOptions{}, afterConnect)
 		returned <- outcome{fs, err}
 	}()
 	var winner *FrameSocket
@@ -504,5 +504,71 @@ func TestConnectRaceCancelsEveryPendingDial(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("pending race did not return on cancellation")
+	}
+}
+
+// An owner that binds racers sees every race worker through its launcher, and
+// a refusing owner gets no socket and no unlaunched workers.
+func TestConnectRaceRunsWorkersThroughTheBoundLauncher(t *testing.T) {
+	fast := newWSServer(t, 0)
+	slow := newWSServer(t, 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var mu sync.Mutex
+	launches := map[*FrameSocket]int{}
+	released := map[*FrameSocket]int{}
+	var running sync.WaitGroup
+	bind := func(fs *FrameSocket) func() {
+		fs.SetWorkerLauncher(func(fn func()) bool {
+			mu.Lock()
+			launches[fs]++
+			mu.Unlock()
+			running.Add(1)
+			go func() { defer running.Done(); fn() }()
+			return true
+		})
+		return func() {
+			mu.Lock()
+			released[fs]++
+			mu.Unlock()
+		}
+	}
+	fs, release, err := ConnectRaceWithOptions(ctx, waLog.Noop, http.DefaultClient,
+		[]string{fast.wsURL(), slow.wsURL()}, nil, RaceOptions{Bind: bind})
+	if err != nil {
+		t.Fatalf("race: %v", err)
+	}
+	fs.Close(websocket.StatusNormalClosure)
+	release()
+	running.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(launches) != 2 {
+		t.Fatalf("both racers must be bound before dialing, got %d", len(launches))
+	}
+	// Winner: dial, loser drain, read pump, and its own Close(0) from the pump.
+	if launches[fs] < 3 {
+		t.Fatalf("the winner's dial, drain and read pump must use the launcher: %d launches", launches[fs])
+	}
+	for racer, count := range launches {
+		// The slow loser's dial is aborted before it upgrades, so it needs no
+		// close worker; its dial still goes through the launcher.
+		if racer != fs && count < 1 {
+			t.Fatalf("the loser's dial must use the launcher: %d launches", count)
+		}
+		if released[racer] != 1 {
+			t.Fatalf("every racer must be released exactly once, got %d", released[racer])
+		}
+	}
+
+	refuse := func(fs *FrameSocket) func() {
+		fs.SetWorkerLauncher(func(func()) bool { return false })
+		return func() {}
+	}
+	if _, _, err := ConnectRaceWithOptions(ctx, waLog.Noop, http.DefaultClient,
+		[]string{fast.wsURL(), slow.wsURL()}, nil, RaceOptions{Bind: refuse}); !errors.Is(err, ErrSocketClosed) {
+		t.Fatalf("a refusing owner must get ErrSocketClosed, got %v", err)
 	}
 }

@@ -45,7 +45,55 @@ func ConnectRace(
 	urls []string,
 	headers http.Header,
 ) (*FrameSocket, error) {
-	return connectRace(ctx, log, httpClient, urls, headers, nil)
+	fs, release, err := connectRace(ctx, log, httpClient, urls, headers, RaceOptions{}, nil)
+	if release != nil {
+		release()
+	}
+	return fs, err
+}
+
+// RaceOptions binds racing sockets to an owner before any of their workers
+// start.
+type RaceOptions struct {
+	// Bind runs on every racing socket before it dials, so the owner can
+	// install a worker launcher (see SetWorkerLauncher) and track the socket.
+	// The race calls the returned release once it no longer needs a socket:
+	// after a failed dial or a loser's close. The winner's release is returned
+	// to the caller of ConnectRaceWithOptions.
+	Bind func(*FrameSocket) (release func())
+}
+
+// ConnectRaceWithOptions is ConnectRace with owner binding. Every dial,
+// read pump and loser close runs through the bound socket's worker launcher;
+// when the launcher refuses, the race closes that socket inline instead. The
+// caller must call the returned release (never nil on success) once it is
+// done with the winner.
+func ConnectRaceWithOptions(
+	ctx context.Context,
+	log waLog.Logger,
+	httpClient *http.Client,
+	urls []string,
+	headers http.Header,
+	opts RaceOptions,
+) (*FrameSocket, func(), error) {
+	return connectRace(ctx, log, httpClient, urls, headers, opts, nil)
+}
+
+type racer struct {
+	fs      *FrameSocket
+	release func()
+}
+
+type dialResult struct {
+	index int
+	r     racer
+	err   error
+}
+
+func (r racer) done() {
+	if r.release != nil {
+		r.release()
+	}
 }
 
 func connectRace(
@@ -54,39 +102,47 @@ func connectRace(
 	httpClient *http.Client,
 	urls []string,
 	headers http.Header,
+	opts RaceOptions,
 	afterConnect func(int),
-) (*FrameSocket, error) {
+) (*FrameSocket, func(), error) {
 	if len(urls) == 0 {
-		return nil, ErrDialFailed
+		return nil, nil, ErrDialFailed
+	}
+	newBound := func(url string) racer {
+		r := racer{fs: newRacer(log, httpClient, url, headers)}
+		if opts.Bind != nil {
+			r.release = opts.Bind(r.fs)
+		}
+		return r
 	}
 	if len(urls) == 1 {
-		fs := newRacer(log, httpClient, urls[0], headers)
-		if err := fs.Connect(ctx); err != nil {
-			fs.Close(0)
-			return nil, err
+		r := newBound(urls[0])
+		if err := r.fs.Connect(ctx); err != nil {
+			r.fs.Close(0)
+			r.done()
+			return nil, nil, err
 		}
-		return fs, nil
+		return r.fs, r.done, nil
 	}
 
-	type dialResult struct {
-		index int
-		fs    *FrameSocket
-		err   error
-	}
 	results := make(chan dialResult, len(urls))
 	cancels := make([]context.CancelFunc, len(urls))
 	for i, url := range urls {
 		dialCtx, cancel := context.WithCancel(ctx)
 		cancels[i] = cancel
-		go func() {
-			fs := newRacer(log, httpClient, url, headers)
-			err := fs.dial(ctx, dialCtx, false)
+		r := newBound(url)
+		dial := func() {
+			err := r.fs.dial(ctx, dialCtx, false)
 			cancel()
 			if err == nil && afterConnect != nil {
 				afterConnect(i)
 			}
-			results <- dialResult{i, fs, err}
-		}()
+			results <- dialResult{i, r, err}
+		}
+		if !r.fs.startWorker(dial) {
+			cancel()
+			results <- dialResult{i, r, ErrSocketClosed}
+		}
 	}
 
 	// Preserve endpoint order in the joined error so retry classification is
@@ -96,26 +152,51 @@ func connectRace(
 		result := <-results
 		if result.err != nil {
 			errs[result.index] = result.err
+			result.r.fs.Close(0)
+			result.r.done()
 			continue
 		}
 		for _, cancel := range cancels {
 			cancel()
 		}
-		result.fs.startReadPump()
-		log.Debugf("Opened socket with %s (race winner)", result.fs.URL)
+		winner := result.r
+		if !winner.fs.startReadPump() {
+			// The owner sealed while this dial finished. Close the winner
+			// and the losers inline rather than handing out a dead socket.
+			drainLosers(results, remaining-1)
+			winner.fs.Close(0)
+			winner.done()
+			return nil, nil, ErrSocketClosed
+		}
+		log.Debugf("Opened socket with %s (race winner)", winner.fs.URL)
 		// Upgraded losers have no frame consumer. Never start their read pumps,
 		// and don't delay the winner while waiting for their close handshakes.
-		go func() {
-			for range remaining - 1 {
-				loser := <-results
-				if loser.err == nil {
-					go loser.fs.CloseWithReason(websocket.StatusNormalClosure, LoserSocketCloseReason)
-				}
-			}
-		}()
-		return result.fs, nil
+		if !winner.fs.startWorker(func() { drainLosers(results, remaining-1) }) {
+			drainLosers(results, remaining-1)
+		}
+		return winner.fs, winner.done, nil
 	}
-	return nil, errors.Join(errs...)
+	return nil, nil, errors.Join(errs...)
+}
+
+// drainLosers waits for the outstanding dials and closes every loser that
+// upgraded, through its own worker launcher when that is still admitted.
+func drainLosers(results <-chan dialResult, count int) {
+	for range count {
+		result := <-results
+		r, err := result.r, result.err
+		closeLoser := func() {
+			if err == nil {
+				r.fs.CloseWithReason(websocket.StatusNormalClosure, LoserSocketCloseReason)
+			} else {
+				r.fs.Close(0)
+			}
+			r.done()
+		}
+		if err != nil || !r.fs.startWorker(closeLoser) {
+			closeLoser()
+		}
+	}
 }
 
 func newRacer(log waLog.Logger, httpClient *http.Client, url string, headers http.Header) *FrameSocket {

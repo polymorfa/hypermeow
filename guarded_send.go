@@ -70,6 +70,10 @@ func (cli *Client) sendGuardedMessageNode(ctx context.Context, node waBinary.Nod
 	cli.socketLock.RUnlock()
 	// A shadow relay is a separate transport and is not admitted here.
 	if !connected && cli.testSendHook == nil {
+		if cli.nativeClosed() {
+			// Tell permanent closure apart from a reusable disconnect.
+			return nil, fmt.Errorf("%w: %w", ErrGuardedSendRefused, ErrClientClosed)
+		}
 		return nil, ErrNotConnected
 	}
 
@@ -110,16 +114,19 @@ func (cli *Client) sendGuardedMessageNode(ctx context.Context, node waBinary.Nod
 	}
 
 	// Admit runs in its own goroutine so the deadline is enforced even if Admit ignores its
-	// context. A late Admit can no longer write: the callback is closed below.
+	// context. A late Admit can no longer write: the callback is closed below. The goroutine
+	// is a client-owned connection task, so FinalClose cancels its context and joins it.
 	admitDone := make(chan error, 1)
-	go func() {
+	if !cli.startConnectionTask(admitCtx, func(taskCtx context.Context) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				admitDone <- fmt.Errorf("guarded send admission panicked: %v", recovered)
 			}
 		}()
-		admitDone <- hooks.Admit(admitCtx, id, write)
-	}()
+		admitDone <- hooks.Admit(taskCtx, id, write)
+	}) {
+		return nil, fmt.Errorf("%w: %w", ErrGuardedSendRefused, ErrClientClosed)
+	}
 	var admitErr error
 	select {
 	case admitErr = <-admitDone:
