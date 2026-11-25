@@ -264,13 +264,25 @@ func TestRecentMessageCacheEvictsOldest(t *testing.T) {
 	}
 }
 
-func TestButtonAndListResponsesDoNotRequestBusinessMetadata(t *testing.T) {
+// TestResponsesDoNotRequestBusinessMetadata keeps <biz> off reply stanzas. WhatsApp Web
+// derives its biz node only from interactiveMessage and buttonsMessage
+// (WAWebE2EProtoUtils.getBizNativeFlowName), never from a response.
+func TestResponsesDoNotRequestBusinessMetadata(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  *waE2E.Message
 	}{
 		{name: "buttons response", msg: &waE2E.Message{ButtonsResponseMessage: &waE2E.ButtonsResponseMessage{}}},
 		{name: "list response", msg: &waE2E.Message{ListResponseMessage: &waE2E.ListResponseMessage{}}},
+		{name: "interactive response", msg: &waE2E.Message{InteractiveResponseMessage: &waE2E.InteractiveResponseMessage{}}},
+		{name: "native flow response", msg: &waE2E.Message{InteractiveResponseMessage: &waE2E.InteractiveResponseMessage{
+			InteractiveResponseMessage: &waE2E.InteractiveResponseMessage_NativeFlowResponseMessage_{NativeFlowResponseMessage: &waE2E.InteractiveResponseMessage_NativeFlowResponseMessage{
+				Name: proto.String("quick_reply"), ParamsJSON: proto.String(`{"id":"stable"}`), Version: proto.Int32(3),
+			}},
+		}}},
+		{name: "ephemeral interactive response", msg: &waE2E.Message{EphemeralMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{
+			InteractiveResponseMessage: &waE2E.InteractiveResponseMessage{},
+		}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
