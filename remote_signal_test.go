@@ -624,8 +624,10 @@ func TestRemoteRetryReceiptForwardsItsKeysDeviceIdentity(t *testing.T) {
 	if got.Bundle == nil || got.Bundle.RegistrationID() != 7 {
 		t.Fatalf("retry bundle was not parsed: %+v", got.Bundle)
 	}
-	if !bytes.Equal(got.DeviceIdentity, deviceIdentity) {
-		t.Fatalf("DeviceIdentity = %x, want %x", got.DeviceIdentity, deviceIdentity)
+	wantIdentity := bytes.Clone(deviceIdentity)
+	deviceIdentity[0] ^= 0xff
+	if !bytes.Equal(got.DeviceIdentity, wantIdentity) {
+		t.Fatalf("DeviceIdentity = %x, want an independent copy of %x", got.DeviceIdentity, wantIdentity)
 	}
 }
 

@@ -149,18 +149,15 @@ const (
 )
 
 func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte) error {
-	s.identityCacheLock.RLock()
-	cached, ok := s.identityCache[address]
-	s.identityCacheLock.RUnlock()
-	if ok && cached.Present && cached.Key == key {
+	unlock, err := s.lockIdentityCache(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if cached, ok := s.identityCache[address]; ok && cached.Present && cached.Key == key {
 		return nil
 	}
-	s.identityCacheLock.Lock()
-	defer s.identityCacheLock.Unlock()
-	if cached, ok = s.identityCache[address]; ok && cached.Present && cached.Key == key {
-		return nil
-	}
-	_, err := s.db.Exec(ctx, putIdentityQuery, s.JID, address, key[:])
+	_, err = s.db.Exec(ctx, putIdentityQuery, s.JID, address, key[:])
 	if err == nil {
 		s.setCachedIdentityLocked(address, identityCacheEntry{Key: key, Present: true})
 	}
@@ -168,10 +165,13 @@ func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte
 }
 
 func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error {
-	s.identityCacheLock.Lock()
-	defer s.identityCacheLock.Unlock()
+	unlock, err := s.lockIdentityCache(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	lower, upper := signalAddressRange(phone)
-	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, lower, upper)
+	_, err = s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, lower, upper)
 	if err == nil {
 		s.identityDeleteGen++
 		for address := range s.identityCache {
@@ -184,9 +184,12 @@ func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error 
 }
 
 func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
-	s.identityCacheLock.Lock()
-	defer s.identityCacheLock.Unlock()
-	_, err := s.db.Exec(ctx, deleteIdentityQuery, s.JID, address)
+	unlock, err := s.lockIdentityCache(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	_, err = s.db.Exec(ctx, deleteIdentityQuery, s.JID, address)
 	if err == nil {
 		s.identityDeleteGen++
 		s.setCachedIdentityLocked(address, identityCacheEntry{})
@@ -195,19 +198,16 @@ func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
 }
 
 func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [32]byte) (bool, error) {
-	s.identityCacheLock.RLock()
-	cached, ok := s.identityCache[address]
-	s.identityCacheLock.RUnlock()
-	if ok {
-		return !cached.Present || cached.Key == key, nil
+	unlock, err := s.lockIdentityCache(ctx)
+	if err != nil {
+		return false, err
 	}
-	s.identityCacheLock.Lock()
-	defer s.identityCacheLock.Unlock()
-	if cached, ok = s.identityCache[address]; ok {
+	defer unlock()
+	if cached, ok := s.identityCache[address]; ok {
 		return !cached.Present || cached.Key == key, nil
 	}
 	var existingIdentity []byte
-	err := s.db.QueryRow(ctx, getIdentityQuery, s.JID, address).Scan(&existingIdentity)
+	err = s.db.QueryRow(ctx, getIdentityQuery, s.JID, address).Scan(&existingIdentity)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.setCachedIdentityLocked(address, identityCacheEntry{})
 		// Trust if not known, it'll be saved automatically later
@@ -223,8 +223,11 @@ func (s *SQLStore) IsTrustedIdentity(ctx context.Context, address string, key [3
 }
 
 func (s *SQLStore) EnsureIdentity(ctx context.Context, address string, key [32]byte, deleteGeneration uint64) (bool, error) {
-	s.identityCacheLock.Lock()
-	defer s.identityCacheLock.Unlock()
+	unlock, err := s.lockIdentityCache(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	if deleteGeneration != s.identityDeleteGen {
 		return false, nil
 	}
@@ -271,16 +274,17 @@ func (s *SQLStore) queryManyIdentities(ctx context.Context, addresses []string) 
 }
 
 func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (map[string][32]byte, uint64, error) {
+	unlock, err := s.lockIdentityCache(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer unlock()
 	if len(addresses) == 0 {
-		s.identityCacheLock.RLock()
-		generation := s.identityDeleteGen
-		s.identityCacheLock.RUnlock()
-		return nil, generation, nil
+		return nil, s.identityDeleteGen, nil
 	}
 	result := make(map[string][32]byte, len(addresses))
 	missing := make([]string, 0, len(addresses))
 	seen := make(map[string]struct{}, len(addresses))
-	s.identityCacheLock.RLock()
 	generation := s.identityDeleteGen
 	for _, address := range addresses {
 		if _, duplicate := seen[address]; duplicate {
@@ -295,25 +299,6 @@ func (s *SQLStore) GetManyIdentities(ctx context.Context, addresses []string) (m
 			missing = append(missing, address)
 		}
 	}
-	s.identityCacheLock.RUnlock()
-	if len(missing) == 0 {
-		return result, generation, nil
-	}
-
-	s.identityCacheLock.Lock()
-	defer s.identityCacheLock.Unlock()
-	generation = s.identityDeleteGen
-	stillMissing := missing[:0]
-	for _, address := range missing {
-		if cached, ok := s.identityCache[address]; ok {
-			if cached.Present {
-				result[address] = cached.Key
-			}
-		} else {
-			stillMissing = append(stillMissing, address)
-		}
-	}
-	missing = stillMissing
 	if len(missing) == 0 {
 		return result, generation, nil
 	}
@@ -608,6 +593,11 @@ func (s *SQLStore) DeleteSession(ctx context.Context, address string) error {
 }
 
 func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error {
+	// Migration also owns its commit boundary and completion cache. It cannot
+	// report completion from a nested callback before the outer commit occurs.
+	if s.SessionTransactionActive(ctx) {
+		return ErrUnmanagedIdentityTransaction
+	}
 	pnSignal := pn.SignalAddressUser()
 	s.migratedPNSessionsCacheLock.Lock()
 	_, migrated := s.migratedPNSessionsCache[pnSignal]
@@ -627,6 +617,9 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	if migrated || migrating || empty {
 		return nil
 	}
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	defer func() { s.identityCache = nil; s.identityDeleteGen++ }()
 	var hasPNRows bool
 	var err error
 	lower, upper := signalAddressRange(pnSignal)
@@ -684,9 +677,6 @@ func (s *SQLStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error 
 	if err != nil {
 		return err
 	}
-	s.identityCacheLock.Lock()
-	clear(s.identityCache)
-	s.identityCacheLock.Unlock()
 	if sessionsUpdated > 0 || senderKeysUpdated > 0 || identityKeysUpdated > 0 {
 		s.log.Infof("Migrated %d sessions, %d identity keys and %d sender keys from %s to %s", sessionsUpdated, identityKeysUpdated, senderKeysUpdated, pnSignal, lidSignal)
 	} else {
@@ -1585,7 +1575,7 @@ func (s *SQLStore) DeleteExpiredPrivacyTokens(ctx context.Context, cutoff time.T
 
 const (
 	getBufferedEventQuery = `
-		SELECT plaintext, server_timestamp, insert_timestamp FROM whatsmeow_event_buffer WHERE our_jid = $1 AND ciphertext_hash = $2
+		SELECT plaintext, server_timestamp, insert_timestamp, group_status FROM whatsmeow_event_buffer WHERE our_jid = $1 AND ciphertext_hash = $2
 	`
 	putBufferedEventQuery = `
 		INSERT INTO whatsmeow_event_buffer (our_jid, ciphertext_hash, plaintext, server_timestamp, insert_timestamp)
@@ -1602,7 +1592,7 @@ const (
 func (s *SQLStore) GetBufferedEvent(ctx context.Context, ciphertextHash [32]byte) (*store.BufferedEvent, error) {
 	var insertTimeMS, serverTimeSeconds int64
 	var buf store.BufferedEvent
-	err := s.db.QueryRow(ctx, getBufferedEventQuery, s.JID, ciphertextHash[:]).Scan(&buf.Plaintext, &serverTimeSeconds, &insertTimeMS)
+	err := s.db.QueryRow(ctx, getBufferedEventQuery, s.JID, ciphertextHash[:]).Scan(&buf.Plaintext, &serverTimeSeconds, &insertTimeMS, &buf.GroupStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	} else if err != nil {
@@ -1618,13 +1608,82 @@ func (s *SQLStore) PutBufferedEvent(ctx context.Context, ciphertextHash [32]byte
 	return err
 }
 
+// SessionTransactionActive also detects transactions opened outside the event
+// buffer wrapper, so pending-reset recovery cannot treat them as durable writes.
+func (s *SQLStore) SessionTransactionActive(ctx context.Context) bool {
+	_, active := s.db.Execable(ctx).(dbutil.Transaction)
+	return active
+}
+
+// ErrUnmanagedIdentityTransaction rejects identity access in a transaction whose
+// commit/rollback lifecycle is not owned by this SQLStore. Use DoDecryptionTxn.
+var ErrUnmanagedIdentityTransaction = errors.New("identity access requires SQLStore.DoDecryptionTxn")
+
+type identityTransactionKey struct{ owner *SQLStore }
+type identityTransaction struct {
+	lock   sync.Mutex
+	active bool
+}
+
+func (s *SQLStore) lockIdentityCache(ctx context.Context) (func(), error) {
+	if tx, ok := ctx.Value(identityTransactionKey{s}).(*identityTransaction); ok {
+		tx.lock.Lock()
+		if !tx.active {
+			tx.lock.Unlock()
+			return nil, ErrUnmanagedIdentityTransaction
+		}
+		return tx.lock.Unlock, nil
+	}
+	if s.Container != nil && s.SessionTransactionActive(ctx) {
+		return nil, ErrUnmanagedIdentityTransaction
+	}
+	s.identityCacheLock.Lock()
+	return s.identityCacheLock.Unlock, nil
+}
+
 func (s *SQLStore) DoDecryptionTxn(ctx context.Context, fn func(context.Context) error) error {
+	if tx, ok := ctx.Value(identityTransactionKey{s}).(*identityTransaction); ok {
+		tx.lock.Lock()
+		active := tx.active
+		tx.lock.Unlock()
+		if !active {
+			return ErrUnmanagedIdentityTransaction
+		}
+		return fn(ctx)
+	}
+	// dbutil nests by calling fn directly. An outer transaction would outlive
+	// this cache guard, so fail before running the callback in that case.
+	if s.SessionTransactionActive(ctx) {
+		return ErrUnmanagedIdentityTransaction
+	}
+	// Acquire before BeginTx, never after a transaction might hold row locks.
+	// This excludes concurrent identity readers/writers until commit or rollback.
+	s.identityCacheLock.Lock()
+	defer s.identityCacheLock.Unlock()
+	tx := &identityTransaction{active: true}
+	defer func() {
+		tx.lock.Lock()
+		defer tx.lock.Unlock()
+		tx.active = false
+		// Neither successful nor rolled-back transaction cache entries escape.
+		s.identityCache = nil
+		// Invalidate identity fetch tokens even on rollback or commit failure.
+		s.identityDeleteGen++
+	}()
+	ctx = context.WithValue(ctx, identityTransactionKey{s}, tx)
 	ctx = context.WithValue(ctx, dbutil.ContextKeyDoTxnCallerSkip, 2)
-	return s.db.DoTxn(ctx, nil, fn)
+	return s.db.DoTxn(ctx, nil, func(tx context.Context) error {
+		return fn(store.WithSessionTransaction(tx))
+	})
 }
 
 func (s *SQLStore) ClearBufferedEventPlaintext(ctx context.Context, ciphertextHash [32]byte) error {
 	_, err := s.db.Exec(ctx, clearBufferedEventPlaintextQuery, s.JID, ciphertextHash[:])
+	return err
+}
+
+func (s *SQLStore) ClearBufferedEventWithPublication(ctx context.Context, ciphertextHash [32]byte, groupStatus bool) error {
+	_, err := s.db.Exec(ctx, `UPDATE whatsmeow_event_buffer SET plaintext = NULL, group_status = $3 WHERE our_jid = $1 AND ciphertext_hash = $2`, s.JID, ciphertextHash[:], groupStatus)
 	return err
 }
 

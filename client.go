@@ -241,6 +241,12 @@ type Client struct {
 	// If false, decrypting a message from untrusted devices will fail.
 	AutoTrustIdentity bool
 
+	// GetStatusSessionMode supplies the served status_infra_1_1_session_split
+	// value. Install before Connect; the callback may read a synchronized cache.
+	// Without a callback, explicit status session metadata is honored, but a
+	// separate session is never forced on an unmarked status.
+	GetStatusSessionMode func() types.StatusSessionMode
+
 	// RawNodeHandler, if non-nil, is called for every inbound node
 	// after decoding but before standard dispatch. See [RawNodeHandler].
 	RawNodeHandler RawNodeHandler
@@ -1044,7 +1050,9 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waB
 	// [handleEncryptedMessage]'s own DisabledFeatures.Signal branch
 	// stays as a fallback for direct callers (DangerousInternals,
 	// `<appdata>`).
-	if node.Tag == "message" && cli.DisabledFeatures.Signal {
+	from, hasFrom := node.Attrs["from"].(types.JID)
+	encryptedStatus := node.Tag == "status" && hasFrom && (from == types.StatusBroadcastJID || from.Server == types.GroupServer)
+	if cli.DisabledFeatures.Signal && (node.Tag == "message" || encryptedStatus) {
 		info, err := cli.parseMessageInfo(node)
 		if err != nil {
 			cli.Log.Warnf("Failed to parse message for Signal-disabled handoff: %v", err)
@@ -1164,7 +1172,7 @@ func (cli *Client) defaultNodeHandlers() map[string]nodeHandler {
 	return map[string]nodeHandler{
 		"message":      cli.handleEncryptedMessage,
 		"appdata":      cli.handleEncryptedMessage,
-		"status":       cli.handleUnencryptedMessage,
+		"status":       cli.handleStatusMessage,
 		"receipt":      cli.handleReceipt,
 		"call":         cli.handleCallEvent,
 		"chatstate":    cli.handleChatState,

@@ -96,7 +96,10 @@ type RemoteIdentity struct {
 // RemoteReceive is one `<enc>` payload of a received message.
 type RemoteReceive struct {
 	// Timestamp is the provider message time; a missing value remains zero.
-	Timestamp time.Time
+	Timestamp  time.Time
+	StatusKind types.StatusKind
+	// StatusSession selects a separate pairwise session, not a sender-key scope.
+	StatusSession bool
 	// SenderAlt is the other provider address when Sender is normalized for
 	// Signal encryption (for example, PN when Sender is a LID).
 	SenderAlt      types.JID
@@ -115,6 +118,8 @@ type RemoteReceive struct {
 
 // RemoteReceiveResult is what the client learns about a received payload.
 type RemoteReceiveResult struct {
+	// StatusKind preserves decrypted publication classification for legacy envelopes and duplicate receipts.
+	StatusKind types.StatusKind
 	// AlreadyDelivered means the application has had this payload before;
 	// the client only needs to acknowledge it again.
 	AlreadyDelivered bool
@@ -421,6 +426,8 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 		}
 		result, err := cli.remoteSignal.Receive(ctx, RemoteReceive{
 			Timestamp:      info.Timestamp,
+			StatusKind:     info.StatusKind(),
+			StatusSession:  encType != "skmsg" && cli.usesStatusSession(info),
 			SenderAlt:      senderAlt,
 			Chat:           info.Chat,
 			Sender:         senderEncryptionJID,
@@ -475,6 +482,10 @@ func (cli *Client) decryptMessagesRemote(ctx context.Context, info *types.Messag
 		if result.AppStateKeyShare != nil {
 			cli.handleAppStateSyncKeyShare(ctx, result.AppStateKeyShare)
 		}
+		if result.StatusKind == types.StatusKindGroup && info.Chat.Server == types.GroupServer {
+			info.IsGroupStatus = true
+		}
+
 		if !result.AlreadyDelivered {
 			cli.dispatchEvent(&events.RemoteMessage{
 				Info:              *info,
@@ -547,7 +558,7 @@ func (cli *Client) handleRetryReceiptRemote(ctx context.Context, receipt *events
 			return fmt.Errorf("failed to read prekey bundle in retry receipt: %w", err)
 		}
 		req.Bundle = bundle
-		req.DeviceIdentity = preKeyDeviceIdentity(*node)
+		req.DeviceIdentity = append([]byte(nil), preKeyDeviceIdentity(*node)...)
 	}
 	if hostedSender, ok := rawHostedSender(node); ok {
 		req.EncryptionJID = cli.hostedSignalJID(ctx, hostedSender)

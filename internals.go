@@ -231,6 +231,10 @@ func (int *DangerousInternalClient) HandleConnectFailure(ctx context.Context, no
 	int.c.handleConnectFailure(ctx, node)
 }
 
+func (int *DangerousInternalClient) RefreshCAT(ctx context.Context) {
+	int.c.refreshCAT(ctx)
+}
+
 func (int *DangerousInternalClient) HandleConnectSuccess(ctx context.Context, node *waBinary.Node) {
 	int.c.handleConnectSuccess(ctx, node)
 }
@@ -365,6 +369,10 @@ func (int *DangerousInternalClient) SetSynchronousMessageNameUpdates(enabled boo
 
 func (int *DangerousInternalClient) UpdateMessageContactNames(ctx context.Context, info *types.MessageInfo) {
 	int.c.updateMessageContactNames(ctx, info)
+}
+
+func (int *DangerousInternalClient) HandleStatusMessage(ctx context.Context, node *waBinary.Node) {
+	int.c.handleStatusMessage(ctx, node)
 }
 
 func (int *DangerousInternalClient) HandleUnencryptedMessage(ctx context.Context, node *waBinary.Node) {
@@ -527,8 +535,8 @@ func (int *DangerousInternalClient) DeleteIdentityChangeState(ctx context.Contex
 	int.c.deleteIdentityChangeState(ctx, from)
 }
 
-func (int *DangerousInternalClient) HandleAppStateNotification(ctx context.Context, node *waBinary.Node) {
-	int.c.handleAppStateNotification(ctx, node)
+func (int *DangerousInternalClient) HandleAppStateNotification(ctx context.Context, node *waBinary.Node) bool {
+	return int.c.handleAppStateNotification(ctx, node)
 }
 
 func (int *DangerousInternalClient) HandlePictureNotification(ctx context.Context, node *waBinary.Node) {
@@ -655,8 +663,6 @@ func (int *DangerousInternalClient) FetchPreKeysNoError(ctx context.Context, ret
 	return int.c.fetchPreKeysNoError(ctx, retryDevices)
 }
 
-// FetchPreKeysWithIdentityNoError fetches prekey bundles and keeps the
-// <device-identity> each companion device's bundle carries.
 func (int *DangerousInternalClient) FetchPreKeysWithIdentityNoError(ctx context.Context, devices []types.JID) map[types.JID]FetchedPreKey {
 	return int.c.fetchPreKeysWithIdentityNoError(ctx, devices)
 }
@@ -771,6 +777,10 @@ func (int *DangerousInternalClient) ShouldRecreateSession(ctx context.Context, r
 
 func (int *DangerousInternalClient) TryHandleRetryReceipt(ctx context.Context, receipt *events.Receipt, node *waBinary.Node) {
 	int.c.tryHandleRetryReceipt(ctx, receipt, node)
+}
+
+func (int *DangerousInternalClient) AcceptIncomingRetry(sender types.JID, messageID types.MessageID) bool {
+	return int.c.acceptIncomingRetry(sender, messageID)
 }
 
 func (int *DangerousInternalClient) HandleRetryReceipt(ctx context.Context, receipt *events.Receipt, node *waBinary.Node) error {
@@ -901,8 +911,12 @@ func (int *DangerousInternalClient) IssuePrivacyToken(ctx context.Context, jid t
 	return int.c.issuePrivacyToken(ctx, jid, timestamp)
 }
 
-func (int *DangerousInternalClient) RawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse) error {
-	return int.c.rawUpload(ctx, dataToUpload, uploadSize, fileHash, appInfo, newsletter, resp)
+func (int *DangerousInternalClient) Upload(ctx context.Context, plaintext []byte, appInfo MediaType, mmsType string, mediaKey []byte) (resp UploadResponse, err error) {
+	return int.c.upload(ctx, plaintext, appInfo, mmsType, mediaKey)
+}
+
+func (int *DangerousInternalClient) RawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse, mmsTypeOverride ...string) error {
+	return int.c.rawUpload(ctx, dataToUpload, uploadSize, fileHash, appInfo, newsletter, resp, mmsTypeOverride...)
 }
 
 func (int *DangerousInternalClient) StoreContactUsernamesBestEffort(ctx context.Context, entries []store.ContactUsernameEntry) {
