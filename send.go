@@ -1081,9 +1081,9 @@ func getButtonTypeFromMessage(msg *waE2E.Message) string {
 		return "list"
 	case msg.InteractiveMessage != nil && (msg.InteractiveMessage.GetNativeFlowMessage() != nil || msg.InteractiveMessage.GetCarouselMessage() != nil):
 		return "native_flow"
-	case msg.InteractiveResponseMessage != nil:
-		return "interactive_response"
 	default:
+		// Replies (buttons, list and interactive responses) carry no <biz> type node:
+		// WhatsApp Web never sends one, and the server rejects it with ack 479.
 		return ""
 	}
 }
